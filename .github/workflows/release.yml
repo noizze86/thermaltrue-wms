@@ -1,0 +1,80 @@
+name: Build and Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [windows-latest]
+    runs-on: ${{ matrix.platform }}
+    env:
+      APPLE_DEVELOPER_IDENTITY: ""
+      APPLE_ID: ""
+      APPLE_PASSWORD: ""
+      APPLE_TEAM_ID: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install deps (Windows)
+        if: matrix.platform == 'windows-latest'
+        run: |
+          rustup target add x86_64-pc-windows-msvc
+
+      - name: Install frontend dependencies
+        run: npm ci
+
+      - name: Build Tauri app
+        run: npx tauri build --ci
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
+          TAURI_SIGNING_PASSPHRASE: ${{ secrets.TAURI_PASSPHRASE }}
+
+      - name: Compute signature
+        shell: bash
+        run: |
+          echo "SIG<<EOF" >> $GITHUB_ENV
+          npx tauri signer sign -k <(echo "${{ secrets.TAURI_PRIVATE_KEY }}") -p "${{ secrets.TAURI_PASSPHRASE }}" \
+            src-tauri/target/release/bundle/msi/*.msi >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
+
+      - name: Generate updater.json
+        shell: bash
+        run: |
+          VERSION=${GITHUB_REF_NAME#v}
+          cat > updater.json <<EOF
+          {
+            "version": "$VERSION",
+            "notes": "See https://github.com/${{ github.repository }}/releases/tag/${{ github.ref_name }}",
+            "pub_date": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "platforms": {
+              "windows-x86_64": {
+                "signature": "${{ env.SIG }}",
+                "url": "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/Thermaltrue_${VERSION}_x64_en-US.msi"
+              }
+            }
+          }
+          EOF
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            src-tauri/target/release/bundle/msi/*.msi
+            src-tauri/target/release/bundle/nsis/*.exe
+            updater.json
+          generate_release_notes: true
