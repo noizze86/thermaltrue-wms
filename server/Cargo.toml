@@ -1,0 +1,12 @@
+[package]
+name = "server"
+version = "0.1.0"
+description = "Thermaltrue WMS - REST API Server"
+edition = "2021"
+rust-version = "1.77.2"
+
+[dependencies]
+backend = { path = "../backend", features = ["server"] }
+axum = "0.7"
+tokio = { version = "1", features = ["full"] }
+dotenvy = "0.15"
