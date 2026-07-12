@@ -75,6 +75,13 @@ async fn ensure_server_running() -> Result<ServerStatus, String> {
         let stdout = String::from_utf8_lossy(&output.stdout);
 
         if stdout.contains("1060") || stdout.contains("FAILED") || stdout.contains("not exist") {
+            // Service not installed — try direct HTTP health check as fallback
+            if check_health(5).await {
+                return Ok(ServerStatus {
+                    status: "running".into(),
+                    message: "Server is reachable via HTTP.".into(),
+                });
+            }
             return Ok(ServerStatus {
                 status: "not_installed".into(),
                 message: "Server service 'ThermaltrueServer' is not installed. Run 'server.exe install' as Administrator first.".into(),
