@@ -299,6 +299,29 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
   return text ? JSON.parse(text) : (undefined as unknown as T);
 }
 
+export interface ServerStatus {
+  status: "running" | "started" | "not_installed" | "start_failed" | "timeout" | "unreachable" | "unknown";
+  message: string;
+}
+
+export async function ensureServer(): Promise<ServerStatus> {
+  if (isTauri()) {
+    const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
+    return tauriInvoke<ServerStatus>("ensure_server_running");
+  }
+  // HTTP mode: just check health directly
+  const base = getApiBase();
+  try {
+    const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(5000) });
+    if (res.ok) {
+      return { status: "running", message: "Server is reachable." };
+    }
+    return { status: "unreachable", message: `Server returned ${res.status}` };
+  } catch {
+    return { status: "unreachable", message: `Cannot connect to ${base}. Ensure the server is running.` };
+  }
+}
+
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   if (isTauri()) {
     const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");

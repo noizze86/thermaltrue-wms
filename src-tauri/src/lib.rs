@@ -1,6 +1,7 @@
 use backend::db_pool::DbPool;
 use backend::commands;
 use tauri::Manager;
+use serde::Serialize;
 
 #[cfg(windows)]
 fn show_error_dialog(title: &str, message: &str) {
@@ -20,6 +21,110 @@ fn show_error_dialog(title: &str, message: &str) {
 #[cfg(not(windows))]
 fn show_error_dialog(title: &str, message: &str) {
     eprintln!("{}: {}", title, message);
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ServerStatus {
+    pub status: String,
+    pub message: String,
+}
+
+async fn check_health(timeout_secs: u64) -> bool {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(2))
+        .build().ok();
+    let client = match client {
+        Some(c) => c,
+        None => return false,
+    };
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
+    while std::time::Instant::now() < deadline {
+        if let Ok(resp) = client.get("http://localhost:3000/api/health").send().await {
+            if resp.status().is_success() {
+                return true;
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+    }
+    false
+}
+
+#[tauri::command]
+async fn ensure_server_running() -> Result<ServerStatus, String> {
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("sc")
+            .args(["query", "ThermaltrueServer"])
+            .output()
+            .map_err(|e| format!("Failed to run sc query: {}", e))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+
+        if stdout.contains("1060") || stdout.contains("FAILED") || stdout.contains("not exist") {
+            return Ok(ServerStatus {
+                status: "not_installed".into(),
+                message: "Server service 'ThermaltrueServer' is not installed. Run 'server.exe install' as Administrator first.".into(),
+            });
+        }
+
+        if stdout.contains("RUNNING") || stdout.contains("STOP_PENDING") {
+            // Already running or starting, just check health
+            if check_health(5).await {
+                return Ok(ServerStatus {
+                    status: "running".into(),
+                    message: "Server is running.".into(),
+                });
+            }
+            return Ok(ServerStatus {
+                status: "timeout".into(),
+                message: "Server service found but health check timed out.".into(),
+            });
+        }
+
+        if stdout.contains("STOPPED") {
+            let start = std::process::Command::new("sc")
+                .args(["start", "ThermaltrueServer"])
+                .output()
+                .map_err(|e| format!("Failed to start server service: {}", e))?;
+            let start_out = String::from_utf8_lossy(&start.stdout);
+            if !start_out.contains("RUNNING") && !start_out.contains("START_PENDING") {
+                return Ok(ServerStatus {
+                    status: "start_failed".into(),
+                    message: format!("Failed to start server service: {}", start_out),
+                });
+            }
+            if check_health(15).await {
+                return Ok(ServerStatus {
+                    status: "started".into(),
+                    message: "Server service started successfully.".into(),
+                });
+            }
+            return Ok(ServerStatus {
+                status: "timeout".into(),
+                message: "Server service started but health check timed out after 15s.".into(),
+            });
+        }
+
+        Ok(ServerStatus {
+            status: "unknown".into(),
+            message: format!("Unexpected sc query result: {}", stdout),
+        })
+    }
+
+    #[cfg(not(windows))]
+    {
+        if check_health(5).await {
+            Ok(ServerStatus {
+                status: "running".into(),
+                message: "Server is reachable.".into(),
+            })
+        } else {
+            Ok(ServerStatus {
+                status: "unreachable".into(),
+                message: "Could not connect to server at http://localhost:3000. Make sure it is running.".into(),
+            })
+        }
+    }
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -67,6 +172,7 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            ensure_server_running,
             commands::login,
             commands::logout,
             commands::get_current_user,

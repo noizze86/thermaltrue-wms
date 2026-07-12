@@ -41,8 +41,8 @@
   },
   "plugins": {
     "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDkxODAxQzNGODdGMzhCOUQKUldTZGkvT0hQeHlBa1pnOFZ2MXkwaXpGaWh0SEtNcDhKcFRpSGh6cmxmYVR1bHZML0I1Q2VLclQK",
-      "endpoints": ["https://releases.thermaltrue.com/api/updates/{{target}}/{{current_version}}"]
+      "pubkey": "CHANGE_ME_RUN_npx tauri signer generate",
+      "endpoints": ["CHANGE_ME_https://your-server.com/api/updates/{{target}}/{{current_version}}"]
     }
   }
 }

@@ -1,0 +1,46 @@
+# Thermaltrue WMS — Docker Compose
+#
+# Usage:
+#   docker compose up -d              # Start PostgreSQL
+#   docker compose --profile web up   # Start PostgreSQL + frontend preview
+#
+# NOTE: The API server (server.exe) runs on Windows natively.
+# Point its DATABASE_URL to this PostgreSQL instance.
+
+services:
+  # ── PostgreSQL Database ──
+  postgres:
+    image: postgres:16-alpine
+    container_name: thermaltrue-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: thermaltrue
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${DB_PASSWORD:-thermaltrue}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ── Frontend Preview (optional: docker compose --profile web up) ──
+  frontend:
+    profile: web
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: thermaltrue-web
+    restart: unless-stopped
+    ports:
+      - "8080:80"
+    depends_on:
+      - postgres
+    environment:
+      VITE_API_URL: http://192.168.1.100:3000
+
+volumes:
+  postgres_data:
