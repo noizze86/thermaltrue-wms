@@ -58,6 +58,7 @@ pub async fn create(
 
 pub async fn update(
     State(pool): State<Arc<DbPool>>,
+    Path(_id): Path<String>,
     Json(wh): Json<Warehouse>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     sqlx::query("UPDATE warehouses SET name=$1, code=$2, location=$3, is_active=$4, capacity=$5, layout_image=$6 WHERE id=$7")
@@ -116,5 +117,71 @@ pub async fn delete_zone(
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     sqlx::query("DELETE FROM zones WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(Json(()))
+}
+
+// --- Zone Update ---
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateZoneBody { pub id: String, pub name: String, pub code: String, pub capacity: Option<f64> }
+
+pub async fn update_zone(
+    State(pool): State<Arc<DbPool>>,
+    Json(body): Json<UpdateZoneBody>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let cap = body.capacity.unwrap_or(0.0);
+    sqlx::query("UPDATE zones SET name=$1, code=$2, capacity=$3 WHERE id=$4")
+        .bind(&body.name).bind(&body.code).bind(cap).bind(&body.id)
+        .execute(&pool.pool).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(Json(()))
+}
+
+// --- Locations ---
+#[derive(Deserialize)]
+pub struct ListLocationsParams { pub warehouse_id: Option<String>, pub parent_id: Option<String> }
+
+pub async fn list_locations(
+    State(pool): State<Arc<DbPool>>,
+    Query(params): Query<ListLocationsParams>,
+) -> Result<Json<Vec<crate::models::Location>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let mut builder = sqlx::QueryBuilder::new("SELECT id, parent_id, warehouse_id, type_, code, created_at FROM locations WHERE 1=1");
+    if let Some(ref w) = params.warehouse_id { if !w.is_empty() { builder.push(" AND warehouse_id = ").push_bind(w); } }
+    if let Some(ref p) = params.parent_id { if !p.is_empty() { builder.push(" AND parent_id = ").push_bind(p); } }
+    builder.push(" ORDER BY code");
+    let rows = builder.build().fetch_all(&pool.pool).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let list = rows.iter().map(|row| {
+        crate::models::Location {
+            id: row.get(0), parent_id: row.get(1), warehouse_id: row.get(2),
+            type_: row.get(3), code: row.get(4), created_at: row.get(5),
+        }
+    }).collect();
+    Ok(Json(list))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreateLocationBody { pub warehouse_id: String, pub parent_id: Option<String>, pub r#type: String, pub code: String }
+
+pub async fn create_location(
+    State(pool): State<Arc<DbPool>>,
+    Json(body): Json<CreateLocationBody>,
+) -> Result<Json<crate::models::Location>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    sqlx::query("INSERT INTO locations (id, parent_id, warehouse_id, type_, code, created_at) VALUES ($1,$2,$3,$4,$5,$6)")
+        .bind(&id).bind(&body.parent_id).bind(&body.warehouse_id).bind(&body.r#type).bind(&body.code).bind(&now)
+        .execute(&pool.pool).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(Json(crate::models::Location { id, parent_id: body.parent_id, warehouse_id: body.warehouse_id, type_: body.r#type, code: body.code, created_at: now }))
+}
+
+pub async fn delete_location(
+    State(pool): State<Arc<DbPool>>,
+    Path(id): Path<String>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    sqlx::query("DELETE FROM locations WHERE id=$1").bind(&id).execute(&pool.pool).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     Ok(Json(()))
 }

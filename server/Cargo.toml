@@ -10,3 +10,7 @@ backend = { path = "../backend", features = ["server"] }
 axum = "0.7"
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
+windows-service = "0.7"
+log = "0.4"
+log-panics = "2"
+env_logger = "0.11"

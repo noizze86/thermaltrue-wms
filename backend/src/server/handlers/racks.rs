@@ -40,6 +40,7 @@ pub async fn create(
 
 pub async fn update(
     State(pool): State<Arc<DbPool>>,
+    Path(_id): Path<String>,
     Json(rack): Json<Rack>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     sqlx::query("UPDATE racks SET warehouse_id=$1, area=$2, rack_name=$3, bin_location=$4, max_capacity=$5, location_id=$6 WHERE id=$7")
@@ -81,5 +82,45 @@ pub async fn occupancy_details(
     .fetch_all(&pool.pool).await
     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     let list = rows.iter().map(|row| { json!({"rack_id": row.get::<String,_>(0), "warehouse_id": row.get::<String,_>(1), "rack_name": row.get::<String,_>(2), "area": row.get::<String,_>(3), "max_capacity": row.get::<f64,_>(4), "material_count": row.get::<i64,_>(5), "total_quantity": row.get::<f64,_>(6), "recent_activity": row.get::<String,_>(7)}) }).collect();
+    Ok(Json(list))
+}
+
+// --- Utilization History ---
+pub async fn utilization_history(
+    State(pool): State<Arc<DbPool>>,
+    Path(rack_id): Path<String>,
+) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let rows = sqlx::query(
+        "SELECT id, rack_id, used_capacity, recorded_at FROM rack_utilization_log WHERE rack_id=$1 ORDER BY recorded_at DESC LIMIT 100"
+    )
+    .bind(&rack_id)
+    .fetch_all(&pool.pool).await
+    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let list = rows.iter().map(|row| {
+        json!({"id": row.get::<String,_>(0), "rack_id": row.get::<String,_>(1), "used_capacity": row.get::<f64,_>(2), "recorded_at": row.get::<String,_>(3)})
+    }).collect();
+    Ok(Json(list))
+}
+
+// --- Putaway Suggestion ---
+#[derive(Deserialize)]
+pub struct PutawayParams { pub warehouse_id: Option<String>, pub material_id: Option<String> }
+
+pub async fn putaway_suggestion(
+    State(pool): State<Arc<DbPool>>,
+    Query(params): Query<PutawayParams>,
+) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT r.id, r.rack_name, r.area, r.max_capacity, \
+         COALESCE(SUM(m.quantity), 0) as used_qty, r.max_capacity - COALESCE(SUM(m.quantity), 0) as free_space \
+         FROM racks r LEFT JOIN materials m ON m.rack_id = r.id AND m.is_active = true WHERE 1=1"
+    );
+    if let Some(ref w) = params.warehouse_id { if !w.is_empty() { builder.push(" AND r.warehouse_id = ").push_bind(w); } }
+    builder.push(" GROUP BY r.id ORDER BY free_space DESC LIMIT 20");
+    let rows = builder.build().fetch_all(&pool.pool).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let list = rows.iter().map(|row| {
+        json!({"rack_id": row.get::<String,_>(0), "rack_name": row.get::<String,_>(1), "area": row.get::<String,_>(2), "max_capacity": row.get::<f64,_>(3), "used_quantity": row.get::<f64,_>(4), "free_space": row.get::<f64,_>(5)})
+    }).collect();
     Ok(Json(list))
 }

@@ -40,6 +40,7 @@ import SuppliersPage from "./pages/settings/SuppliersPage"
 import AuditLogPage from "./pages/settings/AuditLogPage"
 import RolesPage from "./pages/settings/RolesPage"
 import LabelTemplatesPage from "./pages/settings/LabelTemplatesPage"
+import ApiSettingsPage from "./pages/settings/ApiSettingsPage"
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -108,6 +109,7 @@ export default function App() {
               <Route path="settings/audit-log" element={<AuditLogPage />} />
               <Route path="settings/roles" element={<RolesPage />} />
               <Route path="settings/label-templates" element={<LabelTemplatesPage />} />
+              <Route path="settings/api" element={<ApiSettingsPage />} />
             </Route>
           </Routes>
           <Toaster />

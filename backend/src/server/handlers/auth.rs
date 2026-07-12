@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, Extension};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
@@ -61,4 +61,10 @@ pub async fn login(
         "token": token,
         "password_expired": false,
     })))
+}
+
+pub async fn logout(
+    Extension(_user_id): Extension<String>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    Ok(Json(()))
 }

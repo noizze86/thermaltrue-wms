@@ -73,6 +73,7 @@ const menuItems = [
       { to: "/settings/audit-log", label: "Audit Log", icon: ClipboardList },
       { to: "/settings/roles", label: "Roles", icon: Shield },
       { to: "/settings/label-templates", label: "Label Templates", icon: Tags },
+      { to: "/settings/api", label: "API Settings", icon: Settings },
     ],
   },
 ]

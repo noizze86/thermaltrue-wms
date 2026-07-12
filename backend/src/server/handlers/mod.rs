@@ -1,4 +1,5 @@
 pub mod auth;
+pub mod users;
 pub mod materials;
 pub mod categories;
 pub mod units;
@@ -6,3 +7,10 @@ pub mod suppliers;
 pub mod warehouses;
 pub mod racks;
 pub mod transactions;
+pub mod stock_opname;
+pub mod transfers;
+pub mod dashboard;
+pub mod advanced;
+pub mod label_templates;
+pub mod settings_handler;
+pub mod reports;
