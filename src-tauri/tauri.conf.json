@@ -39,10 +39,5 @@
       "debugApplicationIdSuffix": ".debug"
     }
   },
-  "plugins": {
-    "updater": {
-      "pubkey": "CHANGE_ME_RUN_npx tauri signer generate",
-      "endpoints": ["CHANGE_ME_https://your-server.com/api/updates/{{target}}/{{current_version}}"]
-    }
-  }
+  "plugins": {}
 }

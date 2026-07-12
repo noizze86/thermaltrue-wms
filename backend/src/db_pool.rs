@@ -13,7 +13,7 @@ pub struct DbPool {
 
 impl DbPool {
     pub async fn new(database_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
-        let max_retries = 5;
+        let max_retries = 2;
         let mut last_err = None;
         for attempt in 1..=max_retries {
             match Self::try_connect(database_url).await {
@@ -21,8 +21,8 @@ impl DbPool {
                 Err(e) => {
                     last_err = Some(e);
                     if attempt < max_retries {
-                        eprintln!("DB connection attempt {}/{} failed, retrying in {}s...", attempt, max_retries, attempt * 2);
-                        tokio::time::sleep(std::time::Duration::from_secs(attempt * 2)).await;
+                        eprintln!("DB connection attempt {}/{} failed, retrying in 2s...", attempt, max_retries);
+                        tokio::time::sleep(std::time::Duration::from_secs(2)).await;
                     }
                 }
             }
@@ -36,6 +36,7 @@ impl DbPool {
 
         let pool = match PgPoolOptions::new()
             .max_connections(pool_size)
+            .acquire_timeout(std::time::Duration::from_secs(3))
             .connect(database_url).await
         {
             Ok(p) => p,

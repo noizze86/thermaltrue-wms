@@ -2,6 +2,19 @@ use backend::db_pool::DbPool;
 use backend::commands;
 use tauri::Manager;
 use serde::Serialize;
+use std::io::Write;
+
+fn startup_log(msg: &str) {
+    eprintln!("{}", msg);
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let log_path = dir.join("startup.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
+            let _ = writeln!(f, "{}", msg);
+            }
+        }
+    }
+}
 
 #[cfg(windows)]
 fn show_error_dialog(title: &str, message: &str) {
@@ -13,6 +26,7 @@ fn show_error_dialog(title: &str, message: &str) {
     }
     let title_wide: Vec<u16> = OsStr::new(title).encode_wide().chain(std::iter::once(0)).collect();
     let message_wide: Vec<u16> = OsStr::new(message).encode_wide().chain(std::iter::once(0)).collect();
+    startup_log(&format!("ERROR_DIALOG: {} - {}", title, message));
     unsafe {
         MessageBoxW(null_mut(), message_wide.as_ptr(), title_wide.as_ptr(), 0x00000010 | 0x00000000);
     }
@@ -68,7 +82,6 @@ async fn ensure_server_running() -> Result<ServerStatus, String> {
         }
 
         if stdout.contains("RUNNING") || stdout.contains("STOP_PENDING") {
-            // Already running or starting, just check health
             if check_health(5).await {
                 return Ok(ServerStatus {
                     status: "running".into(),
@@ -127,15 +140,16 @@ async fn ensure_server_running() -> Result<ServerStatus, String> {
     }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-pub fn run() {
-    let _ = dotenvy::dotenv(); // Load .env file, ignore if not found
+fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
+    let _ = dotenvy::dotenv();
+    startup_log("Tauri app starting...");
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_updater::Builder::new().build())
+
         .setup(|app| {
+            startup_log("Tauri setup hook started...");
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
@@ -143,32 +157,39 @@ pub fn run() {
                         .build(),
                 )?;
             }
-            let database_url = std::env::var("DATABASE_URL").unwrap_or_else(|_| {
-                eprintln!("WARN: DATABASE_URL not set, using default (postgresql://postgres@localhost:5432/thermaltrue)");
-                "postgresql://postgres@localhost:5432/thermaltrue?sslmode=disable".into()
-            });
-            let pool = tauri::async_runtime::block_on(
-                DbPool::new(&database_url)
-            ).unwrap_or_else(|e| {
-                let msg = format!("Cannot connect to database.\nURL: {}\nError: {}\n\nMake sure PostgreSQL is running and the database 'thermaltrue' exists.", database_url, e);
-                eprintln!("FATAL: {}", msg);
-                std::fs::write("thermaltrue_error.log", &msg).ok();
-                show_error_dialog("Thermaltrue - Database Error", &msg);
-                std::process::exit(1);
-            });
-            app.manage(pool);
-            // Periodic session cleanup every 10 minutes
-            {
-                let handle = app.handle().clone();
-                tauri::async_runtime::spawn(async move {
-                    loop {
-                        tokio::time::sleep(std::time::Duration::from_secs(600)).await;
-                        if let Some(pool) = handle.try_state::<DbPool>() {
-                            pool.cleanup_expired_sessions();
+            let db_ok = match std::env::var("DATABASE_URL") {
+                Ok(url) => {
+                    startup_log("DATABASE_URL found, attempting connection...");
+                    match tauri::async_runtime::block_on(DbPool::new(&url)) {
+                        Ok(pool) => {
+                            startup_log("DB pool created successfully");
+                            app.manage(pool);
+                            let handle = app.handle().clone();
+                            tauri::async_runtime::spawn(async move {
+                                loop {
+                                    tokio::time::sleep(std::time::Duration::from_secs(600)).await;
+                                    if let Some(pool) = handle.try_state::<DbPool>() {
+                                        pool.cleanup_expired_sessions();
+                                    }
+                                }
+                            });
+                            true
+                        }
+                        Err(e) => {
+                            startup_log(&format!("WARN: DB connection failed ({}). App will use HTTP mode.", e));
+                            false
                         }
                     }
-                });
+                }
+                Err(_) => {
+                    startup_log("INFO: DATABASE_URL not set. App will use HTTP mode via server.exe");
+                    false
+                }
+            };
+            if !db_ok {
+                startup_log("INFO: DB not available — Tauri invoke commands will not work, use HTTP mode instead.");
             }
+            startup_log("Tauri setup hook complete.");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -298,7 +319,6 @@ pub fn run() {
             commands::delete_app_config,
             commands::get_notification_config,
             commands::set_notification_config,
-            // Phase 3 — Materials features
             commands::get_material_batches,
             commands::create_material_batch,
             commands::delete_material_batch,
@@ -312,18 +332,15 @@ pub fn run() {
             commands::export_stock_xlsx,
             commands::generate_zpl,
             commands::get_stock_timeline,
-            // Phase 1 — RBAC / Roles
             commands::get_roles,
             commands::clone_role,
             commands::check_permission,
             commands::update_role,
             commands::export_audit_csv_filtered,
-            // Phase 2 — Zone update + Locations
             commands::update_zone,
             commands::get_locations,
             commands::create_location,
             commands::delete_location,
-            // Phase 5 — Warehouse Operations
             commands::get_throughput_metrics,
             commands::get_picker_activity,
             commands::get_slotting_suggestions,
@@ -336,7 +353,6 @@ pub fn run() {
             commands::delete_cycle_schedule,
             commands::get_opname_config,
             commands::set_opname_config,
-            // Phase 9A — Advanced backend
             commands::get_budgets,
             commands::save_budget,
             commands::delete_budget,
@@ -352,21 +368,53 @@ pub fn run() {
             commands::generate_receipt_pdf,
             commands::generate_picking_list_pdf,
             commands::generate_do_pdf,
-            // Phase 11 — Operations Automation
             commands::auto_generate_cycle_opname,
             commands::batch_transfer_rack,
             commands::generate_count_sheet_pdf,
-            // Phase 14 — Reports & Export Mastery
             commands::run_report_schedule,
             commands::get_multi_warehouse_comparison,
             commands::get_pivot_report,
             commands::get_variance_root_cause,
-            // Label Templates
             commands::get_label_templates,
             commands::get_label_template,
             commands::save_label_template,
             commands::delete_label_template,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .map_err(|e| {
+            let msg = format!("Tauri app error: {}", e);
+            startup_log(&msg);
+            Box::new(std::io::Error::new(std::io::ErrorKind::Other, msg)) as Box<dyn std::error::Error>
+        })
+}
+
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    let _ = dotenvy::dotenv();
+    startup_log("=== THERMALTRUE APP STARTING ===");
+    startup_log(&format!("Args: {:?}", std::env::args().collect::<Vec<_>>()));
+    startup_log(&format!("Current dir: {:?}", std::env::current_dir()));
+
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| run_tauri_app())) {
+        Ok(Ok(())) => {
+            startup_log("Tauri app exited normally.");
+        }
+        Ok(Err(e)) => {
+            let msg = format!("Tauri app failed: {}", e);
+            startup_log(&msg);
+            show_error_dialog("Thermaltrue Error", &msg);
+        }
+        Err(panic_info) => {
+            let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                format!("Application crashed (panic): {}", s)
+            } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                format!("Application crashed (panic): {}", s)
+            } else {
+                "Application crashed due to an unexpected error (panic)".to_string()
+            };
+            startup_log(&msg);
+            show_error_dialog("Thermaltrue Crash", &msg);
+        }
+    }
+    startup_log("=== THERMALTRUE APP EXITED ===");
 }
