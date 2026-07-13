@@ -15,6 +15,7 @@ async function invokeAuth<T>(cmd: string, args?: Record<string, unknown>): Promi
   try {
     return await invoke<T>(cmd, { ...args, token });
   } catch (e: unknown) {
+    console.error(`[invokeAuth] ${cmd} failed:`, e);
     const err = e as { type?: string; message?: string };
     if (err?.type === "Auth") {
       localStorage.removeItem("wms_token");

@@ -1,7 +1,8 @@
 use std::sync::Arc;
-use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::Request, response::{IntoResponse, Response}, http::{StatusCode, header::AUTHORIZATION}};
+use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::Request, response::{IntoResponse, Response}, http::{Method, StatusCode, header::AUTHORIZATION}};
 use serde::{Deserialize, Serialize};
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
+use tower_http::cors::CorsLayer;
 use crate::db_pool::DbPool;
 
 pub mod handlers;
@@ -208,6 +209,8 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/receipt-pdf", get(handlers::reports::generate_receipt_pdf))
         .route("/api/reports/picking-list-pdf", get(handlers::reports::generate_picking_list_pdf))
         .route("/api/reports/do-pdf", get(handlers::reports::generate_do_pdf))
+        // CORS (allow Tauri WebView origins)
+        .layer(CorsLayer::permissive())
         // Middleware (skip auth for health & login)
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
@@ -222,7 +225,8 @@ async fn auth_middleware(
     next: Next,
 ) -> Response {
     let path = req.uri().path();
-    if path == "/api/health" || path == "/api/login" {
+    // OPTIONS (CORS preflight) must pass through before CorsLayer can handle it
+    if req.method() == Method::OPTIONS || path == "/api/health" || path == "/api/login" {
         return next.run(req).await;
     }
 

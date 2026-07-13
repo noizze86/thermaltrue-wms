@@ -46,8 +46,12 @@ import ApiSettingsPage from "./pages/settings/ApiSettingsPage"
 
 const queryClient = new QueryClient({
   defaultOptions: {
+    queries: {
+      retry: 1,
+      staleTime: 1000 * 30,
+    },
     mutations: {
-      onError: (err) => {
+      onError: (err: unknown) => {
         const message = err instanceof AppError ? err.message : String(err)
         toast({ title: "Error", description: message, variant: "destructive" })
       },

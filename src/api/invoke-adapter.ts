@@ -284,7 +284,13 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
     }
   }
 
-  const res = await fetch(url, { method: route.method, headers, body });
+  let res: Response;
+  try {
+    res = await fetch(url, { method: route.method, headers, body, signal: AbortSignal.timeout(15000) });
+  } catch (e) {
+    console.error(`[httpCall] fetch error for ${cmd} ${route.method} ${url}:`, e);
+    throw { type: "Network", message: `Failed to connect to ${url}. ${e instanceof DOMException && e.name === 'TimeoutError' ? 'Request timed out.' : 'Check that the server is running.'}` };
+  }
   if (res.status === 401) {
     localStorage.removeItem("wms_token");
     localStorage.removeItem("wms_user");
