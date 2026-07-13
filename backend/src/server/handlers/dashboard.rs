@@ -178,8 +178,8 @@ pub async fn daily_trend(
     Query(q): Query<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let ds = q.get("dateStart").and_then(|v| v.as_str()).unwrap_or("");
-    let de = q.get("dateEnd").and_then(|v| v.as_str()).unwrap_or("");
-    let rows = sqlx::query("SELECT created_at::date as date, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val FROM transactions WHERE ($1='' OR created_at>=$1) AND ($2='' OR created_at<=$2::date + interval '1 day') GROUP BY created_at::date ORDER BY date")
+    let de = q.get("dateEnd").and_then(|v| v.as_str()).map(|s| if s.is_empty() { String::new() } else { format!("{} 23:59:59", s) }).unwrap_or_default();
+    let rows = sqlx::query("SELECT DATE(created_at)::text as date, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val FROM transactions WHERE ($1='' OR created_at>=$1) AND ($2='' OR created_at<=$2) GROUP BY DATE(created_at) ORDER BY date")
         .bind(ds).bind(de).fetch_all(&pool.pool).await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     Ok(Json(json!(rows.iter().map(|row| {
@@ -196,10 +196,10 @@ pub async fn tx_date_comparison(
     let b_s = q.get("bStart").and_then(|v| v.as_str()).unwrap_or("");
     let b_e = q.get("bEnd").and_then(|v| v.as_str()).unwrap_or("");
     let rows = sqlx::query(
-        "SELECT created_at::date as date, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val, \
+        "SELECT DATE(created_at)::text as date, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val, \
          CASE WHEN created_at >= $1 AND created_at < $2 THEN 'A' WHEN created_at >= $3 AND created_at < $4 THEN 'B' END as series \
          FROM transactions WHERE (created_at >= $1 AND created_at < $2) OR (created_at >= $3 AND created_at < $4) \
-         GROUP BY created_at::date, series ORDER BY date"
+         GROUP BY DATE(created_at), series ORDER BY date"
     ).bind(a_s).bind(a_e).bind(b_s).bind(b_e).fetch_all(&pool.pool).await
      .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     Ok(Json(json!(rows.iter().map(|row| {
