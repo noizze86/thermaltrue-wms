@@ -8,6 +8,16 @@ function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI__" in window && !import.meta.env.VITE_FORCE_HTTP;
 }
 
+// Tauri 2 blocks native fetch() from webview — use @tauri-apps/plugin-http instead
+let tauriFetch: typeof globalThis.fetch | null = null;
+async function resolveFetch(): Promise<typeof globalThis.fetch> {
+  if (!isTauri()) return globalThis.fetch;
+  if (tauriFetch) return tauriFetch;
+  const mod = await import("@tauri-apps/plugin-http");
+  tauriFetch = mod.fetch;
+  return tauriFetch;
+}
+
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
 interface Route {
@@ -284,9 +294,10 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
     }
   }
 
+  const doFetch = await resolveFetch();
   let res: Response;
   try {
-    res = await fetch(url, { method: route.method, headers, body, signal: AbortSignal.timeout(15000) });
+    res = await doFetch(url, { method: route.method, headers, body, signal: AbortSignal.timeout(15000) });
   } catch (e) {
     console.error(`[httpCall] fetch error for ${cmd} ${route.method} ${url}:`, e);
     throw { type: "Network", message: `Failed to connect to ${url}. ${e instanceof DOMException && e.name === 'TimeoutError' ? 'Request timed out.' : 'Check that the server is running.'}` };
@@ -317,8 +328,9 @@ export async function ensureServer(): Promise<ServerStatus> {
   }
   // HTTP mode: just check health directly
   const base = getApiBase();
+  const doFetch = await resolveFetch();
   try {
-    const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(5000) });
+    const res = await doFetch(`${base}/api/health`, { signal: AbortSignal.timeout(5000) });
     if (res.ok) {
       return { status: "running", message: "Server is reachable." };
     }

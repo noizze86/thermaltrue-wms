@@ -154,6 +154,7 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_http::init())
 
         .setup(|app| {
             startup_log("Tauri setup hook started...");
