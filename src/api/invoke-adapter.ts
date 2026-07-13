@@ -8,10 +8,14 @@ function isTauri(): boolean {
   return typeof window !== "undefined" && "__TAURI__" in window && !import.meta.env.VITE_FORCE_HTTP;
 }
 
+function isInWebView(): boolean {
+  return typeof window !== "undefined" && "__TAURI__" in window;
+}
+
 // Tauri 2 blocks native fetch() from webview — use @tauri-apps/plugin-http instead
 let tauriFetch: typeof globalThis.fetch | null = null;
 async function resolveFetch(): Promise<typeof globalThis.fetch> {
-  if (!isTauri()) return globalThis.fetch;
+  if (!isInWebView()) return globalThis.fetch;
   if (tauriFetch) return tauriFetch;
   const mod = await import("@tauri-apps/plugin-http");
   tauriFetch = mod.fetch;
