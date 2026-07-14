@@ -38,9 +38,9 @@ pub async fn analysis_all(
     let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
     let rows = sqlx::query(
         "SELECT m.id, m.name, m.sku, m.quantity,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at >= NOW() - INTERVAL '90 days'),0) as consumption_3mo,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at >= NOW() - INTERVAL '180 days'),0) as consumption_6mo,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at >= NOW() - INTERVAL '365 days'),0) as consumption_12mo,
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo,
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo,
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo,
             COALESCE((SELECT t.quantity FROM transactions t WHERE t.material_id=m.id AND t.type='out' ORDER BY t.created_at DESC LIMIT 1),0) as turnover,
             (SELECT MAX(created_at) FROM transactions WHERE material_id=m.id) as last_transaction,
             (SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id) as lead_time_days
@@ -72,7 +72,7 @@ pub async fn abc_analysis(
     let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
     let rows = sqlx::query(
         "SELECT m.id, m.name, m.sku, m.quantity,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at >= NOW() - INTERVAL '365 days'),0) as consumption_12mo,
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo,
             COALESCE((SELECT MAX(created_at) FROM transactions WHERE material_id=m.id),'') as last_transaction
          FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY consumption_12mo DESC"
     ).bind(wh_filter).fetch_all(&pool.pool).await
@@ -118,8 +118,8 @@ pub async fn aging_report(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query(
         "SELECT CASE WHEN days >= 90 THEN '90+' WHEN days >= 60 THEN '60-90' WHEN days >= 30 THEN '30-60' ELSE '0-30' END as bucket, \
-         COUNT(*) as cnt, COALESCE(SUM(m.quantity * m.price),0) as val FROM (SELECT m.id, m.quantity, m.price, \
-         COALESCE((SELECT EXTRACT(DAY FROM NOW() - MAX(created_at)) FROM transactions WHERE material_id=m.id),999) as days \
+         COUNT(*) as cnt, COALESCE(SUM(quantity * price),0) as val FROM (SELECT m.id, m.quantity, m.price, \
+         COALESCE((SELECT EXTRACT(DAY FROM NOW() - MAX(created_at::timestamp)) FROM transactions WHERE material_id=m.id),999) as days \
          FROM materials m WHERE m.is_active=true) sub GROUP BY bucket ORDER BY bucket"
     ).fetch_all(&pool.pool).await
      .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
@@ -238,8 +238,8 @@ pub async fn demand_forecast(
     let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
     let rows = sqlx::query(
         "SELECT m.id, m.name, m.sku, m.quantity, m.min_stock, m.max_stock,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at >= NOW() - INTERVAL '90 days'),0) as consumption_3mo,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at >= NOW() - INTERVAL '30 days'),0) as consumption_1mo
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo,
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as consumption_1mo
          FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
     ).bind(wh_filter).fetch_all(&pool.pool).await
      .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
@@ -266,7 +266,7 @@ pub async fn reorder_suggestions(
     let rows = sqlx::query(
         "SELECT m.id, m.name, m.sku, m.quantity, m.min_stock, m.max_stock, m.price,
             COALESCE(s.name,'') as supplier,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at >= NOW() - INTERVAL '30 days'),0) as monthly_usage
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as monthly_usage
          FROM materials m LEFT JOIN suppliers s ON m.supplier_id=s.id
          WHERE m.is_active=true AND m.quantity <= m.max_stock AND ($1 = '' OR m.warehouse_id = $1) ORDER BY (m.quantity - m.min_stock) ASC"
     ).bind(wh_filter).fetch_all(&pool.pool).await

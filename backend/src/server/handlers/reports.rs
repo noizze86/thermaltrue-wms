@@ -252,9 +252,17 @@ pub async fn multi_warehouse_comparison(
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query(
-        "SELECT w.id,w.name,w.code,w.location,(SELECT COUNT(*)::bigint FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true) as mc,(SELECT COALESCE(SUM(m.quantity*m.price),0) FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true) as sv,(SELECT COUNT(*)::bigint FROM racks r WHERE r.warehouse_id=w.id) as rc,(SELECT COUNT(*)::bigint FROM transactions t WHERE t.warehouse_id=w.id AND t.created_at>=NOW()-INTERVAL '30 days') as tx30"
+        "SELECT w.id, w.name, w.code, w.location,
+            (SELECT COUNT(*)::bigint FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true) as mat_count,
+            (SELECT COALESCE(SUM(m.quantity*m.price),0) FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true) as stock_value,
+            (SELECT COUNT(*)::bigint FROM racks r WHERE r.warehouse_id=w.id) as rack_count,
+            (SELECT COUNT(*)::bigint FROM transactions t WHERE t.warehouse_id=w.id AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as tx_30d,
+            (SELECT COALESCE(SUM(CASE WHEN t.type='in' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as inbound_30d,
+            (SELECT COALESCE(SUM(CASE WHEN t.type='out' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as outbound_30d,
+            (SELECT COUNT(*)::bigint FROM stock_opname so WHERE so.warehouse_id=w.id AND so.status='completed' AND so.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '90 days','YYYY-MM-DD HH24:MI:SS')) as opname_90d
+        FROM warehouses w ORDER BY w.name"
     ).fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    let v = rows.iter().map(|r| json!({"id":r.get::<String,_>(0),"name":r.get::<String,_>(1),"code":r.get::<String,_>(2),"location":r.get::<String,_>(3),"materialCount":r.get::<i64,_>(4),"stockValue":r.get::<f64,_>(5),"rackCount":r.get::<i64,_>(6),"tx30d":r.get::<i64,_>(7)})).collect();
+    let v = rows.iter().map(|r| json!({"id":r.get::<String,_>(0),"name":r.get::<String,_>(1),"code":r.get::<String,_>(2),"location":r.get::<String,_>(3),"material_count":r.get::<i64,_>(4),"stock_value":r.get::<f64,_>(5),"rack_count":r.get::<i64,_>(6),"tx_30d":r.get::<i64,_>(7),"inbound_30d":r.get::<f64,_>(8),"outbound_30d":r.get::<f64,_>(9),"opname_90d":r.get::<i64,_>(10)})).collect();
     Ok(Json(v))
 }
 

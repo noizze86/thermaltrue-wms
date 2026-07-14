@@ -257,11 +257,13 @@ const ROUTES: Record<string, Route> = {
   save_report_schedule:    { method: "POST", path: "/api/reports/schedules", body: true },
   delete_report_schedule:  { method: "DELETE", path: (a) => `/api/reports/schedules/${a.id}` },
   run_report_schedule:     { method: "POST", path: (a) => `/api/reports/schedules/${a.id}/run` },
+  get_multi_warehouse_comparison: { method: "GET", path: "/api/reports/multi-warehouse" },
   multi_warehouse_report:  { method: "GET", path: "/api/reports/multi-warehouse" },
   pivot_report:            { method: "POST", path: "/api/reports/pivot", body: true },
   generate_receipt_pdf:    { method: "GET", path: "/api/reports/receipt-pdf" },
   generate_picking_list_pdf: { method: "GET", path: "/api/reports/picking-list-pdf" },
   generate_do_pdf:         { method: "GET", path: "/api/reports/do-pdf" },
+  get_variance_root_cause: { method: "GET", path: (a) => `/api/reports/opname-variance/${a.opnameId}` },
 };
 
 async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
