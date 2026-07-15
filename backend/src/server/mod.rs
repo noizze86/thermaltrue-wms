@@ -195,6 +195,9 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/inventory-settings", get(handlers::settings_handler::get_inventory_settings))
         .route("/api/inventory-settings", post(handlers::settings_handler::save_inventory_setting))
         .route("/api/audit-logs", get(handlers::settings_handler::list_audit_logs))
+        .route("/api/audit-logs/filtered", get(handlers::settings_handler::filtered_audit_logs))
+        .route("/api/audit-logs/filtered/count", get(handlers::settings_handler::count_filtered_audit_logs))
+        .route("/api/db-stats", get(handlers::settings_handler::db_stats))
         // Reports
         .route("/api/reports/csv", get(handlers::reports::export_csv))
         .route("/api/reports/pdf", get(handlers::reports::export_pdf))

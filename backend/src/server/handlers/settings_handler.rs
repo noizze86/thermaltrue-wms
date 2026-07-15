@@ -230,10 +230,37 @@ pub async fn save_inventory_setting(
     Ok(Json(()))
 }
 
+// ── DB Stats ──
+
+pub async fn db_stats(
+    State(pool): State<Arc<DbPool>>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let materials: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials")
+        .fetch_one(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let transactions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
+        .fetch_one(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
+        .fetch_one(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let categories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM categories")
+        .fetch_one(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    Ok(Json(json!({"materials": materials, "transactions": transactions, "users": users, "categories": categories})))
+}
+
 // ── Audit Logs ──
 
 #[derive(Deserialize)]
 pub struct AuditLogQuery { pub limit: Option<i64>, pub offset: Option<i64>, pub user_id: Option<String>, pub entity: Option<String> }
+
+#[derive(Deserialize)]
+pub struct AuditLogFilteredQuery {
+    pub limit: Option<i64>,
+    pub offset: Option<i64>,
+    pub action: Option<String>,
+    pub entity: Option<String>,
+    pub user_id: Option<String>,
+    pub date_start: Option<String>,
+    pub date_end: Option<String>,
+}
 
 pub async fn list_audit_logs(
     State(pool): State<Arc<DbPool>>,
@@ -256,4 +283,48 @@ pub async fn list_audit_logs(
         details: row.get(5), created_at: row.get(6),
     }).collect();
     Ok(Json(list))
+}
+
+pub async fn filtered_audit_logs(
+    State(pool): State<Arc<DbPool>>,
+    Query(params): Query<AuditLogFilteredQuery>,
+) -> Result<Json<Vec<AuditLog>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let limit_val = params.limit.unwrap_or(200);
+    let offset_val = params.offset.unwrap_or(0);
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT id, user_id, action, entity, entity_id, details, created_at FROM audit_log WHERE 1=1"
+    );
+    if let Some(ref a) = params.action { builder.push(" AND action = ").push_bind(a); }
+    if let Some(ref e) = params.entity { builder.push(" AND entity = ").push_bind(e); }
+    if let Some(ref u) = params.user_id { builder.push(" AND user_id = ").push_bind(u); }
+    if let Some(ref d) = params.date_start { builder.push(" AND created_at >= ").push_bind(d); }
+    if let Some(ref d) = params.date_end { builder.push(" AND created_at < (").push_bind(d); builder.push("::date + interval '1 day')"); }
+    builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit_val);
+    builder.push(" OFFSET ").push_bind(offset_val);
+    let rows = builder.build().fetch_all(&pool.pool).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let list = rows.iter().map(|row| AuditLog {
+        id: row.get(0), user_id: row.get::<Option<String>, _>(1), action: row.get(2),
+        entity: row.get(3), entity_id: row.get::<Option<String>, _>(4),
+        details: row.get(5), created_at: row.get(6),
+    }).collect();
+    Ok(Json(list))
+}
+
+pub async fn count_filtered_audit_logs(
+    State(pool): State<Arc<DbPool>>,
+    Query(params): Query<AuditLogFilteredQuery>,
+) -> Result<Json<i64>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT COUNT(*) FROM audit_log WHERE 1=1"
+    );
+    if let Some(ref a) = params.action { builder.push(" AND action = ").push_bind(a); }
+    if let Some(ref e) = params.entity { builder.push(" AND entity = ").push_bind(e); }
+    if let Some(ref u) = params.user_id { builder.push(" AND user_id = ").push_bind(u); }
+    if let Some(ref d) = params.date_start { builder.push(" AND created_at >= ").push_bind(d); }
+    if let Some(ref d) = params.date_end { builder.push(" AND created_at < (").push_bind(d); builder.push("::date + interval '1 day')"); }
+    let count: i64 = builder.build().fetch_one(&pool.pool).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .get(0);
+    Ok(Json(count))
 }

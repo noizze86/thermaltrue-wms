@@ -247,6 +247,11 @@ const ROUTES: Record<string, Route> = {
 
   // Audit Logs
   get_audit_logs:          { method: "GET", path: "/api/audit-logs" },
+  get_audit_logs_filtered: { method: "GET", path: "/api/audit-logs/filtered" },
+  count_audit_logs_filtered: { method: "GET", path: "/api/audit-logs/filtered/count" },
+
+  // System
+  get_db_stats:            { method: "GET", path: "/api/db-stats" },
 
   // Reports
   export_report_csv:       { method: "GET", path: "/api/reports/csv" },
@@ -259,7 +264,7 @@ const ROUTES: Record<string, Route> = {
   run_report_schedule:     { method: "POST", path: (a) => `/api/reports/schedules/${a.id}/run` },
   get_multi_warehouse_comparison: { method: "GET", path: "/api/reports/multi-warehouse" },
   multi_warehouse_report:  { method: "GET", path: "/api/reports/multi-warehouse" },
-  pivot_report:            { method: "POST", path: "/api/reports/pivot", body: true },
+  get_pivot_report:        { method: "POST", path: "/api/reports/pivot", body: true },
   generate_receipt_pdf:    { method: "GET", path: "/api/reports/receipt-pdf" },
   generate_picking_list_pdf: { method: "GET", path: "/api/reports/picking-list-pdf" },
   generate_do_pdf:         { method: "GET", path: "/api/reports/do-pdf" },
