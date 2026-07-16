@@ -25,18 +25,18 @@ pub async fn export_csv(
     let mut wtr = csv::Writer::from_writer(Vec::new());
     match q.report_type.as_str() {
         "materials" => {
-            wtr.write_record(["SKU","Name","Category","Quantity","Price","Min Stock","Expiry Date"]).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock,COALESCE(m.expiry_date,'') FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-            for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<f64,_>(4).to_string(),row.get::<f64,_>(5).to_string(),row.get::<String,_>(6)]).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?; }
+            wtr.write_record(["SKU","Name","Category","Quantity","Price","Min Stock","Expiry Date"]).map_err(|e| crate::server::server_error(e))?;
+            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock,COALESCE(m.expiry_date,'') FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<f64,_>(4).to_string(),row.get::<f64,_>(5).to_string(),row.get::<String,_>(6)]).map_err(|e| crate::server::server_error(e))?; }
         }
         "transactions" => {
-            wtr.write_record(["Number","Type","Material","Quantity","Date"]).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC").fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-            for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<String,_>(4)]).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?; }
+            wtr.write_record(["Number","Type","Material","Quantity","Date"]).map_err(|e| crate::server::server_error(e))?;
+            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<String,_>(4)]).map_err(|e| crate::server::server_error(e))?; }
         }
         _ => return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Unknown report type"})))),
     }
-    let data = wtr.into_inner().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let data = wtr.into_inner().map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"csv": String::from_utf8(data).unwrap_or_default()})))
 }
 
@@ -52,18 +52,18 @@ pub async fn export_pdf(
     let tx_data: Vec<(String,String,String,f64,String,String,String)>;
     match q.report_type.as_str() {
         "materials" => {
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             mat_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4),r.get(5))).collect();
             stk_data = Vec::new(); opn_data = Vec::new(); tx_data = Vec::new();
         }
         "stock" => {
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY w.name,m.name").fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY w.name,m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             mat_data = Vec::new(); stk_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
             opn_data = Vec::new(); tx_data = Vec::new();
         }
         "opname" => {
             let oid = q.opname_id.unwrap_or_default();
-            let rows = sqlx::query("SELECT m.name,soi.system_qty,soi.physical_qty,soi.difference,soi.notes FROM stock_opname_items soi LEFT JOIN materials m ON soi.material_id=m.id WHERE soi.opname_id=$1 ORDER BY m.name").bind(&oid).fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            let rows = sqlx::query("SELECT m.name,soi.system_qty,soi.physical_qty,soi.difference,soi.notes FROM stock_opname_items soi LEFT JOIN materials m ON soi.material_id=m.id WHERE soi.opname_id=$1 ORDER BY m.name").bind(&oid).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             mat_data = Vec::new(); stk_data = Vec::new();
             opn_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
             tx_data = Vec::new();
@@ -81,7 +81,7 @@ pub async fn export_pdf(
             if let Some(ref de) = q.date_end { if !de.is_empty() { qb = qb.bind(format!("{} 23:59:59",de)); } }
             if let Some(ref tf) = q.type_filter { if !tf.is_empty() && tf!="all" { qb = qb.bind(tf); } }
             if let Some(ref sf) = q.status_filter { if !sf.is_empty() && sf!="all" { qb = qb.bind(sf); } }
-            let rows = qb.fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            let rows = qb.fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             mat_data = Vec::new(); stk_data = Vec::new(); opn_data = Vec::new();
             tx_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4),r.get(5),r.get(6))).collect();
         }
@@ -121,8 +121,8 @@ pub async fn export_pdf(
         cl.use_text(&format!("Page 1 | {} - {} Report",company,q.report_type),7.0,Mm(20.0),Mm(10.0),&fr);
         let bytes = doc.save_to_bytes().map_err(|e| e.to_string())?;
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes))
-    }).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }).await.map_err(|e| crate::server::server_error(e))?
+    .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"pdf": b64})))
 }
 
@@ -133,18 +133,18 @@ pub async fn approve_opname(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let id = body.get("opnameId").and_then(|v| v.as_str()).unwrap_or("");
     let approved = body.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
-    let mut tx = pool.pool.begin().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let mut tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     if approved {
-        let items: Vec<(String,f64)> = sqlx::query("SELECT material_id,physical_qty FROM stock_opname_items WHERE opname_id=$1").bind(id).fetch_all(&mut *tx).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.iter().map(|r| (r.get(0),r.get(1))).collect();
-        for (mid,qty) in items { sqlx::query("UPDATE materials SET quantity=$1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *tx).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?; }
-        sqlx::query("UPDATE stock_opname SET status='completed', updated_at=NOW() WHERE id=$1").bind(id).execute(&mut *tx).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        let items: Vec<(String,f64)> = sqlx::query("SELECT material_id,physical_qty FROM stock_opname_items WHERE opname_id=$1").bind(id).fetch_all(&mut *tx).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1))).collect();
+        for (mid,qty) in items { sqlx::query("UPDATE materials SET quantity=$1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?; }
+        sqlx::query("UPDATE stock_opname SET status='completed', updated_at=NOW() WHERE id=$1").bind(id).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
     } else {
-        sqlx::query("UPDATE stock_opname SET status='draft', updated_at=NOW() WHERE id=$1").bind(id).execute(&mut *tx).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        sqlx::query("UPDATE stock_opname SET status='draft', updated_at=NOW() WHERE id=$1").bind(id).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
     }
     sqlx::query("INSERT INTO audit_log (id,user_id,action,entity,entity_id) VALUES ($1,$2,$3,$4,$5)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&user_id).bind(if approved{"approve_opname"}else{"reject_opname"}).bind("stock_opname").bind(id)
-        .execute(&mut *tx).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    tx.commit().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+    tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -153,7 +153,7 @@ pub async fn export_opname_xlsx(
     Query(q): Query<OpnameQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT m.name,soi.system_qty,soi.physical_qty,soi.difference,soi.notes FROM stock_opname_items soi LEFT JOIN materials m ON soi.material_id=m.id WHERE soi.opname_id=$1 ORDER BY m.name")
-        .bind(&q.opname_id).fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .bind(&q.opname_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let b64 = tokio::task::spawn_blocking(move || -> Result<String,String> {
         use rust_xlsxwriter::*;
         let mut wb = Workbook::new();
@@ -179,8 +179,8 @@ pub async fn export_opname_xlsx(
         sh.set_column_width(4,20).map_err(|e| e.to_string())?;
         let bytes = wb.save_to_buffer().map_err(|e| e.to_string())?;
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes))
-    }).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }).await.map_err(|e| crate::server::server_error(e))?
+    .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"xlsx": b64})))
 }
 
@@ -188,7 +188,7 @@ pub async fn get_schedules(
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT id,report_type,email_to,frequency,day_of_week,hour,is_active,created_at FROM report_schedules ORDER BY created_at")
-        .fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let v = rows.iter().map(|r| json!({"id":r.get::<String,_>(0),"reportType":r.get::<String,_>(1),"emailTo":r.get::<String,_>(2),"frequency":r.get::<String,_>(3),"dayOfWeek":r.get::<i32,_>(4),"hour":r.get::<i32,_>(5),"isActive":r.get::<bool,_>(6),"createdAt":r.get::<String,_>(7)})).collect();
     Ok(Json(v))
 }
@@ -206,7 +206,7 @@ pub async fn save_schedule(
     let ia = body.get("isActive").and_then(|v| v.as_bool()).unwrap_or(true);
     sqlx::query("INSERT INTO report_schedules (id,report_type,email_to,frequency,day_of_week,hour,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET report_type=$2,email_to=$3,frequency=$4,day_of_week=$5,hour=$6,is_active=$7")
         .bind(&id).bind(rt).bind(em).bind(fr).bind(dw).bind(hr).bind(ia)
-        .execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -214,7 +214,7 @@ pub async fn delete_schedule(
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    sqlx::query("DELETE FROM report_schedules WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    sqlx::query("DELETE FROM report_schedules WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -223,28 +223,28 @@ pub async fn run_schedule(
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let sched = sqlx::query("SELECT id,report_type,email_to,frequency,day_of_week,hour,is_active FROM report_schedules WHERE id=$1").bind(&id).fetch_optional(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Schedule not found"}))))?;
+    let sched = sqlx::query("SELECT id,report_type,email_to,frequency,day_of_week,hour,is_active FROM report_schedules WHERE id=$1").bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Schedule not found"}))))?;
     let rt: String = sched.get(1);
     let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let lines = match rt.as_str() {
         "materials" => {
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             rows.iter().map(|r| format!("{}|{}|{}|{}|{}|{}",r.get::<String,_>(0),r.get::<String,_>(1),r.get::<String,_>(2),r.get::<f64,_>(3),r.get::<f64,_>(4),r.get::<f64,_>(5))).collect::<Vec<_>>().join("\n")
         }
         "stock" => {
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY w.name,m.name").fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY w.name,m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             rows.iter().map(|r| format!("{}|{}|{}|{}|{}",r.get::<String,_>(0),r.get::<String,_>(1),r.get::<String,_>(2),r.get::<f64,_>(3),r.get::<f64,_>(4))).collect::<Vec<_>>().join("\n")
         }
         "transactions" => {
-            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.status,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC LIMIT 500").fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.status,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC LIMIT 500").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             rows.iter().map(|r| format!("{}|{}|{}|{}|{}|{}",r.get::<String,_>(0),r.get::<String,_>(1),r.get::<String,_>(2),r.get::<f64,_>(3),r.get::<String,_>(4),r.get::<String,_>(5))).collect::<Vec<_>>().join("\n")
         }
         _ => return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Unknown report type"})))),
     };
-    sqlx::query("UPDATE report_schedules SET is_active=true WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    sqlx::query("UPDATE report_schedules SET is_active=true WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     sqlx::query("INSERT INTO audit_log (id,user_id,action,entity,entity_id,details) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&user_id).bind("run_schedule").bind("report_schedule").bind(&id).bind(&lines[..std::cmp::min(500,lines.len())])
-        .execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"message": format!("Report generated at {} ({} lines)",now_str,lines.lines().count())})))
 }
 
@@ -261,7 +261,7 @@ pub async fn multi_warehouse_comparison(
             (SELECT COALESCE(SUM(CASE WHEN t.type='out' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as outbound_30d,
             (SELECT COUNT(*)::bigint FROM stock_opname so WHERE so.warehouse_id=w.id AND so.status='completed' AND so.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '90 days','YYYY-MM-DD HH24:MI:SS')) as opname_90d
         FROM warehouses w ORDER BY w.name"
-    ).fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    ).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let v = rows.iter().map(|r| json!({"id":r.get::<String,_>(0),"name":r.get::<String,_>(1),"code":r.get::<String,_>(2),"location":r.get::<String,_>(3),"material_count":r.get::<i64,_>(4),"stock_value":r.get::<f64,_>(5),"rack_count":r.get::<i64,_>(6),"tx_30d":r.get::<i64,_>(7),"inbound_30d":r.get::<f64,_>(8),"outbound_30d":r.get::<f64,_>(9),"opname_90d":r.get::<i64,_>(10)})).collect();
     Ok(Json(v))
 }
@@ -287,7 +287,7 @@ pub async fn pivot_report(
     sql.push_str(" GROUP BY 1,2 ORDER BY 1,2");
     let mut qb = sqlx::query(&sql);
     for b in &binds { qb = qb.bind(b); }
-    let rows = qb.fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let rows = qb.fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let data: Vec<(String,String,f64)> = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2))).collect();
     let mut rk: Vec<String> = Vec::new(); let mut ck: Vec<String> = Vec::new();
     for (a,b,_) in &data { if !rk.contains(a) { rk.push(a.clone()); } if !ck.contains(b) { ck.push(b.clone()); } }
@@ -315,9 +315,9 @@ pub async fn generate_receipt_pdf(
     let ca: String = sqlx::query_scalar("SELECT COALESCE(address,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let cp: String = sqlx::query_scalar("SELECT COALESCE(phone,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let ce: String = sqlx::query_scalar("SELECT COALESCE(email,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
-    let tx = sqlx::query("SELECT transaction_number,type,COALESCE(reference,''),COALESCE(po_number,''),COALESCE(invoice_no,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
+    let tx = sqlx::query("SELECT transaction_number,type,COALESCE(reference,''),COALESCE(po_number,''),COALESCE(invoice_no,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
     let tn: String = tx.get(0); let tt: String = tx.get(1); let tr: String = tx.get(2); let tp: String = tx.get(3); let ti: String = tx.get(4); let td: String = tx.get(5);
-    let items: Vec<(String,String,String,f64,f64)> = sqlx::query("SELECT ti.material_id,COALESCE(m.sku,''),COALESCE(ti.batch_id,''),ti.quantity,ti.price FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id WHERE ti.tx_id=$1 ORDER BY m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
+    let items: Vec<(String,String,String,f64,f64)> = sqlx::query("SELECT ti.material_id,COALESCE(m.sku,''),COALESCE(ti.batch_id,''),ti.quantity,ti.price FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id WHERE ti.tx_id=$1 ORDER BY m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
     let b64 = tokio::task::spawn_blocking(move || -> Result<String,String> {
         use printpdf::*;
         let (doc,p1,l1)=PdfDocument::new(&format!("{} - Receipt",co),Mm(210.0),Mm(297.0),"Receipt");
@@ -342,7 +342,7 @@ pub async fn generate_receipt_pdf(
         for (_,sk,ba,qt,pr) in &items { if y<25.0{break;} let sub=if *qt>0.0{format!("{}",*qt**pr)}else{"-".into()}; cl.use_text(&format!("{}|{}|{}|{}|{}",sk,"",ba,qt,sub),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
         cl.use_text(&format!("Page 1 | {} - Receipt",co),7.0,Mm(20.0),Mm(10.0),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
-    }).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"pdf": b64})))
 }
 
@@ -351,9 +351,9 @@ pub async fn generate_picking_list_pdf(
     Query(q): Query<TxQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let co: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
-    let tx = sqlx::query("SELECT transaction_number,COALESCE(reference,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
+    let tx = sqlx::query("SELECT transaction_number,COALESCE(reference,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
     let tn: String = tx.get(0); let tr: String = tx.get(1); let td: String = tx.get(2);
-    let items: Vec<(String,String,String,f64,String)> = sqlx::query("SELECT COALESCE(r.rack_name,'No Rack'),COALESCE(r.area,''),COALESCE(m.sku,''),ti.quantity,COALESCE(m.name,'') FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id LEFT JOIN racks r ON m.rack_id=r.id WHERE ti.tx_id=$1 ORDER BY r.warehouse_id,r.area,r.rack_name,m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
+    let items: Vec<(String,String,String,f64,String)> = sqlx::query("SELECT COALESCE(r.rack_name,'No Rack'),COALESCE(r.area,''),COALESCE(m.sku,''),ti.quantity,COALESCE(m.name,'') FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id LEFT JOIN racks r ON m.rack_id=r.id WHERE ti.tx_id=$1 ORDER BY r.warehouse_id,r.area,r.rack_name,m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
     let b64 = tokio::task::spawn_blocking(move || -> Result<String,String> {
         use printpdf::*;
         let (doc,p1,l1)=PdfDocument::new(&format!("{} - Picking List",co),Mm(210.0),Mm(297.0),"PickingList");
@@ -369,7 +369,7 @@ pub async fn generate_picking_list_pdf(
         for (rk,ar,sk,qt,nm) in &items { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}",rk,ar,sk,nm,qt),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
         cl.use_text(&format!("Page 1 | {} - Picking List",co),7.0,Mm(20.0),Mm(10.0),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
-    }).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"pdf": b64})))
 }
 
@@ -381,9 +381,9 @@ pub async fn generate_do_pdf(
     let ca: String = sqlx::query_scalar("SELECT COALESCE(address,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let cp: String = sqlx::query_scalar("SELECT COALESCE(phone,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let ce: String = sqlx::query_scalar("SELECT COALESCE(email,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
-    let tx = sqlx::query("SELECT transaction_number,COALESCE(reference,''),COALESCE(notes,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
+    let tx = sqlx::query("SELECT transaction_number,COALESCE(reference,''),COALESCE(notes,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
     let dn: String = tx.get(0); let dr: String = tx.get(1); let dno: String = tx.get(2); let dd: String = tx.get(3);
-    let items: Vec<(String,String,f64,String)> = sqlx::query("SELECT COALESCE(m.sku,''),COALESCE(m.name,''),ti.quantity,COALESCE(m.unit_id,'pcs') FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id WHERE ti.tx_id=$1 ORDER BY m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3))).collect();
+    let items: Vec<(String,String,f64,String)> = sqlx::query("SELECT COALESCE(m.sku,''),COALESCE(m.name,''),ti.quantity,COALESCE(m.unit_id,'pcs') FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id WHERE ti.tx_id=$1 ORDER BY m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3))).collect();
     let b64 = tokio::task::spawn_blocking(move || -> Result<String,String> {
         use printpdf::*;
         let (doc,p1,l1)=PdfDocument::new(&format!("{} - Delivery Order",co),Mm(210.0),Mm(297.0),"DO");
@@ -408,6 +408,6 @@ pub async fn generate_do_pdf(
         cl.use_text("Diterima oleh: _______________",10.0,Mm(120.0),Mm(y),&fr); y-=12.0;
         cl.use_text(&format!("Page 1 | {} - Delivery Order",co),7.0,Mm(20.0),Mm(y),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
-    }).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"pdf": b64})))
 }

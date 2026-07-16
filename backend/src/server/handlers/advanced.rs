@@ -40,7 +40,7 @@ pub async fn get_budgets(
 ) -> Result<Json<Vec<Budget>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT id, category_id, period, amount, created_at, updated_at FROM budgets ORDER BY period DESC")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| Budget {
         id: row.get(0), category_id: row.get(1), period: row.get(2),
         amount: row.get(3), created_at: row.get(4), updated_at: row.get(5),
@@ -53,7 +53,7 @@ pub async fn save_budget(
     Extension(_user_id): Extension<String>,
     Json(body): Json<SaveBudgetBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))? {
+    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -62,7 +62,7 @@ pub async fn save_budget(
     )
     .bind(&body.id).bind(&body.category_id).bind(&body.period).bind(body.amount).bind(&now)
     .execute(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -71,11 +71,11 @@ pub async fn delete_budget(
     Extension(_user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))? {
+    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     sqlx::query("DELETE FROM budgets WHERE id=$1").bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -86,7 +86,7 @@ pub async fn get_abc_weights(
 ) -> Result<Json<Vec<AbcWeight>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT key, value FROM abc_weights")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| AbcWeight { key: row.get(0), value: row.get(1) }).collect();
     Ok(Json(list))
 }
@@ -98,7 +98,7 @@ pub async fn set_abc_weight(
     sqlx::query("INSERT INTO abc_weights (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value=$2")
         .bind(&body.key).bind(body.value)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -116,7 +116,7 @@ pub async fn get_forecast_cache(
     )
     .bind(&material_id).bind(&model).bind(horizon)
     .fetch_optional(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     match row {
         Some(r) => Ok(Json(Some(ForecastCache {
             id: r.get(0), material_id: r.get(1), model: r.get(2),
@@ -137,7 +137,7 @@ pub async fn set_forecast_cache(
     )
     .bind(&id).bind(&body.material_id).bind(&body.model).bind(&body.params).bind(&body.result).bind(body.horizon).bind(&now)
     .execute(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -148,7 +148,7 @@ pub async fn delete_forecast_cache(
     sqlx::query("DELETE FROM forecast_cache WHERE material_id=$1 AND model=$2")
         .bind(&params.material_id).bind(&params.model)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -162,7 +162,7 @@ pub async fn get_login_history(
     let rows = sqlx::query("SELECT id, user_id, username, ip_address, status, created_at FROM login_history ORDER BY created_at DESC LIMIT $1")
         .bind(limit)
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| LoginHistoryEntry {
         id: row.get(0), user_id: row.get(1), username: row.get(2),
         ip_address: row.get(3), status: row.get(4), created_at: row.get(5),
@@ -179,7 +179,7 @@ pub async fn get_user_login_history(
     let rows = sqlx::query("SELECT id, user_id, username, ip_address, status, created_at FROM login_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2")
         .bind(&user_id).bind(limit)
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| LoginHistoryEntry {
         id: row.get(0), user_id: row.get(1), username: row.get(2),
         ip_address: row.get(3), status: row.get(4), created_at: row.get(5),
@@ -192,7 +192,7 @@ pub async fn clear_login_history(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     sqlx::query("DELETE FROM login_history")
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -227,8 +227,8 @@ pub async fn generate_qr_zip(
         }
 
         Ok::<_, String>(buf)
-    }).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("spawn_blocking: {}", e)}))))?
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e}))))?;
+    }).await.map_err(|e| crate::server::server_error(e))?
+        .map_err(|e| crate::server::server_error(e))?;
 
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &result);
     Ok(Json(json!({"zipBase64": format!("data:application/zip;base64,{}", b64)})))

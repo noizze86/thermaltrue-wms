@@ -39,5 +39,14 @@
       "debugApplicationIdSuffix": ".debug"
     }
   },
-  "plugins": {}
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": true,
+      "pubkey": "PLACEHOLDER_REPLACE_WITH_ACTUAL_PUBKEY",
+      "endpoints": [
+        "https://github.com/thermaltrue/wms/releases/latest/download/update.json"
+      ]
+    }
+  }
 }

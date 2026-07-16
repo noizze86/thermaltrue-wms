@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use axum::{Json, extract::{State, Query, Path}};
+use axum::{Json, extract::{State, Query, Path}, Extension};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
@@ -20,7 +20,7 @@ pub async fn list(
     )
     .bind(&params.search)
     .fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| { Warehouse { id: row.get(0), name: row.get(1), code: row.get(2), location: row.get(3), is_active: row.get(4), capacity: row.get(5), layout_image: row.get(6), created_at: row.get(7) } }).collect();
     Ok(Json(list))
 }
@@ -36,15 +36,17 @@ pub async fn stats(
          FROM warehouses w ORDER BY w.name"
     )
     .fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| { WarehouseStats { id: row.get(0), name: row.get(1), code: row.get(2), location: row.get(3), is_active: row.get(4), capacity: row.get(5), layout_image: row.get(6), created_at: row.get(7), rack_count: row.get(8), material_count: row.get(9), used_capacity: row.get(10) } }).collect();
     Ok(Json(list))
 }
 
 pub async fn create(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Json(wh): Json<Warehouse>,
 ) -> Result<Json<Warehouse>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     validate::validate_string(&wh.name, "Warehouse name", 255).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
     validate::validate_string(&wh.code, "Warehouse code", 50).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
     let id = uuid::Uuid::new_v4().to_string();
@@ -52,31 +54,35 @@ pub async fn create(
     sqlx::query("INSERT INTO warehouses (id, name, code, location, is_active, capacity, layout_image, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
         .bind(&id).bind(&wh.name).bind(&wh.code).bind(&wh.location).bind(wh.is_active).bind(wh.capacity).bind(&wh.layout_image).bind(&now)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(Warehouse { id, name: wh.name, code: wh.code, location: wh.location, is_active: wh.is_active, capacity: wh.capacity, layout_image: wh.layout_image, created_at: now }))
 }
 
 pub async fn update(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Path(_id): Path<String>,
     Json(wh): Json<Warehouse>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("UPDATE warehouses SET name=$1, code=$2, location=$3, is_active=$4, capacity=$5, layout_image=$6 WHERE id=$7")
         .bind(&wh.name).bind(&wh.code).bind(&wh.location).bind(wh.is_active).bind(wh.capacity).bind(&wh.layout_image).bind(&wh.id)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
 pub async fn delete(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let mut db_tx = pool.pool.begin().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    sqlx::query("DELETE FROM zones WHERE warehouse_id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    sqlx::query("DELETE FROM racks WHERE warehouse_id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    sqlx::query("DELETE FROM warehouses WHERE id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-    db_tx.commit().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
+    sqlx::query("DELETE FROM zones WHERE warehouse_id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+    sqlx::query("DELETE FROM racks WHERE warehouse_id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+    sqlx::query("DELETE FROM warehouses WHERE id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+    db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -89,7 +95,7 @@ pub async fn list_zones(
     if let Some(ref w) = params.search { if !w.is_empty() { builder.push(" AND warehouse_id = ").push_bind(w); } }
     builder.push(" ORDER BY name");
     let rows = builder.build().fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| { Zone { id: row.get(0), warehouse_id: row.get(1), name: row.get(2), code: row.get(3), capacity: row.get(4), created_at: row.get(5) } }).collect();
     Ok(Json(list))
 }
@@ -99,8 +105,10 @@ pub struct CreateZoneBody { pub warehouse_id: String, pub name: String, pub code
 
 pub async fn create_zone(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Json(body): Json<CreateZoneBody>,
 ) -> Result<Json<Zone>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     validate::validate_string(&body.name, "Zone name", 100).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -108,15 +116,17 @@ pub async fn create_zone(
     sqlx::query("INSERT INTO zones (id, warehouse_id, name, code, capacity, created_at) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(&id).bind(&body.warehouse_id).bind(&body.name).bind(&body.code).bind(cap).bind(&now)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(Zone { id, warehouse_id: body.warehouse_id, name: body.name, code: body.code, capacity: cap, created_at: now }))
 }
 
 pub async fn delete_zone(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    sqlx::query("DELETE FROM zones WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    sqlx::query("DELETE FROM zones WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -127,13 +137,15 @@ pub struct UpdateZoneBody { pub id: String, pub name: String, pub code: String, 
 
 pub async fn update_zone(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Json(body): Json<UpdateZoneBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let cap = body.capacity.unwrap_or(0.0);
     sqlx::query("UPDATE zones SET name=$1, code=$2, capacity=$3 WHERE id=$4")
         .bind(&body.name).bind(&body.code).bind(cap).bind(&body.id)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -150,7 +162,7 @@ pub async fn list_locations(
     if let Some(ref p) = params.parent_id { if !p.is_empty() { builder.push(" AND parent_id = ").push_bind(p); } }
     builder.push(" ORDER BY code");
     let rows = builder.build().fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| {
         crate::models::Location {
             id: row.get(0), parent_id: row.get(1), warehouse_id: row.get(2),
@@ -166,22 +178,26 @@ pub struct CreateLocationBody { pub warehouse_id: String, pub parent_id: Option<
 
 pub async fn create_location(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Json(body): Json<CreateLocationBody>,
 ) -> Result<Json<crate::models::Location>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query("INSERT INTO locations (id, parent_id, warehouse_id, type_, code, created_at) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(&id).bind(&body.parent_id).bind(&body.warehouse_id).bind(&body.r#type).bind(&body.code).bind(&now)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(crate::models::Location { id, parent_id: body.parent_id, warehouse_id: body.warehouse_id, type_: body.r#type, code: body.code, created_at: now }))
 }
 
 pub async fn delete_location(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM locations WHERE id=$1").bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }

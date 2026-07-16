@@ -84,6 +84,55 @@ async fn cmd_run() {
     serve(pool).await;
 }
 
+// ── Auto-backup scheduler ───────────────────────────────────────────────
+
+fn spawn_backup_scheduler() {
+    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "backups".into());
+    let backup_interval_secs: u64 = std::env::var("BACKUP_INTERVAL_HOURS").ok()
+        .and_then(|h| h.parse::<u64>().ok())
+        .unwrap_or(24)
+        * 3600;
+    std::fs::create_dir_all(&backup_dir).ok();
+    tokio::spawn(async move {
+        loop {
+            tokio::time::sleep(std::time::Duration::from_secs(backup_interval_secs)).await;
+            log::info!("Starting scheduled database backup...");
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            let filename = format!("{}/backup-{}.sql", backup_dir, ts);
+            let db_url = get_database_url();
+            match tokio::process::Command::new("pg_dump")
+                .args(["--clean", "--if-exists", "--no-owner", "--dbname", &db_url, "--file", &filename])
+                .output().await
+            {
+                Ok(out) if out.status.success() => {
+                    log::info!("Backup completed: {} ({} bytes)", filename, out.stdout.len());
+                }
+                Ok(out) => {
+                    let stderr = String::from_utf8_lossy(&out.stderr);
+                    log::error!("Backup failed (exit={}): {}", out.status, stderr);
+                }
+                Err(e) => log::error!("Backup spawn failed: {}", e),
+            }
+            if let Ok(mut entries) = tokio::fs::read_dir(&backup_dir).await {
+                let mut files: Vec<_> = vec![];
+                while let Ok(Some(e)) = entries.next_entry().await {
+                    files.push(e.path());
+                }
+                files.sort();
+                while files.len() > 30 {
+                    if let Some(old) = files.first().cloned() {
+                        let _ = tokio::fs::remove_file(old).await;
+                        files.remove(0);
+                    }
+                }
+            }
+        }
+    });
+}
+
 // ── Shared helpers ───────────────────────────────────────────────────────
 
 fn get_database_url() -> String {
@@ -121,6 +170,7 @@ async fn init_db() -> DbPool {
 }
 
 async fn serve(pool: DbPool) {
+    spawn_backup_scheduler();
     let app = create_router(pool);
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".into());
     let addr = format!("0.0.0.0:{}", port);

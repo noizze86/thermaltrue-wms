@@ -354,7 +354,88 @@ psql -U postgres -d thermaltrue -c "UPDATE users SET password_hash='$2b$12$LJ3m4
 
 ---
 
-## 7. Referensi
+## 7. Keamanan
+
+### 7.1 Password Policy
+
+- **Minimum**: 8 karakter
+- **Mengandung**: huruf besar, huruf kecil, dan angka
+- **Maksimum**: 128 karakter
+- Ganti password default segera setelah instalasi
+
+### 7.2 TLS/HTTPS (Wajib untuk Produksi)
+
+Jangan ekspos server langsung ke internet tanpa reverse proxy:
+
+```nginx
+# Contoh konfigurasi Nginx + Let's Encrypt
+server {
+    listen 443 ssl;
+    server_name wms.domain.com;
+
+    ssl_certificate /etc/letsencrypt/live/wms.domain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/wms.domain.com/privkey.pem;
+
+    # Security headers
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+    add_header Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self';" always;
+
+    location / {
+        proxy_pass http://127.0.0.1:3000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+Untuk sertifikat gratis: `certbot --nginx -d wms.domain.com`
+
+### 7.3 Database SSL
+
+Default koneksi menggunakan `sslmode=disable`. Untuk produksi, aktifkan SSL:
+
+```
+DATABASE_URL=postgresql://user:pass@host:5432/thermaltrue?sslmode=require
+```
+
+### 7.4 CORS Configuration
+
+Set environment variable untuk membatasi origin yang diizinkan:
+
+```powershell
+# Hanya izinkan domain tertentu
+$env:CORS_ORIGIN="https://wms.domain.com"
+
+# Biarkan kosong untuk mengizinkan semua origin (development/default)
+$env:CORS_ORIGIN=""
+```
+
+### 7.5 File .env
+
+- File `.env` berisi secrets (JWT_SECRET, DATABASE_URL)
+- **Jangan commit** `.env` ke version control (sudah di `.gitignore`)
+- Batasi akses file: `chmod 600 .env` (Linux)
+- Gunakan `.env.example` sebagai template — isi ulang secrets untuk tiap environment
+
+### 7.6 JWT Secret
+
+- Auto-generated saat pertama kali server dijalankan
+- Disimpan ke `.env` sebagai `JWT_SECRET`
+- Jika secret diganti, semua session user akan invalid
+- Gunakan secret yang berbeda untuk tiap environment (dev/staging/production)
+
+### 7.7 Rate Limiting
+
+Login endpoint dibatasi 5 percobaan per 15 menit per user (dan 50 global).
+Setelah melebihi batas, akan menerima response `429 Too Many Requests`.
+
+---
+
+## 8. Referensi
 
 | Perintah | Fungsi |
 |----------|--------|

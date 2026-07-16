@@ -43,7 +43,7 @@ pub async fn list(
 ) -> Result<Json<Vec<LabelTemplate>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let sql = format!("SELECT {} FROM label_templates ORDER BY name", COLS);
     let rows = sqlx::query(&sql).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(rows.iter().map(row_to_template).collect()))
 }
 
@@ -53,7 +53,7 @@ pub async fn get_one(
 ) -> Result<Json<LabelTemplate>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let sql = format!("SELECT {} FROM label_templates WHERE id=$1", COLS);
     let row = sqlx::query(&sql).bind(&id).fetch_one(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(row_to_template(&row)))
 }
 
@@ -94,10 +94,10 @@ pub async fn create(
     .bind(&template.template_type).bind(template.label_width_mm).bind(template.label_height_mm)
     .bind(&now)
     .execute(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     let sql = format!("SELECT {} FROM label_templates WHERE id=$1", COLS);
     let row = sqlx::query(&sql).bind(&id).fetch_one(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(row_to_template(&row)))
 }
 
@@ -130,10 +130,10 @@ pub async fn update(
     .bind(&template.template_type).bind(template.label_width_mm).bind(template.label_height_mm)
     .bind(&now).bind(&template.id)
     .execute(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     let sql = format!("SELECT {} FROM label_templates WHERE id=$1", COLS);
     let row = sqlx::query(&sql).bind(&template.id).fetch_one(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(row_to_template(&row)))
 }
 
@@ -146,6 +146,6 @@ pub async fn delete(
         return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Cannot delete system templates"}))));
     }
     sqlx::query("DELETE FROM label_templates WHERE id=$1").bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }

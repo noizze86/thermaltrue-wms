@@ -17,6 +17,7 @@ const menuItems = [
   {
     label: "Materials", icon: Package,
     children: [
+      { to: "/materials/master-data", label: "Master Data", icon: Package },
       { to: "/materials/stock", label: "Stock Management", icon: Package },
       { to: "/materials/qr-generator", label: "QR Generator", icon: QrCode },
       { to: "/materials/labels", label: "Label Printing", icon: Tags },

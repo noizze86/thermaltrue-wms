@@ -22,7 +22,7 @@ pub async fn list(
     .bind(&params.search)
     .fetch_all(&pool.pool)
     .await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| {
         Category { id: row.get(0), name: row.get(1), description: row.get(2), parent_id: row.get(3), icon: row.get(4), color: row.get(5), created_at: row.get(6) }
     }).collect();
@@ -37,7 +37,7 @@ pub async fn tree(
     let rows = sqlx::query("SELECT id, name, description, parent_id, icon, color, created_at FROM categories ORDER BY name")
         .fetch_all(&pool.pool)
         .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let all: Vec<Category> = rows.iter().map(|row| {
         Category { id: row.get(0), name: row.get(1), description: row.get(2), parent_id: row.get(3), icon: row.get(4), color: row.get(5), created_at: row.get(6) }
     }).collect();
@@ -65,7 +65,7 @@ pub async fn create(
         .bind(&id).bind(&body.name).bind(&body.description).bind(&body.parent_id).bind(&body.icon).bind(&body.color)
         .execute(&pool.pool)
         .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -82,7 +82,7 @@ pub async fn update(
         .bind(&body.name).bind(&body.description).bind(&body.parent_id).bind(&body.icon).bind(&body.color).bind(&body.id)
         .execute(&pool.pool)
         .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -93,6 +93,6 @@ pub async fn delete(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("UPDATE categories SET parent_id=NULL WHERE parent_id=$1").bind(&id).execute(&pool.pool).await.ok();
-    sqlx::query("DELETE FROM categories WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    sqlx::query("DELETE FROM categories WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }

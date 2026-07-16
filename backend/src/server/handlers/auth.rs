@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Instant;
 use axum::{Json, extract::State, Extension, response::IntoResponse, http::header::SET_COOKIE};
 use serde::Deserialize;
 use serde_json::json;
@@ -6,16 +7,47 @@ use crate::db_pool::DbPool;
 use crate::server::create_jwt;
 use sqlx::Row;
 
+const MAX_LOGIN_ATTEMPTS: u32 = 5;
+const LOGIN_WINDOW_SECS: u64 = 900; // 15 minutes
+
 #[derive(Deserialize)]
 pub struct LoginRequest {
     pub username: String,
     pub password: String,
 }
 
+fn check_rate_limit(pool: &DbPool, username: &str) -> Result<(), (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let mut attempts = pool.login_attempts.lock().unwrap();
+    let now = Instant::now();
+
+    // Global rate limit
+    let global: u32 = attempts.values()
+        .filter(|(_, t)| now.duration_since(*t).as_secs() < LOGIN_WINDOW_SECS)
+        .map(|(c, _)| c)
+        .sum();
+    if global >= MAX_LOGIN_ATTEMPTS * 10 {
+        return Err((axum::http::StatusCode::TOO_MANY_REQUESTS, Json(json!({"error":"Too many login attempts. Try again later."}))));
+    }
+
+    // Per-user rate limit
+    let entry = attempts.entry(username.to_string()).or_insert((0, now));
+    if entry.0 >= MAX_LOGIN_ATTEMPTS && now.duration_since(entry.1).as_secs() < LOGIN_WINDOW_SECS {
+        return Err((axum::http::StatusCode::TOO_MANY_REQUESTS, Json(json!({"error":"Too many login attempts. Try again later."}))));
+    }
+    if now.duration_since(entry.1).as_secs() >= LOGIN_WINDOW_SECS {
+        *entry = (0, now);
+    }
+    entry.0 += 1;
+    entry.1 = now;
+    Ok(())
+}
+
 pub async fn login(
     State(pool): State<Arc<DbPool>>,
     Json(req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    check_rate_limit(&pool, &req.username)?;
+
     let user_row = sqlx::query(
         "SELECT id, username, password_hash, full_name, email, role, is_active, photo, \
          last_login_at, last_login_ip, password_changed_at, created_at, updated_at \
@@ -24,7 +56,7 @@ pub async fn login(
     .bind(&req.username)
     .fetch_optional(&pool.pool)
     .await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() }))))?;
+    .map_err(|e| crate::server::server_error(e))?;
 
     let user = match user_row {
         Some(row) => row,
@@ -36,10 +68,14 @@ pub async fn login(
         return Err((axum::http::StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid username or password" }))));
     }
 
+    // Reset login attempts on success
+    {
+        let mut attempts = pool.login_attempts.lock().unwrap();
+        attempts.remove(&req.username);
+    }
+
     let user_id: String = user.get("id");
-    let token = create_jwt(&user_id).map_err(|e| {
-        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e.to_string() })))
-    })?;
+    let token = create_jwt(&user_id).map_err(|e| crate::server::server_error(e))?;
 
     let user_json = json!({
         "id": user.get::<String, _>("id"),

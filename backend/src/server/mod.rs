@@ -214,8 +214,20 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/receipt-pdf", get(handlers::reports::generate_receipt_pdf))
         .route("/api/reports/picking-list-pdf", get(handlers::reports::generate_picking_list_pdf))
         .route("/api/reports/do-pdf", get(handlers::reports::generate_do_pdf))
-        // CORS (allow Tauri WebView origins)
-        .layer(CorsLayer::permissive())
+        // CORS — allow configured origin, or permissive for Tauri WebView
+        .layer({
+            let origin = std::env::var("CORS_ORIGIN").unwrap_or_default();
+            if origin.is_empty() {
+                CorsLayer::permissive()
+            } else {
+                CorsLayer::new()
+                    .allow_origin(origin.as_str().parse::<axum::http::HeaderValue>().unwrap())
+                    .allow_methods([axum::http::Method::GET, axum::http::Method::POST,
+                        axum::http::Method::PUT, axum::http::Method::DELETE, axum::http::Method::OPTIONS])
+                    .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::COOKIE,
+                        axum::http::header::AUTHORIZATION])
+            }
+        })
         // Middleware (skip auth for health, login & non-API paths)
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
@@ -250,8 +262,8 @@ async fn spa_handler(uri: Uri) -> Response<Body> {
                 .body(Body::from(content))
                 .unwrap()
         }
-        Err(e) => {
-            (StatusCode::INTERNAL_SERVER_ERROR, format!("Frontend dist not found: {} ({})", index_path.display(), e)).into_response()
+        Err(_e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, "Frontend not found. Ensure dist/ exists.").into_response()
         }
     }
 }
@@ -380,4 +392,9 @@ pub fn create_jwt(user_id: &str) -> Result<String, jsonwebtoken::errors::Error> 
 pub fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
     let data = decode::<Claims>(token, &DecodingKey::from_secret(jwt_secret().as_bytes()), &Validation::default())?;
     Ok(data.claims)
+}
+
+pub fn server_error(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
+    log::error!("Internal server error: {}", e);
+    (StatusCode::INTERNAL_SERVER_ERROR, Json(serde_json::json!({"error": "Internal server error"})))
 }

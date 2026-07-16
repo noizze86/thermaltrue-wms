@@ -23,6 +23,28 @@ pub fn validate_quantity(value: f64, field: &str) -> Result<(), AppError> {
     if value < 0.0 {
         return Err(AppError::Validation(format!("{} cannot be negative", field)));
     }
+    if value > 999999999.0 {
+        return Err(AppError::Validation(format!("{} exceeds maximum value", field)));
+    }
+    Ok(())
+}
+
+pub fn validate_password(value: &str) -> Result<(), AppError> {
+    if value.len() < 8 {
+        return Err(AppError::Validation("Password must be at least 8 characters".into()));
+    }
+    if value.len() > 128 {
+        return Err(AppError::Validation("Password must not exceed 128 characters".into()));
+    }
+    if !value.chars().any(|c| c.is_uppercase()) {
+        return Err(AppError::Validation("Password must contain at least one uppercase letter".into()));
+    }
+    if !value.chars().any(|c| c.is_lowercase()) {
+        return Err(AppError::Validation("Password must contain at least one lowercase letter".into()));
+    }
+    if !value.chars().any(|c| c.is_ascii_digit()) {
+        return Err(AppError::Validation("Password must contain at least one digit".into()));
+    }
     Ok(())
 }
 

@@ -43,6 +43,7 @@ import AuditLogPage from "./pages/settings/AuditLogPage"
 import RolesPage from "./pages/settings/RolesPage"
 import LabelTemplatesPage from "./pages/settings/LabelTemplatesPage"
 import ApiSettingsPage from "./pages/settings/ApiSettingsPage"
+import MasterDataPage from "./pages/MasterDataPage"
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -135,6 +136,7 @@ export default function App() {
               >
                 <Route index element={<Navigate to="/dashboard" replace />} />
                 <Route path="dashboard" element={<DashboardPage />} />
+                <Route path="materials/master-data" element={<MasterDataPage />} />
                 <Route path="materials/stock" element={<StockPage />} />
                 <Route path="materials/qr-generator" element={<QrGeneratorPage />} />
                 <Route path="materials/labels" element={<LabelPrintPage />} />

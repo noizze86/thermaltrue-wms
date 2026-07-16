@@ -283,6 +283,38 @@ Remove-Item "$env:APPDATA\com.thermaltrue.wms" -Recurse -Force -ErrorAction Sile
 
 ---
 
+## 7. Keamanan
+
+### 7.1 Password Policy
+- Password minimal 8 karakter, mengandung huruf besar, huruf kecil, dan angka
+- Ganti password default admin segera setelah instalasi
+- Password disimpan sebagai bcrypt hash — tidak bisa dibaca oleh siapapun
+
+### 7.2 JWT Token
+- Token disimpan sebagai **httpOnly cookie** (tidak bisa diakses JavaScript)
+- Masa berlaku token: **24 jam**
+- Logout akan menghapus cookie
+- Secret unik auto-generated per instalasi
+
+### 7.3 Database & .env
+- File `.env` menyimpan konfigurasi sensitif — jangan dibagikan
+- Untuk koneksi database jarak jauh, aktifkan SSL:
+  ```
+  DATABASE_URL=postgresql://user:pass@host:5432/thermaltrue?sslmode=require
+  ```
+
+### 7.4 Firewall
+Server berjalan di port 3000. Untuk akses dari komputer lain:
+```powershell
+netsh advfirewall firewall add rule name="Thermaltrue WMS" dir=in action=allow protocol=TCP localport=3000
+```
+
+### 7.5 Logging
+Log aplikasi disimpan di `%APPDATA%\com.thermaltrue.wms\logs\app.log`.
+Gunakan Windows Event Viewer untuk monitoring service.
+
+---
+
 ## 8. Tips Produksi
 
 ### 8.1 Kombinasi Desktop + Browser

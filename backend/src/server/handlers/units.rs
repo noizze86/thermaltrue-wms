@@ -20,7 +20,7 @@ pub async fn list(
         .bind(&params.search)
         .fetch_all(&pool.pool)
         .await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| { Unit { id: row.get(0), name: row.get(1), symbol: row.get(2), category: row.get(3), created_at: row.get(4) } }).collect();
     Ok(Json(list))
 }
@@ -39,7 +39,7 @@ pub async fn create(
     sqlx::query("INSERT INTO units (id, name, symbol, category) VALUES ($1,$2,$3,$4)")
         .bind(&id).bind(&body.name).bind(&body.symbol).bind(&body.category)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -55,7 +55,7 @@ pub async fn update(
     sqlx::query("UPDATE units SET name=$1, symbol=$2, category=$3 WHERE id=$4")
         .bind(&body.name).bind(&body.symbol).bind(&body.category).bind(&body.id)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -66,7 +66,7 @@ pub async fn delete(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM unit_conversions WHERE from_unit_id=$1 OR to_unit_id=$1").bind(&id).execute(&pool.pool).await.ok();
-    sqlx::query("DELETE FROM units WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    sqlx::query("DELETE FROM units WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -81,7 +81,7 @@ pub async fn list_conversions(
          FROM unit_conversions uc JOIN units u1 ON uc.from_unit_id=u1.id JOIN units u2 ON uc.to_unit_id=u2.id ORDER BY u1.name"
     )
     .fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| { UnitConversion { id: row.get(0), from_unit_id: row.get(1), to_unit_id: row.get(2), factor: row.get(3), from_unit_name: row.get(4), from_unit_symbol: row.get(5), to_unit_name: row.get(6), to_unit_symbol: row.get(7), created_at: row.get(8) } }).collect();
     Ok(Json(list))
 }
@@ -99,6 +99,6 @@ pub async fn create_conversion(
     sqlx::query("INSERT INTO unit_conversions (id, from_unit_id, to_unit_id, factor) VALUES ($1,$2,$3,$4)")
         .bind(&id).bind(&body.from_unit_id).bind(&body.to_unit_id).bind(body.factor)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }

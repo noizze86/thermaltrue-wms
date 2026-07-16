@@ -23,7 +23,7 @@ pub async fn list(
          AND ($2 IS NULL OR category_id = $2) AND ($3 IS NULL OR warehouse_id = $3) ORDER BY name"
     ).bind(&q.search).bind(&q.category_id).bind(&q.warehouse_id)
      .fetch_all(&pool.pool).await
-     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+     .map_err(|e| crate::server::server_error(e))?;
     let materials: Vec<serde_json::Value> = rows.iter().map(|row| {
         json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"),
             "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"),
@@ -43,7 +43,7 @@ pub async fn low_stock(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT id, sku, name, quantity, min_stock, warehouse_id FROM materials WHERE quantity <= min_stock AND min_stock > 0 AND is_active=true ORDER BY name")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|r| json!({"id": r.get::<String,_>("id"), "sku": r.get::<String,_>("sku"), "name": r.get::<String,_>("name"), "quantity": r.get::<f64,_>("quantity"), "min_stock": r.get::<f64,_>("min_stock"), "warehouse_id": r.get::<String,_>("warehouse_id")})).collect::<Vec<_>>())))
 }
 
@@ -53,7 +53,7 @@ pub async fn expiring(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT id, sku, name, quantity, expiry_date, warehouse_id FROM materials WHERE is_active=true AND expiry_date IS NOT NULL AND expiry_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1 || ' days')::interval ORDER BY expiry_date")
         .bind(days).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|r| json!({"id": r.get::<String,_>("id"), "sku": r.get::<String,_>("sku"), "name": r.get::<String,_>("name"), "quantity": r.get::<f64,_>("quantity"), "expiry_date": r.get::<String,_>("expiry_date"), "warehouse_id": r.get::<String,_>("warehouse_id")})).collect::<Vec<_>>())))
 }
 
@@ -63,7 +63,7 @@ pub async fn get_one(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let row = sqlx::query("SELECT id, sku, name, description, category_id, unit_id, supplier_id, warehouse_id, rack_id, quantity, min_stock, max_stock, price, image, expiry_date, is_active, created_at, updated_at FROM materials WHERE id=$1")
         .bind(&id).fetch_optional(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"}))))?;
     Ok(Json(json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"), "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"), "unit_id": row.get::<Option<String>,_>("unit_id"), "supplier_id": row.get::<Option<String>,_>("supplier_id"), "warehouse_id": row.get::<Option<String>,_>("warehouse_id"), "rack_id": row.get::<Option<String>,_>("rack_id"), "quantity": row.get::<f64,_>("quantity"), "min_stock": row.get::<f64,_>("min_stock"), "max_stock": row.get::<f64,_>("max_stock"), "price": row.get::<f64,_>("price"), "image": row.get::<String,_>("image"), "expiry_date": row.get::<Option<String>,_>("expiry_date"), "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at")})))
 }
@@ -84,9 +84,9 @@ pub async fn create(
         .bind(material.min_stock).bind(material.max_stock).bind(material.price)
         .bind(&material.image).bind(&material.expiry_date).bind(material.is_active)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let row = sqlx::query("SELECT * FROM materials WHERE id=$1").bind(&id).fetch_one(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"), "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"), "unit_id": row.get::<Option<String>,_>("unit_id"), "supplier_id": row.get::<Option<String>,_>("supplier_id"), "warehouse_id": row.get::<Option<String>,_>("warehouse_id"), "rack_id": row.get::<Option<String>,_>("rack_id"), "quantity": row.get::<f64,_>("quantity"), "min_stock": row.get::<f64,_>("min_stock"), "max_stock": row.get::<f64,_>("max_stock"), "price": row.get::<f64,_>("price"), "image": row.get::<String,_>("image"), "expiry_date": row.get::<Option<String>,_>("expiry_date"), "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at")})))
 }
 
@@ -97,13 +97,18 @@ pub async fn update(
     Json(material): Json<Material>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    validate::validate_sku(&material.sku).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_string(&material.name, "Name", 200).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_quantity(material.quantity, "Quantity").map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_quantity(material.min_stock, "Min stock").map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_quantity(material.max_stock, "Max stock").map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
     sqlx::query("UPDATE materials SET sku=$1, name=$2, description=$3, category_id=$4, unit_id=$5, supplier_id=$6, warehouse_id=$7, rack_id=$8, quantity=$9, min_stock=$10, max_stock=$11, price=$12, image=$13, expiry_date=$14, is_active=$15, updated_at=NOW() WHERE id=$16")
         .bind(&material.sku).bind(&material.name).bind(&material.description).bind(&material.category_id)
         .bind(&material.unit_id).bind(&material.supplier_id).bind(&material.warehouse_id).bind(&material.rack_id)
         .bind(material.quantity).bind(material.min_stock).bind(material.max_stock).bind(material.price)
         .bind(&material.image).bind(&material.expiry_date).bind(material.is_active).bind(&material.id)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -114,7 +119,7 @@ pub async fn delete(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM materials WHERE id=$1").bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -145,7 +150,7 @@ pub async fn bulk_update(
         if let Some(mn) = updates.get("min_stock").and_then(|v| v.as_f64()) { builder.push(", min_stock=").push_bind(mn); }
         if let Some(mx) = updates.get("max_stock").and_then(|v| v.as_f64()) { builder.push(", max_stock=").push_bind(mx); }
         builder.push(" WHERE id=").push_bind(id);
-        builder.build().execute(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        builder.build().execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     }
     Ok(Json(()))
 }
@@ -244,26 +249,26 @@ pub async fn export_stock_xlsx(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT m.sku, m.name, m.quantity, m.price, COALESCE(c.name,''), COALESCE(w.name,''), m.min_stock, m.max_stock, COALESCE(m.expiry_date,'') FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY m.name")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let mut workbook = rust_xlsxwriter::Workbook::new();
     let sheet = workbook.add_worksheet();
     let header = ["SKU", "Name", "Quantity", "Price", "Category", "Warehouse", "Min Stock", "Max Stock", "Expiry"];
     for (c, h) in header.iter().enumerate() {
-        sheet.write_string(0, c as u16, *h).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        sheet.write_string(0, c as u16, *h).map_err(|e| crate::server::server_error(e))?;
     }
     for (row_idx, row) in rows.iter().enumerate() {
         let ri = (row_idx + 1) as u32;
-        sheet.write_string(ri, 0, row.get::<String, _>(0)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-        sheet.write_string(ri, 1, row.get::<String, _>(1)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-        sheet.write_number(ri, 2, row.get::<f64, _>(2)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-        sheet.write_number(ri, 3, row.get::<f64, _>(3)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-        sheet.write_string(ri, 4, row.get::<String, _>(4)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-        sheet.write_string(ri, 5, row.get::<String, _>(5)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-        sheet.write_number(ri, 6, row.get::<f64, _>(6)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-        sheet.write_number(ri, 7, row.get::<f64, _>(7)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
-        sheet.write_string(ri, 8, row.get::<String, _>(8)).map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        sheet.write_string(ri, 0, row.get::<String, _>(0)).map_err(|e| crate::server::server_error(e))?;
+        sheet.write_string(ri, 1, row.get::<String, _>(1)).map_err(|e| crate::server::server_error(e))?;
+        sheet.write_number(ri, 2, row.get::<f64, _>(2)).map_err(|e| crate::server::server_error(e))?;
+        sheet.write_number(ri, 3, row.get::<f64, _>(3)).map_err(|e| crate::server::server_error(e))?;
+        sheet.write_string(ri, 4, row.get::<String, _>(4)).map_err(|e| crate::server::server_error(e))?;
+        sheet.write_string(ri, 5, row.get::<String, _>(5)).map_err(|e| crate::server::server_error(e))?;
+        sheet.write_number(ri, 6, row.get::<f64, _>(6)).map_err(|e| crate::server::server_error(e))?;
+        sheet.write_number(ri, 7, row.get::<f64, _>(7)).map_err(|e| crate::server::server_error(e))?;
+        sheet.write_string(ri, 8, row.get::<String, _>(8)).map_err(|e| crate::server::server_error(e))?;
     }
-    let data = workbook.save_to_buffer().map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    let data = workbook.save_to_buffer().map_err(|e| crate::server::server_error(e))?;
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
     Ok(Json(json!({"data": b64})))
 }
@@ -276,7 +281,7 @@ pub async fn generate_zpl(
     let template_id = body.get("templateId").and_then(|v| v.as_str()).ok_or((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Missing templateId"}))))?;
     let mat = sqlx::query("SELECT sku, name, quantity, price FROM materials WHERE id=$1")
         .bind(material_id).fetch_optional(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"}))))?;
     let sku: String = mat.get("sku");
     let name: String = mat.get("name");
@@ -284,7 +289,7 @@ pub async fn generate_zpl(
     let price: f64 = mat.get("price");
     let tmpl = sqlx::query("SELECT layout_style, show_company, show_qty, show_price, show_barcode, show_sku, show_name, show_category, show_location, show_expiry, show_batch, qr_size, font_scale, template_type FROM label_templates WHERE id=$1")
         .bind(template_id).fetch_optional(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Template not found"}))))?;
     let layout: String = tmpl.get("layout_style");
     let show_company: bool = tmpl.get("show_company");
@@ -368,7 +373,7 @@ pub async fn get_stock_timeline(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT t.id, t.transaction_number, t.type, t.quantity, COALESCE(t.reference,''), COALESCE(t.notes,''), COALESCE(u.full_name,''), t.created_at FROM transactions t LEFT JOIN users u ON t.user_id = u.id WHERE t.material_id = $1 AND t.type NOT IN ('opname') ORDER BY t.created_at ASC")
         .bind(&material_id).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let mut running = 0.0f64;
     let mut entries = Vec::new();
     for row in &rows {
@@ -399,7 +404,7 @@ pub async fn get_material_batches(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT id, material_id, batch_no, qty, expiry_date, received_at, created_at FROM material_batches WHERE material_id=$1 ORDER BY received_at DESC")
         .bind(&material_id).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|r| json!({
         "id": r.get::<String,_>("id"), "materialId": r.get::<String,_>("material_id"),
         "batchNo": r.get::<String,_>("batch_no"), "qty": r.get::<f64,_>("qty"),
@@ -425,7 +430,7 @@ pub async fn create_material_batch(
     sqlx::query("INSERT INTO material_batches (id, material_id, batch_no, qty, expiry_date, received_at, created_at) VALUES ($1,$2,$3,$4,$5,$6,NOW())")
         .bind(&id).bind(material_id).bind(batch_no).bind(qty).bind(&exp).bind(&recv)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"id": id, "materialId": material_id, "batchNo": batch_no, "qty": qty, "expiryDate": exp, "receivedAt": recv})))
 }
 
@@ -436,7 +441,7 @@ pub async fn delete_material_batch(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM material_batches WHERE id=$1").bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -446,7 +451,7 @@ pub async fn get_material_images(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT id, material_id, url, sort_order, created_at FROM material_images WHERE material_id=$1 ORDER BY sort_order ASC")
         .bind(&material_id).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|r| json!({
         "id": r.get::<String,_>("id"), "materialId": r.get::<String,_>("material_id"),
         "url": r.get::<String,_>("url"), "sortOrder": r.get::<i32,_>("sort_order"),
@@ -465,12 +470,12 @@ pub async fn create_material_image(
     let id = uuid::Uuid::new_v4().to_string();
     let max_sort: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM material_images WHERE material_id=$1")
         .bind(material_id).fetch_optional(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .unwrap_or(0);
     sqlx::query("INSERT INTO material_images (id, material_id, url, sort_order, created_at) VALUES ($1,$2,$3,$4,NOW())")
         .bind(&id).bind(material_id).bind(url).bind(max_sort)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"id": id, "materialId": material_id, "url": url, "sortOrder": max_sort})))
 }
 
@@ -481,7 +486,7 @@ pub async fn delete_material_image(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM material_images WHERE id=$1").bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -493,13 +498,13 @@ pub async fn reorder_material_images(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let ids: Vec<String> = body.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     let mut tx = pool.pool.begin().await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     for (i, id) in ids.iter().enumerate() {
         sqlx::query("UPDATE material_images SET sort_order=$1 WHERE id=$2")
             .bind(i as i32).bind(id).execute(&mut *tx).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
     }
     tx.commit().await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }

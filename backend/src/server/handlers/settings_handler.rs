@@ -20,7 +20,7 @@ pub async fn get_company_profile(
         "SELECT id, company_name, address, phone, email, logo, npwp, updated_at FROM company_profile LIMIT 1"
     )
     .fetch_optional(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     match row {
         Some(r) => Ok(Json(Some(CompanyProfile {
             id: r.get(0), company_name: r.get(1), address: r.get(2),
@@ -43,14 +43,14 @@ pub async fn save_company_profile(
             .bind(&body.company_name).bind(&body.address).bind(&body.phone).bind(&body.email)
             .bind(&body.logo).bind(&body.npwp).bind(&now)
             .execute(&pool.pool).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO company_profile (id, company_name, address, phone, email, logo, npwp, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(&id).bind(&body.company_name).bind(&body.address).bind(&body.phone)
             .bind(&body.email).bind(&body.logo).bind(&body.npwp).bind(&now)
             .execute(&pool.pool).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
     }
     Ok(Json(()))
 }
@@ -62,7 +62,7 @@ pub async fn get_notification_config(
 ) -> Result<Json<Vec<NotificationConfig>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT id, config_key, config_value FROM notification_config")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| NotificationConfig {
         id: row.get(0), config_key: row.get(1), config_value: row.get(2),
     }).collect();
@@ -83,13 +83,13 @@ pub async fn save_notification_config(
         sqlx::query("UPDATE notification_config SET config_value=$1 WHERE config_key=$2")
             .bind(&body.config_value).bind(&body.config_key)
             .execute(&pool.pool).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
     } else {
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO notification_config (id, config_key, config_value) VALUES ($1, $2, $3)")
             .bind(&id).bind(&body.config_key).bind(&body.config_value)
             .execute(&pool.pool).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
     }
     Ok(Json(()))
 }
@@ -109,7 +109,7 @@ pub async fn list_roles(
 ) -> Result<Json<Vec<Role>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT id, name, description, permissions, is_system, created_at FROM roles ORDER BY name")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| Role {
         id: row.get(0), name: row.get(1), description: row.get(2),
         permissions: row.get(3), is_system: row.get::<bool, _>(4), created_at: row.get(5),
@@ -122,7 +122,7 @@ pub async fn create_role(
     Extension(_user_id): Extension<String>,
     Json(body): Json<CreateRoleBody>,
 ) -> Result<Json<Role>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_users").await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))? {
+    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_users").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let id = uuid::Uuid::new_v4().to_string();
@@ -130,7 +130,7 @@ pub async fn create_role(
     sqlx::query("INSERT INTO roles (id, name, description, permissions, is_system) VALUES ($1, $2, $3, $4, false)")
         .bind(&id).bind(&body.name).bind(&body.description).bind(&body.permissions)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(Role { id, name: body.name, description: body.description, permissions: body.permissions, is_system: false, created_at: now }))
 }
 
@@ -139,13 +139,13 @@ pub async fn update_role(
     Extension(_user_id): Extension<String>,
     Json(body): Json<UpdateRoleBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_users").await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))? {
+    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_users").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     sqlx::query("UPDATE roles SET name=$1, description=$2, permissions=$3 WHERE id=$4 AND is_system=false")
         .bind(&body.name).bind(&body.description).bind(&body.permissions).bind(&body.id)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -154,12 +154,12 @@ pub async fn delete_role(
     Extension(_user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_users").await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))? {
+    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_users").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     sqlx::query("DELETE FROM roles WHERE id=$1 AND is_system=false")
         .bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -175,13 +175,13 @@ pub async fn get_app_config(
     let rows = if let Some(ref key) = params.key {
         let val: Option<String> = sqlx::query_scalar("SELECT value FROM app_config WHERE key=$1")
             .bind(key).fetch_optional(&pool.pool).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
         let v = val.unwrap_or_default();
         return Ok(Json(vec![AppConfig { key: key.clone(), value: v }]));
     } else {
         sqlx::query("SELECT key, value FROM app_config ORDER BY key")
             .fetch_all(&pool.pool).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+            .map_err(|e| crate::server::server_error(e))?
     };
     let list = rows.iter().map(|row| AppConfig { key: row.get(0), value: row.get(1) }).collect();
     Ok(Json(list))
@@ -198,7 +198,7 @@ pub async fn set_app_config(
     sqlx::query("INSERT INTO app_config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value")
         .bind(&body.key).bind(&body.value)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -209,7 +209,7 @@ pub async fn get_inventory_settings(
 ) -> Result<Json<Vec<AppConfig>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT key, value FROM app_config WHERE key LIKE 'inventory_%' ORDER BY key")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| AppConfig { key: row.get(0), value: row.get(1) }).collect();
     Ok(Json(list))
 }
@@ -226,7 +226,7 @@ pub async fn save_inventory_setting(
     sqlx::query("INSERT INTO app_config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value")
         .bind(&key).bind(&body.value)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -236,13 +236,13 @@ pub async fn db_stats(
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let materials: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials")
-        .fetch_one(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let transactions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
-        .fetch_one(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
-        .fetch_one(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let categories: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM categories")
-        .fetch_one(&pool.pool).await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"materials": materials, "transactions": transactions, "users": users, "categories": categories})))
 }
 
@@ -276,7 +276,7 @@ pub async fn list_audit_logs(
     builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit_val);
     builder.push(" OFFSET ").push_bind(offset_val);
     let rows = builder.build().fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| AuditLog {
         id: row.get(0), user_id: row.get::<Option<String>, _>(1), action: row.get(2),
         entity: row.get(3), entity_id: row.get::<Option<String>, _>(4),
@@ -302,7 +302,7 @@ pub async fn filtered_audit_logs(
     builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit_val);
     builder.push(" OFFSET ").push_bind(offset_val);
     let rows = builder.build().fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| AuditLog {
         id: row.get(0), user_id: row.get::<Option<String>, _>(1), action: row.get(2),
         entity: row.get(3), entity_id: row.get::<Option<String>, _>(4),
@@ -324,7 +324,7 @@ pub async fn count_filtered_audit_logs(
     if let Some(ref d) = params.date_start { builder.push(" AND created_at >= ").push_bind(d); }
     if let Some(ref d) = params.date_end { builder.push(" AND created_at < (").push_bind(d); builder.push("::date + interval '1 day')"); }
     let count: i64 = builder.build().fetch_one(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .get(0);
     Ok(Json(count))
 }

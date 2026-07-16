@@ -3,6 +3,7 @@ use axum::{Json, extract::{State, Query, Path}, Extension};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
+use crate::validate;
 use crate::models::{Transaction, TransactionItem, PurchaseOrder, PoItem, SalesOrder, SoItem};
 use sqlx::Row;
 
@@ -32,7 +33,7 @@ pub async fn list(
     builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(params.limit.unwrap_or(200));
 
     let rows = builder.build().fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let transactions = rows.iter().map(|row| { Transaction { id: row.get(0), transaction_number: row.get(1), tx_type: row.get(2), material_id: row.get(3), warehouse_id: row.get(4), rack_id: row.get(5), quantity: row.get(6), price: row.get(7), reference: row.get(8), notes: row.get(9), user_id: row.get(10), status: row.get(11), approved_by: row.get(12), po_number: row.get(13), invoice_no: row.get(14), destination: row.get(15), created_at: row.get(16), updated_at: row.get(17) } }).collect();
     Ok(Json(transactions))
 }
@@ -44,7 +45,7 @@ pub async fn pending(
         "SELECT id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, price, reference, notes, user_id, status, approved_by, po_number, invoice_no, destination, created_at, updated_at FROM transactions WHERE status='pending' ORDER BY created_at DESC LIMIT 100"
     )
     .fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     let transactions = rows.iter().map(|row| { Transaction { id: row.get(0), transaction_number: row.get(1), tx_type: row.get(2), material_id: row.get(3), warehouse_id: row.get(4), rack_id: row.get(5), quantity: row.get(6), price: row.get(7), reference: row.get(8), notes: row.get(9), user_id: row.get(10), status: row.get(11), approved_by: row.get(12), po_number: row.get(13), invoice_no: row.get(14), destination: row.get(15), created_at: row.get(16), updated_at: row.get(17) } }).collect();
     Ok(Json(transactions))
 }
@@ -54,9 +55,11 @@ pub struct CreateBody { pub tx: Transaction, pub items: Option<Vec<TransactionIt
 
 pub async fn create(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<Transaction>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let mut db_tx = pool.pool.begin().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let id = gen_id();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let prefix = match body.tx.tx_type.as_str() { "in" => "IN", "out" => "OUT", "transfer" => "TRF", "opname" => "OPN", _ => "TXN" };
@@ -76,14 +79,14 @@ pub async fn create(
     .bind(qty).bind(price).bind(&body.tx.reference).bind(&body.tx.notes).bind(&body.tx.user_id).bind(&status)
     .bind(&body.tx.approved_by).bind(&body.tx.po_number).bind(&body.tx.invoice_no).bind(&body.tx.destination).bind(&now).bind(&now)
     .execute(&mut *db_tx).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
 
     for item in &items {
         let item_id = gen_id();
         sqlx::query("INSERT INTO transaction_items (id, tx_id, material_id, batch_id, quantity, price, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
             .bind(&item_id).bind(&id).bind(&item.material_id).bind(&item.batch_id).bind(item.quantity).bind(item.price).bind(&now)
             .execute(&mut *db_tx).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
     }
 
     match body.tx.tx_type.as_str() {
@@ -92,27 +95,31 @@ pub async fn create(
         _ => {}
     }
 
-    db_tx.commit().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(Transaction { id, transaction_number: txn_number, tx_type: body.tx.tx_type, material_id: mat_id, warehouse_id: body.tx.warehouse_id, rack_id: body.tx.rack_id, quantity: qty, price, reference: body.tx.reference, notes: body.tx.notes, user_id: body.tx.user_id, status, approved_by: body.tx.approved_by, po_number: body.tx.po_number, invoice_no: body.tx.invoice_no, destination: body.tx.destination, created_at: now.clone(), updated_at: Some(now) }))
 }
 
 pub async fn approve(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("UPDATE transactions SET status='approved' WHERE id=$1 AND status='pending'")
         .bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
 pub async fn reject(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("UPDATE transactions SET status='rejected' WHERE id=$1 AND status='pending'")
         .bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
 
@@ -125,7 +132,7 @@ pub async fn get_one(
     )
     .bind(&id)
     .fetch_optional(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .map_err(|e| crate::server::server_error(e))?
     .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": "Transaction not found"}))))?;
 
     let items = sqlx::query(
@@ -133,7 +140,7 @@ pub async fn get_one(
     )
     .bind(&id)
     .fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .map_err(|e| crate::server::server_error(e))?
     .iter().map(|row| json!({
         "id": row.get::<String,_>(0),
         "tx_id": row.get::<String,_>(1),
@@ -175,10 +182,11 @@ pub async fn reverse(
     Path(id): Path<String>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let mut db_tx = pool.pool.begin().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let (cur_status, tx_type): (String, String) = sqlx::query("SELECT status, type FROM transactions WHERE id=$1")
         .bind(&id).fetch_optional(&mut *db_tx).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .map(|row| (row.get(0), row.get(1)))
         .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": "Transaction not found"}))))?;
 
@@ -188,13 +196,13 @@ pub async fn reverse(
 
     let items: Vec<(String, f64)> = sqlx::query("SELECT material_id, quantity FROM transaction_items WHERE tx_id=$1")
         .bind(&id).fetch_all(&mut *db_tx).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .into_iter().map(|row| (row.get(0), row.get(1))).collect();
 
     if items.is_empty() {
         let row = sqlx::query("SELECT material_id, quantity FROM transactions WHERE id=$1")
             .bind(&id).fetch_one(&mut *db_tx).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
         let (mid, qty): (String, f64) = (row.get(0), row.get(1));
         if tx_type == "in" {
             sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
@@ -217,7 +225,7 @@ pub async fn reverse(
 
     sqlx::query("UPDATE transactions SET status='reversed' WHERE id=$1")
         .bind(&id).execute(&mut *db_tx).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
 
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let audit_id = gen_id();
@@ -225,7 +233,7 @@ pub async fn reverse(
         .bind(&audit_id).bind(&user_id).bind("reverse").bind("transaction").bind(&id).bind(&format!("Reversed {} transaction", tx_type)).bind(&now)
         .execute(&mut *db_tx).await.ok();
 
-    db_tx.commit().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"message": "Transaction reversed", "id": id})))
 }
 
@@ -237,7 +245,8 @@ pub async fn reverse_bulk(
     Extension(user_id): Extension<String>,
     Json(body): Json<ReverseBulkBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let mut db_tx = pool.pool.begin().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let mut reversed = 0i64;
     let mut errors = Vec::new();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -279,7 +288,7 @@ pub async fn reverse_bulk(
             .execute(&mut *db_tx).await.ok();
         reversed += 1;
     }
-    db_tx.commit().await.map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"reversed": reversed, "errors": errors})))
 }
 
@@ -291,7 +300,7 @@ pub async fn get_items(
         "SELECT ti.id, ti.tx_id, ti.material_id, ti.batch_id, ti.quantity, ti.price, COALESCE(m.name, ''), ti.created_at FROM transaction_items ti LEFT JOIN materials m ON m.id = ti.material_id WHERE ti.tx_id=$1",
     )
     .bind(&tx_id).fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .map_err(|e| crate::server::server_error(e))?
     .iter().map(|row| json!({
         "id": row.get::<String,_>(0),
         "tx_id": row.get::<String,_>(1),
@@ -328,7 +337,7 @@ pub async fn get_purchase_orders(
     if let Some(ref v) = search_pat { query = query.bind(v).bind(v); }
     if has_sf { query = query.bind(&sf_val); }
     let rows = query.fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| json!({
         "id": row.get::<String,_>(0),
         "po_number": row.get::<String,_>(1),
@@ -362,13 +371,13 @@ pub async fn create_purchase_order(
     )
     .bind(&id).bind(&po_number).bind(&body.po.supplier_id).bind(&body.po.supplier_name).bind(&body.po.status).bind(&body.po.notes).bind(&user_id).bind(&now).bind(&now)
     .execute(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     for item in &body.items {
         let item_id = gen_id();
         sqlx::query("INSERT INTO po_items (id, po_id, material_id, quantity, price, received_qty, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
             .bind(&item_id).bind(&id).bind(&item.material_id).bind(item.quantity).bind(item.price).bind(0_f64).bind(&now)
             .execute(&pool.pool).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
     }
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
@@ -386,11 +395,12 @@ pub async fn update_purchase_order_status(
     Extension(user_id): Extension<String>,
     Json(body): Json<UpdatePoStatusBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query("UPDATE purchase_orders SET status=$1, updated_at=$2 WHERE id=$3")
         .bind(&body.status).bind(&now).bind(&id)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("update_status").bind("purchase_order").bind(&id).bind(&format!("Status -> {}", body.status)).bind(&now)
@@ -406,7 +416,7 @@ pub async fn get_po_items(
         "SELECT pi.id, pi.po_id, pi.material_id, pi.quantity, pi.price, pi.received_qty, COALESCE(m.name, ''), pi.created_at FROM po_items pi LEFT JOIN materials m ON m.id = pi.material_id WHERE pi.po_id=$1",
     )
     .bind(&po_id).fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .map_err(|e| crate::server::server_error(e))?
     .iter().map(|row| json!({
         "id": row.get::<String,_>(0),
         "po_id": row.get::<String,_>(1),
@@ -443,7 +453,7 @@ pub async fn get_sales_orders(
     if let Some(ref v) = search_pat { query = query.bind(v).bind(v); }
     if has_sf { query = query.bind(&sf_val); }
     let rows = query.fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| json!({
         "id": row.get::<String,_>(0),
         "so_number": row.get::<String,_>(1),
@@ -477,13 +487,13 @@ pub async fn create_sales_order(
     )
     .bind(&id).bind(&so_number).bind(&body.so.customer_name).bind(&body.so.customer_address).bind(&body.so.status).bind(&body.so.notes).bind(&user_id).bind(&now).bind(&now)
     .execute(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     for item in &body.items {
         let item_id = gen_id();
         sqlx::query("INSERT INTO so_items (id, so_id, material_id, quantity, price, fulfilled_qty, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
             .bind(&item_id).bind(&id).bind(&item.material_id).bind(item.quantity).bind(item.price).bind(0_f64).bind(&now)
             .execute(&pool.pool).await
-            .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+            .map_err(|e| crate::server::server_error(e))?;
     }
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
@@ -505,7 +515,7 @@ pub async fn update_sales_order_status(
     sqlx::query("UPDATE sales_orders SET status=$1, updated_at=$2 WHERE id=$3")
         .bind(&body.status).bind(&now).bind(&id)
         .execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("update_status").bind("sales_order").bind(&id).bind(&format!("Status -> {}", body.status)).bind(&now)
@@ -521,7 +531,7 @@ pub async fn get_so_items(
         "SELECT si.id, si.so_id, si.material_id, si.quantity, si.price, si.fulfilled_qty, COALESCE(m.name, ''), si.created_at FROM so_items si LEFT JOIN materials m ON m.id = si.material_id WHERE si.so_id=$1",
     )
     .bind(&so_id).fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .map_err(|e| crate::server::server_error(e))?
     .iter().map(|row| json!({
         "id": row.get::<String,_>(0),
         "so_id": row.get::<String,_>(1),
@@ -543,7 +553,7 @@ pub async fn get_transaction_attachments(
         "SELECT id, tx_id, filename, data_base64, created_at FROM transaction_attachments WHERE tx_id=$1",
     )
     .bind(&tx_id).fetch_all(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+    .map_err(|e| crate::server::server_error(e))?
     .iter().map(|row| json!({
         "id": row.get::<String,_>(0),
         "tx_id": row.get::<String,_>(1),
@@ -569,7 +579,7 @@ pub async fn create_transaction_attachment(
     )
     .bind(&id).bind(&body.tx_id).bind(&body.filename).bind(&body.data_base64).bind(&now)
     .execute(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"id": id, "tx_id": body.tx_id, "filename": body.filename, "created_at": now})))
 }
 
@@ -578,9 +588,10 @@ pub async fn delete_transaction_attachment(
     Path(id): Path<String>,
     Extension(_user_id): Extension<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM transaction_attachments WHERE id=$1")
         .bind(&id).execute(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"message": "Attachment deleted"})))
 }
 
@@ -597,7 +608,7 @@ pub async fn get_quality_inspections(
     if let Some(ref t) = q.tx_id { if !t.is_empty() { sql.push_str(" AND qi.tx_id = '"); sql.push_str(t); sql.push('\''); } }
     sql.push_str(" ORDER BY qi.created_at DESC");
     let rows = sqlx::query(&sql).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .iter().map(|row| json!({
             "id": row.get::<String,_>(0),
             "tx_id": row.get::<String,_>(1),
@@ -626,7 +637,7 @@ pub async fn create_quality_inspection(
     )
     .bind(&id).bind(&body.tx_id).bind(&body.material_id).bind(&body.status).bind(&body.notes).bind(&user_id).bind(&now)
     .execute(&pool.pool).await
-    .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    .map_err(|e| crate::server::server_error(e))?;
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("create").bind("quality_inspection").bind(&id).bind(&format!("Material {} -> {}", body.material_id, body.status)).bind(&now)
@@ -652,7 +663,7 @@ pub async fn fifo_fefo_suggestion(
     );
     let mid = q.material_id.unwrap_or_default();
     let rows = sqlx::query(&sql).bind(&mid).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?
+        .map_err(|e| crate::server::server_error(e))?
         .iter().map(|row| json!({
             "id": row.get::<String,_>(0),
             "material_id": row.get::<String,_>(1),

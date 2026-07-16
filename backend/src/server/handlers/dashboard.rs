@@ -19,7 +19,7 @@ pub async fn kpi(
     let stock_value: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity * price),0) FROM materials WHERE is_active=true").fetch_one(&pool.pool).await.unwrap_or(0.0);
     let recent_tx_rows = sqlx::query("SELECT id, transaction_number, type, material_id, warehouse_id, quantity, created_at FROM transactions ORDER BY created_at DESC LIMIT 10")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     let recent = recent_tx_rows.iter().map(|row| {
         json!({"id": row.get::<String,_>("id"), "transaction_number": row.get::<String,_>("transaction_number"),
             "type": row.get::<String,_>("type"), "material_id": row.get::<String,_>("material_id"),
@@ -46,7 +46,7 @@ pub async fn analysis_all(
             (SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id) as lead_time_days
          FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
     ).bind(wh_filter).fetch_all(&pool.pool).await
-     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+     .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let last_tx: Option<String> = row.get::<Option<String>,_>("last_transaction");
         let days_since = last_tx.as_ref().and_then(|d| {
@@ -76,7 +76,7 @@ pub async fn abc_analysis(
             COALESCE((SELECT MAX(created_at) FROM transactions WHERE material_id=m.id),'') as last_transaction
          FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY consumption_12mo DESC"
     ).bind(wh_filter).fetch_all(&pool.pool).await
-     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+     .map_err(|e| crate::server::server_error(e))?;
     let total: f64 = rows.iter().map(|r| r.get::<f64,_>("consumption_12mo")).sum();
     let mut cumulative = 0.0;
     let mut class_a = Vec::new();
@@ -122,7 +122,7 @@ pub async fn aging_report(
          COALESCE((SELECT EXTRACT(DAY FROM NOW() - MAX(created_at::timestamp)) FROM transactions WHERE material_id=m.id),999) as days \
          FROM materials m WHERE m.is_active=true) sub GROUP BY bucket ORDER BY bucket"
     ).fetch_all(&pool.pool).await
-     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+     .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"bucket": row.get::<String,_>("bucket"), "count": row.get::<i64,_>("cnt"), "total_value": row.get::<f64,_>("val")})
     }).collect::<Vec<_>>())))
@@ -140,7 +140,7 @@ pub async fn stock_movement(
          COALESCE((SELECT SUM(quantity) FROM transactions WHERE material_id=m.id AND created_at >= $1 AND created_at < $2 AND type='out'),0) as qty_out \
          FROM materials m WHERE m.is_active=true ORDER BY m.name"
     ).bind(start).bind(end).fetch_all(&pool.pool).await
-     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+     .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let o: f64 = row.get("opening"); let i: f64 = row.get("qty_in"); let oo: f64 = row.get("qty_out");
         json!({"material_name": row.get::<String,_>("name"), "opening": o, "qty_in": i, "qty_out": oo, "closing": o + i - oo})
@@ -152,7 +152,7 @@ pub async fn tx_type_summary(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT type, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val FROM transactions GROUP BY type ORDER BY type")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"name": row.get::<String,_>("type"), "count": row.get::<i64,_>("cnt"), "value": row.get::<f64,_>("val")})
     }).collect::<Vec<_>>())))
@@ -166,7 +166,7 @@ pub async fn tx_by_user(
     let de = q.get("dateEnd").and_then(|v| v.as_str()).unwrap_or("");
     let rows = sqlx::query("SELECT t.user_id, u.full_name, COUNT(*) as cnt, COALESCE(SUM(t.quantity),0) as val FROM transactions t JOIN users u ON t.user_id=u.id WHERE ($1='' OR t.created_at>=$1) AND ($2='' OR t.created_at<$2) GROUP BY t.user_id, u.full_name ORDER BY cnt DESC")
         .bind(ds).bind(de).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"user_id": row.get::<String,_>("user_id"), "user_name": row.get::<String,_>("full_name"),
             "total_count": row.get::<i64,_>("cnt"), "total_value": row.get::<f64,_>("val")})
@@ -181,7 +181,7 @@ pub async fn daily_trend(
     let de = q.get("dateEnd").and_then(|v| v.as_str()).map(|s| if s.is_empty() { String::new() } else { format!("{} 23:59:59", s) }).unwrap_or_default();
     let rows = sqlx::query("SELECT DATE(created_at)::text as date, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val FROM transactions WHERE ($1='' OR created_at>=$1) AND ($2='' OR created_at<=$2) GROUP BY DATE(created_at) ORDER BY date")
         .bind(ds).bind(de).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"date": row.get::<String,_>("date"), "count": row.get::<i64,_>("cnt"), "value": row.get::<f64,_>("val")})
     }).collect::<Vec<_>>())))
@@ -201,7 +201,7 @@ pub async fn tx_date_comparison(
          FROM transactions WHERE (created_at >= $1 AND created_at < $2) OR (created_at >= $3 AND created_at < $4) \
          GROUP BY DATE(created_at), series ORDER BY date"
     ).bind(a_s).bind(a_e).bind(b_s).bind(b_e).fetch_all(&pool.pool).await
-     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+     .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let series: Option<String> = row.get("series");
         let prefix = if series.as_deref() == Some("A") { "A_" } else { "B_" };
@@ -214,7 +214,7 @@ pub async fn category_value_summary(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT COALESCE(c.name,'Uncategorized') as name, COUNT(m.id) as cnt, COALESCE(SUM(m.quantity*m.price),0) as val FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true GROUP BY c.name ORDER BY val DESC")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"name": row.get::<String,_>("name"), "count": row.get::<i64,_>("cnt"), "value": row.get::<f64,_>("val")})
     }).collect::<Vec<_>>())))
@@ -225,7 +225,7 @@ pub async fn stock_valuation(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT COALESCE(c.name,'Uncategorized') as category, SUM(m.quantity*m.price) as value, COUNT(m.id) as count FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true GROUP BY c.name ORDER BY value DESC")
         .fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"category": row.get::<String,_>("category"), "value": row.get::<f64,_>("value"), "count": row.get::<i64,_>("count")})
     }).collect::<Vec<_>>())))
@@ -242,7 +242,7 @@ pub async fn demand_forecast(
             COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as consumption_1mo
          FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
     ).bind(wh_filter).fetch_all(&pool.pool).await
-     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+     .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let c3: f64 = row.get("consumption_3mo");
         let c1: f64 = row.get("consumption_1mo");
@@ -270,7 +270,7 @@ pub async fn reorder_suggestions(
          FROM materials m LEFT JOIN suppliers s ON m.supplier_id=s.id
          WHERE m.is_active=true AND m.quantity <= m.max_stock AND ($1 = '' OR m.warehouse_id = $1) ORDER BY (m.quantity - m.min_stock) ASC"
     ).bind(wh_filter).fetch_all(&pool.pool).await
-     .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+     .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let qty: f64 = row.get("quantity");
         let min: f64 = row.get("min_stock");
@@ -294,7 +294,7 @@ pub async fn opname_variance(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let rows = sqlx::query("SELECT COALESCE(c.name,'Uncategorized') as category, COALESCE(SUM(soi.difference),0) as total_diff FROM stock_opname_items soi LEFT JOIN materials m ON soi.material_id=m.id LEFT JOIN categories c ON m.category_id=c.id WHERE soi.opname_id=$1 GROUP BY c.name ORDER BY total_diff DESC")
         .bind(&id).fetch_all(&pool.pool).await
-        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+        .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"category": row.get::<String,_>("category"), "total_diff": row.get::<f64,_>("total_diff")})
     }).collect::<Vec<_>>())))
