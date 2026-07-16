@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use axum::{Json, extract::State, Extension};
+use axum::{Json, extract::State, Extension, response::IntoResponse, http::header::SET_COOKIE};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
@@ -15,7 +15,7 @@ pub struct LoginRequest {
 pub async fn login(
     State(pool): State<Arc<DbPool>>,
     Json(req): Json<LoginRequest>,
-) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_row = sqlx::query(
         "SELECT id, username, password_hash, full_name, email, role, is_active, photo, \
          last_login_at, last_login_ip, password_changed_at, created_at, updated_at \
@@ -56,15 +56,21 @@ pub async fn login(
         "updated_at": user.get::<String, _>("updated_at"),
     });
 
-    Ok(Json(json!({
+    let cookie = format!(
+        "token={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400",
+        token
+    );
+
+    Ok(([(SET_COOKIE, cookie)], Json(json!({
         "user": user_json,
         "token": token,
         "password_expired": false,
-    })))
+    }))))
 }
 
 pub async fn logout(
     Extension(_user_id): Extension<String>,
-) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    Ok(Json(()))
+) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let clear = "token=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0";
+    Ok(([(SET_COOKIE, clear)], Json(json!({}))))
 }

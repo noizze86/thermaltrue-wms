@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::path::Path;
-use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::Request, response::{IntoResponse, Response}, body::Body, http::{Method, StatusCode, Uri, header::AUTHORIZATION}};
+use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::Request, response::{IntoResponse, Response}, body::Body, http::{Method, StatusCode, Uri, header::{AUTHORIZATION, COOKIE}}};
 use serde::{Deserialize, Serialize};
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use tower_http::cors::CorsLayer;
@@ -313,14 +313,25 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    let auth_header = req.headers().get(AUTHORIZATION)
+    // Check httpOnly cookie first, then fall back to Authorization header (Tauri IPC compat)
+    let token = req.headers().get(COOKIE)
         .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .map(|s| s.to_string());
+        .and_then(|cookie_str| {
+            cookie_str.split(';').find_map(|pair| {
+                let pair = pair.trim();
+                pair.strip_prefix("token=").map(|s| s.to_string())
+            })
+        })
+        .or_else(|| {
+            req.headers().get(AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .and_then(|v| v.strip_prefix("Bearer "))
+                .map(|s| s.to_string())
+        });
 
-    match auth_header {
-        Some(token) => {
-            match verify_jwt(&token) {
+    match token {
+        Some(t) => {
+            match verify_jwt(&t) {
                 Ok(claims) => {
                     req.extensions_mut().insert(claims.user_id);
                     next.run(req).await
@@ -331,7 +342,7 @@ async fn auth_middleware(
             }
         }
         None => {
-            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Missing authorization header" }))).into_response()
+            (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response()
         }
     }
 }
@@ -343,7 +354,18 @@ pub struct Claims {
 }
 
 fn jwt_secret() -> String {
-    std::env::var("JWT_SECRET").unwrap_or_else(|_| "thermaltrue-dev-secret-key-2026".into())
+    if let Ok(secret) = std::env::var("JWT_SECRET") {
+        return secret;
+    }
+    // Auto-generate a random 64-char hex secret and cache in process env
+    use std::io::Write;
+    let secret = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
+    std::env::set_var("JWT_SECRET", &secret);
+    // Best-effort persist to .env for next startup
+    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(".env") {
+        writeln!(f, "JWT_SECRET={}", secret).ok();
+    }
+    secret
 }
 
 pub fn create_jwt(user_id: &str) -> Result<String, jsonwebtoken::errors::Error> {

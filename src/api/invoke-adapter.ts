@@ -278,9 +278,8 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
   }
 
   const path = typeof route.path === "function" ? route.path(args) : route.path;
-  const token = localStorage.getItem("wms_token");
+  // Auth is handled by httpOnly cookie set on login; no need to send Authorization header
   const headers: Record<string, string> = {};
-  if (token) headers["Authorization"] = `Bearer ${token}`;
 
   let url = `${getApiBase()}${path}`;
   let body: string | undefined;
@@ -317,7 +316,7 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
     localStorage.removeItem("wms_token");
     localStorage.removeItem("wms_user");
     window.location.href = "/login";
-    throw { type: "Auth", message: "Session expired" };
+    throw { type: "Auth", message: "Session expired or not logged in" };
   }
   if (!res.ok) {
     const errBody = await res.json().catch(() => ({ error: res.statusText }));

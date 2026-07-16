@@ -263,9 +263,6 @@ export default function SystemPage() {
               )}
             </CardContent>
           </Card>
-          <p className="text-sm text-muted-foreground mt-4">
-            Default login: <strong>admin</strong> / <strong>admin123</strong>
-          </p>
         </TabsContent>
 
         <TabsContent value="config">
