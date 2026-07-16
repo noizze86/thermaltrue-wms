@@ -1,8 +1,10 @@
 use std::sync::Arc;
-use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::Request, response::{IntoResponse, Response}, http::{Method, StatusCode, header::AUTHORIZATION}};
+use std::path::Path;
+use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::Request, response::{IntoResponse, Response}, body::Body, http::{Method, StatusCode, Uri, header::AUTHORIZATION}};
 use serde::{Deserialize, Serialize};
 use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
 use tower_http::cors::CorsLayer;
+use tokio::fs as async_fs;
 use crate::db_pool::DbPool;
 
 pub mod handlers;
@@ -214,9 +216,83 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/do-pdf", get(handlers::reports::generate_do_pdf))
         // CORS (allow Tauri WebView origins)
         .layer(CorsLayer::permissive())
-        // Middleware (skip auth for health & login)
+        // Middleware (skip auth for health, login & non-API paths)
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
+        // SPA fallback — serve frontend static files, fallback to index.html for React Router
+        .fallback(spa_handler)
+}
+
+async fn spa_handler(uri: Uri) -> Response<Body> {
+    let dist = frontend_dist_dir();
+    let path = uri.path().trim_start_matches('/');
+    let file_path = Path::new(&dist).join(path);
+
+    // Serve actual file if it exists (JS, CSS, images, etc.)
+    if !path.is_empty() && file_path.is_file() {
+        match async_fs::read(&file_path).await {
+            Ok(content) => {
+                return Response::builder()
+                    .header("Content-Type", mime_type(&file_path))
+                    .body(Body::from(content))
+                    .unwrap();
+            }
+            Err(_) => { /* fall through to index.html */ }
+        }
+    }
+
+    // SPA fallback — serve index.html for all other routes
+    let index_path = Path::new(&dist).join("index.html");
+    match async_fs::read(&index_path).await {
+        Ok(content) => {
+            Response::builder()
+                .header("Content-Type", "text/html")
+                .body(Body::from(content))
+                .unwrap()
+        }
+        Err(e) => {
+            (StatusCode::INTERNAL_SERVER_ERROR, format!("Frontend dist not found: {} ({})", index_path.display(), e)).into_response()
+        }
+    }
+}
+
+fn mime_type(path: &Path) -> &'static str {
+    match path.extension().and_then(|e| e.to_str()) {
+        Some("js") => "application/javascript",
+        Some("css") => "text/css",
+        Some("html") => "text/html",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("json") => "application/json",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        _ => "application/octet-stream",
+    }
+}
+
+fn frontend_dist_dir() -> String {
+    if let Ok(dir) = std::env::var("FRONTEND_DIST") {
+        return dir;
+    }
+    // Resolve relative to CARGO_MANIFEST_DIR (server crate root)
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let dev_dist = manifest.join("../dist");
+    if dev_dist.exists() {
+        return dev_dist.to_string_lossy().to_string();
+    }
+    // Production: resolve relative to executable path
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(parent) = exe.parent() {
+            let candidate = parent.join("dist");
+            if candidate.exists() {
+                return candidate.to_string_lossy().to_string();
+            }
+        }
+    }
+    // Last resort
+    "dist".into()
 }
 
 async fn health() -> Json<serde_json::Value> {
@@ -228,8 +304,12 @@ async fn auth_middleware(
     next: Next,
 ) -> Response {
     let path = req.uri().path();
-    // OPTIONS (CORS preflight) must pass through before CorsLayer can handle it
-    if req.method() == Method::OPTIONS || path == "/api/health" || path == "/api/login" {
+    // Skip auth for: CORS preflight, health, login, and all non-API paths (static files, SPA)
+    if req.method() == Method::OPTIONS
+        || path == "/api/health"
+        || path == "/api/login"
+        || !path.starts_with("/api/")
+    {
         return next.run(req).await;
     }
 
