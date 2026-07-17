@@ -301,7 +301,8 @@ pub async fn generate_zpl(
     let qr_size: String = tmpl.get("qr_size");
     let font_scale: f32 = tmpl.get("font_scale");
     let fs = (font_scale * 30.0) as u32;
-    let company_name = "PT. Udara Jadi Bersih";
+    let company_name: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1")
+        .fetch_one(&pool.pool).await.unwrap_or_else(|_| "Thermaltrue".into());
     let mut zpl = String::from("^XA");
     let mut y = 30u32;
     let qr_mag = match qr_size.as_str() { "large" => 8, "small" => 4, _ => 6 };
@@ -319,7 +320,7 @@ pub async fn generate_zpl(
         "mini" => {
             if show_sku { zpl.push_str(&format!("^FO30,{}^ADN,{},10^FD{}^FS", y, fs.max(20), sku)); y += fs.max(20) + 5; }
             if show_name { let short = if name.len() > 15 { &name[..15] } else { name.as_str() }; zpl.push_str(&format!("^FO30,{}^ADN,18,8^FD{}^FS", y, short)); y += 22; }
-            zpl.push_str(&format!("^FO30,{}^ADN,15,8^FDPT. UJB^FS", y));
+            zpl.push_str(&format!("^FO30,{}^ADN,15,8^FD{}^FS", y, company_name));
             if show_barcode { y += 20; zpl.push_str(&format!("^FO30,{}^BCN,40,Y,N,N^FD{}^FS", y, sku)); }
         }
         "qr_only" => {

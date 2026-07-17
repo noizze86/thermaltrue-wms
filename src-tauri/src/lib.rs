@@ -157,7 +157,7 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_http::init())
         .plugin(tauri_plugin_updater::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
-        .plugin(tauri_plugin_barcode_scanner::init())
+        // barcode-scanner v2 uses auto-registration via permissions
 
         .setup(|app| {
             startup_log("Tauri setup hook started...");

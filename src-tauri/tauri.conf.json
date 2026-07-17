@@ -1,13 +1,13 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "Thermaltrue",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "identifier": "com.thermaltrue.wms",
   "build": {
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5174",
     "beforeDevCommand": "npm run dev",
-    "beforeBuildCommand": "set VITE_FORCE_HTTP=true&& npm run build"
+    "beforeBuildCommand": "npm run build"
   },
   "app": {
     "windows": [
@@ -43,7 +43,7 @@
     "updater": {
       "active": true,
       "dialog": true,
-      "pubkey": "PLACEHOLDER_REPLACE_WITH_ACTUAL_PUBKEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDQ3QTNCOTQ4NjVGRjExRUMKUldUc0VmOWxTTG1qUng1YUxDcStNeHVUYUFBV0M3RkdNMUhUb0RRQkZoSkQ0U2tWS2VkWlJwamkK",
       "endpoints": [
         "https://github.com/thermaltrue/wms/releases/latest/download/update.json"
       ]

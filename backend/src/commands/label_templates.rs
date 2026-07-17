@@ -4,8 +4,6 @@ use crate::models::LabelTemplate;
 use crate::error::AppError;
 use sqlx::Row;
 
-const COLS: &str = "id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at";
-
 fn row_to_template(row: &sqlx::postgres::PgRow) -> LabelTemplate {
     LabelTemplate {
         id: row.get("id"),
@@ -40,16 +38,14 @@ fn row_to_template(row: &sqlx::postgres::PgRow) -> LabelTemplate {
 #[tauri::command]
 pub async fn get_label_templates(pool: State<'_, DbPool>, token: String) -> Result<Vec<LabelTemplate>, AppError> {
     pool.verify_token(&token)?;
-    let sql = format!("SELECT {} FROM label_templates ORDER BY name", COLS);
-    let rows = sqlx::query(&sql).fetch_all(&pool.pool).await?;
+    let rows = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates ORDER BY name").fetch_all(&pool.pool).await?;
     Ok(rows.iter().map(row_to_template).collect())
 }
 
 #[tauri::command]
 pub async fn get_label_template(pool: State<'_, DbPool>, token: String, id: String) -> Result<LabelTemplate, AppError> {
     pool.verify_token(&token)?;
-    let sql = format!("SELECT {} FROM label_templates WHERE id=$1", COLS);
-    let row = sqlx::query(&sql).bind(&id).fetch_one(&pool.pool).await?;
+    let row = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates WHERE id=$1").bind(&id).fetch_one(&pool.pool).await?;
     Ok(row_to_template(&row))
 }
 
@@ -93,8 +89,7 @@ pub async fn save_label_template(pool: State<'_, DbPool>, token: String, templat
     .bind(&template.template_type).bind(template.label_width_mm).bind(template.label_height_mm)
     .bind(&now)
     .execute(&pool.pool).await?;
-    let sql = format!("SELECT {} FROM label_templates WHERE id=$1", COLS);
-    let row = sqlx::query(&sql).bind(&id).fetch_one(&pool.pool).await?;
+    let row = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates WHERE id=$1").bind(&id).fetch_one(&pool.pool).await?;
     Ok(row_to_template(&row))
 }
 

@@ -17,7 +17,13 @@ pub struct LoginRequest {
 }
 
 fn check_rate_limit(pool: &DbPool, username: &str) -> Result<(), (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let mut attempts = pool.login_attempts.lock().unwrap();
+    let mut attempts = match pool.login_attempts.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => {
+            log::error!("Mutex poisoned (login_attempts), recovering: {}", poisoned);
+            poisoned.into_inner()
+        }
+    };
     let now = Instant::now();
 
     // Global rate limit
@@ -92,9 +98,10 @@ pub async fn login(
         "updated_at": user.get::<String, _>("updated_at"),
     });
 
+    let secure = if cfg!(not(debug_assertions)) { "; Secure" } else { "" };
     let cookie = format!(
-        "token={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400",
-        token
+        "token={}; HttpOnly; SameSite=Strict; Path=/; Max-Age=86400{}",
+        token, secure
     );
 
     Ok(([(SET_COOKIE, cookie)], Json(json!({

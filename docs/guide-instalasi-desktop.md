@@ -309,7 +309,11 @@ Server berjalan di port 3000. Untuk akses dari komputer lain:
 netsh advfirewall firewall add rule name="Thermaltrue WMS" dir=in action=allow protocol=TCP localport=3000
 ```
 
-### 7.5 Logging
+### 7.5 Rate Limiting
+Login endpoint dibatasi 5 percobaan per 15 menit per user (dan 50 global).
+Setelah melebihi batas, akan menerima response `429 Too Many Requests`.
+
+### 7.6 Logging
 Log aplikasi disimpan di `%APPDATA%\com.thermaltrue.wms\logs\app.log`.
 Gunakan Windows Event Viewer untuk monitoring service.
 

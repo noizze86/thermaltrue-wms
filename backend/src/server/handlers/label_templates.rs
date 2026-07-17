@@ -5,8 +5,6 @@ use crate::db_pool::DbPool;
 use crate::models::LabelTemplate;
 use sqlx::Row;
 
-const COLS: &str = "id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at";
-
 fn row_to_template(row: &sqlx::postgres::PgRow) -> LabelTemplate {
     LabelTemplate {
         id: row.get("id"),
@@ -41,8 +39,8 @@ fn row_to_template(row: &sqlx::postgres::PgRow) -> LabelTemplate {
 pub async fn list(
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Vec<LabelTemplate>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let sql = format!("SELECT {} FROM label_templates ORDER BY name", COLS);
-    let rows = sqlx::query(&sql).fetch_all(&pool.pool).await
+    let rows = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates ORDER BY name")
+        .fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(rows.iter().map(row_to_template).collect()))
 }
@@ -51,8 +49,8 @@ pub async fn get_one(
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<LabelTemplate>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let sql = format!("SELECT {} FROM label_templates WHERE id=$1", COLS);
-    let row = sqlx::query(&sql).bind(&id).fetch_one(&pool.pool).await
+    let row = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates WHERE id=$1")
+        .bind(&id).fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(row_to_template(&row)))
 }
@@ -95,8 +93,7 @@ pub async fn create(
     .bind(&now)
     .execute(&pool.pool).await
     .map_err(|e| crate::server::server_error(e))?;
-    let sql = format!("SELECT {} FROM label_templates WHERE id=$1", COLS);
-    let row = sqlx::query(&sql).bind(&id).fetch_one(&pool.pool).await
+    let row = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates WHERE id=$1").bind(&id).fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(row_to_template(&row)))
 }
@@ -131,8 +128,7 @@ pub async fn update(
     .bind(&now).bind(&template.id)
     .execute(&pool.pool).await
     .map_err(|e| crate::server::server_error(e))?;
-    let sql = format!("SELECT {} FROM label_templates WHERE id=$1", COLS);
-    let row = sqlx::query(&sql).bind(&template.id).fetch_one(&pool.pool).await
+    let row = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates WHERE id=$1").bind(&template.id).fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(row_to_template(&row)))
 }

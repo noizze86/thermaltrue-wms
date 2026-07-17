@@ -83,7 +83,7 @@ impl DbPool {
         let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
             .fetch_one(pool).await?;
         if user_count == 0 {
-            let default_pass = std::env::var("DEFAULT_ADMIN_PASSWORD").unwrap_or_else(|_| "admin123".into());
+            let default_pass = std::env::var("DEFAULT_ADMIN_PASSWORD").unwrap_or_else(|_| { let s = uuid::Uuid::new_v4().to_string(); format!("Admin{}", &s[..8]) });
             let hash = bcrypt::hash(&default_pass, 12)?;
             let id = uuid::Uuid::new_v4().to_string();
             sqlx::query("INSERT INTO users (id, username, password_hash, full_name, role) VALUES ($1, $2, $3, $4, 'admin')")

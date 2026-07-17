@@ -287,13 +287,14 @@ export default function TransactionInPage() {
       if (el) {
         const win = window.open("", "_blank")
         if (win) {
+          const safeHTML = el.innerHTML.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '').replace(/on\w+="[^"]*"/gi, '')
           win.document.write(`<html><head><title>Receipt - ${tx.transaction_number}</title><style>
             body { font-family: monospace; padding: 20px; max-width: 300px; margin: 0 auto; }
             h2 { text-align: center; border-bottom: 1px dashed #000; padding-bottom: 8px; }
             table { width: 100%; }
             td { padding: 2px 4px; }
             .label { font-weight: bold; }
-          </style></head><body>${el.innerHTML}</body></html>`)
+          </style></head><body>${safeHTML}</body></html>`)
           win.document.close()
           win.print()
         }

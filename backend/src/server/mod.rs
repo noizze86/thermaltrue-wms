@@ -214,6 +214,8 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/receipt-pdf", get(handlers::reports::generate_receipt_pdf))
         .route("/api/reports/picking-list-pdf", get(handlers::reports::generate_picking_list_pdf))
         .route("/api/reports/do-pdf", get(handlers::reports::generate_do_pdf))
+        // Security headers middleware (CSP, X-Frame-Options, etc.)
+        .layer(middleware::from_fn(security_headers))
         // CORS — allow configured origin, or permissive for Tauri WebView
         .layer({
             let origin = std::env::var("CORS_ORIGIN").unwrap_or_default();
@@ -235,6 +237,23 @@ pub fn create_router(pool: DbPool) -> Router {
         .fallback(spa_handler)
 }
 
+/// Security headers middleware: adds CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy
+async fn security_headers<B>(request: Request<B>, next: Next<B>) -> Response<Body> {
+    let mut response = next.run(request).await;
+    let headers = response.headers_mut();
+    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().unwrap());
+    headers.insert("X-XSS-Protection", "0".parse().unwrap());
+    let csp = if cfg!(debug_assertions) {
+        "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://localhost:*;"
+    } else {
+        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';"
+    };
+    headers.insert("Content-Security-Policy", csp.parse().unwrap());
+    response
+}
+
 async fn spa_handler(uri: Uri) -> Response<Body> {
     let dist = frontend_dist_dir();
     let path = uri.path().trim_start_matches('/');
@@ -244,10 +263,13 @@ async fn spa_handler(uri: Uri) -> Response<Body> {
     if !path.is_empty() && file_path.is_file() {
         match async_fs::read(&file_path).await {
             Ok(content) => {
-                return Response::builder()
+                return match Response::builder()
                     .header("Content-Type", mime_type(&file_path))
                     .body(Body::from(content))
-                    .unwrap();
+                {
+                    Ok(res) => res,
+                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Response build error: {}", e)).into_response(),
+                };
             }
             Err(_) => { /* fall through to index.html */ }
         }
@@ -257,10 +279,13 @@ async fn spa_handler(uri: Uri) -> Response<Body> {
     let index_path = Path::new(&dist).join("index.html");
     match async_fs::read(&index_path).await {
         Ok(content) => {
-            Response::builder()
+            match Response::builder()
                 .header("Content-Type", "text/html")
                 .body(Body::from(content))
-                .unwrap()
+            {
+                Ok(res) => res,
+                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Response build error: {}", e)).into_response(),
+            }
         }
         Err(_e) => {
             (StatusCode::INTERNAL_SERVER_ERROR, "Frontend not found. Ensure dist/ exists.").into_response()
@@ -369,13 +394,30 @@ fn jwt_secret() -> String {
     if let Ok(secret) = std::env::var("JWT_SECRET") {
         return secret;
     }
-    // Auto-generate a random 64-char hex secret and cache in process env
-    use std::io::Write;
+    use std::io::{BufRead, Write, BufReader};
     let secret = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
     std::env::set_var("JWT_SECRET", &secret);
-    // Best-effort persist to .env for next startup
-    if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(".env") {
-        writeln!(f, "JWT_SECRET={}", secret).ok();
+    // Persist to .env (replace existing JWT_SECRET line or append)
+    let env_path = Path::new(".env");
+    let mut lines: Vec<String> = vec![];
+    let mut found = false;
+    if let Ok(f) = std::fs::File::open(env_path) {
+        for line in BufReader::new(f).lines().flatten() {
+            if line.starts_with("JWT_SECRET=") {
+                lines.push(format!("JWT_SECRET={}", secret));
+                found = true;
+            } else {
+                lines.push(line);
+            }
+        }
+    }
+    if !found {
+        lines.push(format!("JWT_SECRET={}", secret));
+    }
+    if let Ok(mut f) = std::fs::File::create(env_path) {
+        for line in &lines {
+            writeln!(f, "{}", line).ok();
+        }
     }
     secret
 }
