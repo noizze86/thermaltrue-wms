@@ -41,18 +41,18 @@ jobs:
       - name: Upload MSI
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/bundle/msi/*.msi
+          files: target/release/bundle/msi/*.msi
           tag_name: ${{ github.ref_name }}
       - name: Upload NSIS
         uses: softprops/action-gh-release@v2
         with:
-          files: src-tauri/target/release/bundle/nsis/*.exe
+          files: target/release/bundle/nsis/*.exe
           tag_name: ${{ github.ref_name }}
       - name: Generate update.json
         shell: pwsh
         run: |
           $VERSION = "${{ github.ref_name }}" -replace "^v", ""
-          $MSI_FILE = Get-ChildItem "src-tauri/target/release/bundle/msi/*.msi"
+          $MSI_FILE = Get-ChildItem "target/release/bundle/msi/*.msi"
           $SIG_FILE = "$($MSI_FILE.FullName).sig"
           $SIGNATURE = if (Test-Path $SIG_FILE) { Get-Content $SIG_FILE -Raw } else { "" }
           @"
