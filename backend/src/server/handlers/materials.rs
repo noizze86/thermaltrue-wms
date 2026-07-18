@@ -3,7 +3,7 @@ use axum::{Json, extract::{State, Query, Path}, Extension};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
-use crate::models::Material;
+use crate::models::{CreateMaterialInput, UpdateMaterialInput, TxType};
 use crate::validate;
 use sqlx::Row;
 use calamine::{Reader, DataType};
@@ -13,17 +13,33 @@ pub struct ListQuery { pub search: Option<String>, pub category_id: Option<Strin
 
 pub async fn list(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query(
+    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new(
         "SELECT id, sku, name, description, category_id, unit_id, supplier_id, warehouse_id, rack_id, \
          quantity, min_stock, max_stock, price, image, expiry_date, is_active, created_at, updated_at \
-         FROM materials WHERE 1=1 \
-         AND ($1 IS NULL OR name ILIKE '%' || $1 || '%' OR sku ILIKE '%' || $1 || '%') \
-         AND ($2 IS NULL OR category_id = $2) AND ($3 IS NULL OR warehouse_id = $3) ORDER BY name"
-    ).bind(&q.search).bind(&q.category_id).bind(&q.warehouse_id)
-     .fetch_all(&pool.pool).await
-     .map_err(|e| crate::server::server_error(e))?;
+         FROM materials WHERE 1=1"
+    );
+    if let Some(ref s) = q.search { if !s.is_empty() {
+        let pat = format!("%{}%", s);
+        builder.push(" AND (name ILIKE ").push_bind(pat.clone()).push(" OR sku ILIKE ").push_bind(pat).push(")");
+    }}
+    if let Some(ref c) = q.category_id { if !c.is_empty() {
+        builder.push(" AND category_id = ").push_bind(c);
+    }}
+    if let Some(ref w) = q.warehouse_id { if !w.is_empty() {
+        builder.push(" AND warehouse_id = ").push_bind(w);
+    }}
+    if !warehouse_ids.is_empty() {
+        builder.push(" AND warehouse_id = ANY(").push_bind(&warehouse_ids).push(")");
+    }
+    builder.push(" ORDER BY name");
+    let rows = builder.build().fetch_all(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
     let materials: Vec<serde_json::Value> = rows.iter().map(|row| {
         json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"),
             "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"),
@@ -71,18 +87,18 @@ pub async fn get_one(
 pub async fn create(
     Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
-    Json(material): Json<Material>,
+    Json(input): Json<CreateMaterialInput>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
-    validate::validate_sku(&material.sku).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
-    validate::validate_string(&material.name, "Material name", 255).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_sku(&input.sku).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_string(&input.name, "Material name", 255).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
     let id = uuid::Uuid::new_v4().to_string();
-    sqlx::query("INSERT INTO materials (id, sku, name, description, category_id, unit_id, supplier_id, warehouse_id, rack_id, quantity, min_stock, max_stock, price, image, expiry_date, is_active, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())")
-        .bind(&id).bind(&material.sku).bind(&material.name).bind(&material.description)
-        .bind(&material.category_id).bind(&material.unit_id).bind(&material.supplier_id)
-        .bind(&material.warehouse_id).bind(&material.rack_id).bind(material.quantity)
-        .bind(material.min_stock).bind(material.max_stock).bind(material.price)
-        .bind(&material.image).bind(&material.expiry_date).bind(material.is_active)
+    sqlx::query("INSERT INTO materials (id, sku, name, description, category_id, unit_id, supplier_id, warehouse_id, rack_id, quantity, min_stock, max_stock, price, image, expiry_date, is_active, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,$11,$12,$13,$14,$15,NOW(),NOW())")
+        .bind(&id).bind(&input.sku).bind(&input.name).bind(&input.description)
+        .bind(&input.category_id).bind(&input.unit_id).bind(&input.supplier_id)
+        .bind(&input.warehouse_id).bind(&input.rack_id)
+        .bind(input.min_stock).bind(input.max_stock).bind(input.price)
+        .bind(&input.image).bind(&input.expiry_date).bind(input.is_active)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     let row = sqlx::query("SELECT * FROM materials WHERE id=$1").bind(&id).fetch_one(&pool.pool).await
@@ -93,20 +109,19 @@ pub async fn create(
 pub async fn update(
     Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
-    Path(_id): Path<String>,
-    Json(material): Json<Material>,
+    Path(id): Path<String>,
+    Json(input): Json<UpdateMaterialInput>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
-    validate::validate_sku(&material.sku).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
-    validate::validate_string(&material.name, "Name", 200).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
-    validate::validate_quantity(material.quantity, "Quantity").map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
-    validate::validate_quantity(material.min_stock, "Min stock").map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
-    validate::validate_quantity(material.max_stock, "Max stock").map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
-    sqlx::query("UPDATE materials SET sku=$1, name=$2, description=$3, category_id=$4, unit_id=$5, supplier_id=$6, warehouse_id=$7, rack_id=$8, quantity=$9, min_stock=$10, max_stock=$11, price=$12, image=$13, expiry_date=$14, is_active=$15, updated_at=NOW() WHERE id=$16")
-        .bind(&material.sku).bind(&material.name).bind(&material.description).bind(&material.category_id)
-        .bind(&material.unit_id).bind(&material.supplier_id).bind(&material.warehouse_id).bind(&material.rack_id)
-        .bind(material.quantity).bind(material.min_stock).bind(material.max_stock).bind(material.price)
-        .bind(&material.image).bind(&material.expiry_date).bind(material.is_active).bind(&material.id)
+    validate::validate_sku(&input.sku).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_string(&input.name, "Name", 200).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_quantity(input.min_stock, "Min stock").map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    validate::validate_quantity(input.max_stock, "Max stock").map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
+    sqlx::query("UPDATE materials SET sku=$1, name=$2, description=$3, category_id=$4, unit_id=$5, supplier_id=$6, warehouse_id=$7, rack_id=$8, min_stock=$9, max_stock=$10, price=$11, image=$12, expiry_date=$13, is_active=$14, updated_at=NOW() WHERE id=$15")
+        .bind(&input.sku).bind(&input.name).bind(&input.description).bind(&input.category_id)
+        .bind(&input.unit_id).bind(&input.supplier_id).bind(&input.warehouse_id).bind(&input.rack_id)
+        .bind(input.min_stock).bind(input.max_stock).bind(input.price)
+        .bind(&input.image).bind(&input.expiry_date).bind(input.is_active).bind(&id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
@@ -381,7 +396,7 @@ pub async fn get_stock_timeline(
         let qty_before = running;
         let qty: f64 = row.get::<f64, _>(3);
         let typ: String = row.get::<String, _>(2);
-        running += if typ == "in" { qty } else if typ == "out" { -qty } else { 0.0 };
+        running += if typ.parse::<TxType>().ok() == Some(TxType::In) { qty } else if typ.parse::<TxType>().ok() == Some(TxType::Out) { -qty } else { 0.0 };
         if running < 0.0 { running = 0.0; }
         entries.push(json!({
             "id": row.get::<String,_>(0),

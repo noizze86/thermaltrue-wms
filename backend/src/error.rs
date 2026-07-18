@@ -34,12 +34,13 @@ impl Serialize for AppError {
         S: serde::Serializer,
     {
         let mut state = serializer.serialize_struct("AppError", 2)?;
-        let (typ, msg) = match self {
-            AppError::Db(m) => ("Db", m.as_str()),
+        let (typ, msg): (&str, &str) = match self {
+            // Sanitize: hide internal details from client, log full message via Display
+            AppError::Db(_) => ("Db", "A database error occurred"),
             AppError::Auth(m) => ("Auth", m.as_str()),
             AppError::NotFound(m) => ("NotFound", m.as_str()),
             AppError::Validation(m) => ("Validation", m.as_str()),
-            AppError::Internal(m) => ("Internal", m.as_str()),
+            AppError::Internal(_) => ("Internal", "An internal error occurred"),
             AppError::Lock(m) => ("Lock", m.as_str()),
         };
         state.serialize_field("type", typ)?;

@@ -1,6 +1,6 @@
 use tauri::State;
 use crate::db_pool::DbPool;
-use crate::models::{Warehouse, WarehouseStats, Zone, Rack, StockOpname, StockOpnameItem, Location, ThroughputMetric, PickerActivity, SlottingSuggestion, TransferOrder, CycleSchedule};
+use crate::models::{Warehouse, WarehouseStats, Zone, Rack, StockOpname, StockOpnameItem, Location, ThroughputMetric, PickerActivity, SlottingSuggestion, TransferOrder, CycleSchedule, TxStatus};
 use crate::error::AppError;
 use crate::validate;
 use sqlx::Row;
@@ -9,13 +9,22 @@ use sqlx::QueryBuilder;
 // --- Warehouses ---
 #[tauri::command]
 pub async fn get_warehouses(pool: State<'_, DbPool>, token: String, search: Option<String>) -> Result<Vec<Warehouse>, AppError> {
-    pool.verify_token(&token)?;
-    let rows = sqlx::query(
-        "SELECT id, name, code, location, is_active, capacity, layout_image, created_at FROM warehouses WHERE ($1 IS NULL OR name LIKE '%' || $1 || '%' OR code LIKE '%' || $1 || '%') ORDER BY name"
-    )
-    .bind(&search)
-    .fetch_all(&pool.pool)
-    .await?;
+    let user_id = pool.verify_token(&token)?;
+    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await?;
+    let mut builder = QueryBuilder::new(
+        "SELECT id, name, code, location, is_active, capacity, layout_image, created_at FROM warehouses WHERE 1=1"
+    );
+    if let Some(ref s) = search {
+        if !s.is_empty() {
+            let pat = format!("%{}%", s);
+            builder.push(" AND (name LIKE ").push_bind(pat.clone()).push(" OR code LIKE ").push_bind(pat).push(")");
+        }
+    }
+    if !warehouse_ids.is_empty() {
+        builder.push(" AND id = ANY(").push_bind(&warehouse_ids).push(")");
+    }
+    builder.push(" ORDER BY name");
+    let rows = builder.build().fetch_all(&pool.pool).await?;
     let list = rows.iter().map(|row| {
         Warehouse {
             id: row.get(0), name: row.get(1), code: row.get(2), location: row.get(3),
@@ -27,16 +36,20 @@ pub async fn get_warehouses(pool: State<'_, DbPool>, token: String, search: Opti
 
 #[tauri::command]
 pub async fn get_warehouse_stats(pool: State<'_, DbPool>, token: String) -> Result<Vec<WarehouseStats>, AppError> {
-    pool.verify_token(&token)?;
-    let rows = sqlx::query(
+    let user_id = pool.verify_token(&token)?;
+    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await?;
+    let mut builder = QueryBuilder::new(
         "SELECT w.id, w.name, w.code, w.location, w.is_active, w.capacity, w.layout_image, w.created_at,
             (SELECT COUNT(*) FROM racks WHERE warehouse_id=w.id) as rack_count,
             (SELECT COUNT(*) FROM materials WHERE warehouse_id=w.id AND is_active=true) as material_count,
             COALESCE((SELECT SUM(m.quantity) FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true), 0) as used_capacity
-         FROM warehouses w ORDER BY w.name"
-    )
-    .fetch_all(&pool.pool)
-    .await?;
+         FROM warehouses w WHERE 1=1"
+    );
+    if !warehouse_ids.is_empty() {
+        builder.push(" AND w.id = ANY(").push_bind(&warehouse_ids).push(")");
+    }
+    builder.push(" ORDER BY w.name");
+    let rows = builder.build().fetch_all(&pool.pool).await?;
     let list = rows.iter().map(|row| {
         WarehouseStats {
             id: row.get(0), name: row.get(1), code: row.get(2), location: row.get(3),
@@ -357,7 +370,7 @@ pub async fn update_stock_opname_status(pool: State<'_, DbPool>, token: String, 
     sqlx::query("UPDATE stock_opname SET status=$1, updated_at=$2 WHERE id=$3")
         .bind(&status).bind(&now).bind(&id)
         .execute(&mut *tx).await?;
-    if status == "completed" {
+    if status.parse::<TxStatus>().ok() == Some(TxStatus::Completed) {
         let threshold_str: String = sqlx::query_scalar("SELECT COALESCE((SELECT value FROM app_config WHERE key='auto_adjust_threshold'),'0')")
             .fetch_one(&mut *tx).await
             .unwrap_or("0".into());

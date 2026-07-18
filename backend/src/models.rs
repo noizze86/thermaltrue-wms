@@ -1,5 +1,146 @@
 use serde::{Deserialize, Serialize};
 
+// ---------------------------------------------------------------------------
+// Type-safe enums (replacing String-based enum fields)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TxType {
+    In,
+    Out,
+    Transfer,
+    Opname,
+}
+
+impl TxType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TxType::In => "in",
+            TxType::Out => "out",
+            TxType::Transfer => "transfer",
+            TxType::Opname => "opname",
+        }
+    }
+}
+
+impl std::fmt::Display for TxType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for TxType {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "in" => Ok(TxType::In),
+            "out" => Ok(TxType::Out),
+            "transfer" => Ok(TxType::Transfer),
+            "opname" => Ok(TxType::Opname),
+            _ => Err(format!("Invalid TxType: {}", s)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TxStatus {
+    Pending,
+    Approved,
+    Rejected,
+    Reversed,
+    Draft,
+    Completed,
+}
+
+impl TxStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TxStatus::Pending => "pending",
+            TxStatus::Approved => "approved",
+            TxStatus::Rejected => "rejected",
+            TxStatus::Reversed => "reversed",
+            TxStatus::Draft => "draft",
+            TxStatus::Completed => "completed",
+        }
+    }
+}
+
+impl std::fmt::Display for TxStatus {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl std::str::FromStr for TxStatus {
+    type Err = String;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "pending" => Ok(TxStatus::Pending),
+            "approved" => Ok(TxStatus::Approved),
+            "rejected" => Ok(TxStatus::Rejected),
+            "reversed" => Ok(TxStatus::Reversed),
+            "draft" => Ok(TxStatus::Draft),
+            "completed" => Ok(TxStatus::Completed),
+            _ => Err(format!("Invalid TxStatus: {}", s)),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum UserRole {
+    Admin,
+    Operator,
+    Viewer,
+}
+
+impl std::fmt::Display for UserRole {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UserRole::Admin => write!(f, "admin"),
+            UserRole::Operator => write!(f, "operator"),
+            UserRole::Viewer => write!(f, "viewer"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TransferStatus {
+    Draft,
+    Completed,
+    Received,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum QualityStatus {
+    Passed,
+    Failed,
+    Pending,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LoginStatus {
+    Success,
+    Failed,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum AbcClass {
+    A,
+    B,
+    C,
+}
+
+// ---------------------------------------------------------------------------
+// Models
+// ---------------------------------------------------------------------------
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct User {
     pub id: String,
@@ -156,6 +297,45 @@ pub struct Rack {
     pub max_capacity: f64,
     pub location_id: Option<String>,
     pub created_at: String,
+}
+
+/// Client-controlled fields for creating a material (no id, quantity, or timestamps)
+#[derive(Debug, Deserialize, Clone)]
+pub struct CreateMaterialInput {
+    pub sku: String,
+    pub name: String,
+    pub description: String,
+    pub category_id: Option<String>,
+    pub unit_id: Option<String>,
+    pub supplier_id: Option<String>,
+    pub warehouse_id: Option<String>,
+    pub rack_id: Option<String>,
+    pub min_stock: f64,
+    pub max_stock: f64,
+    pub price: f64,
+    pub image: String,
+    pub expiry_date: Option<String>,
+    pub is_active: bool,
+}
+
+/// Client-controlled fields for updating a material (no quantity or timestamps)
+#[derive(Debug, Deserialize, Clone)]
+pub struct UpdateMaterialInput {
+    pub id: String,
+    pub sku: String,
+    pub name: String,
+    pub description: String,
+    pub category_id: Option<String>,
+    pub unit_id: Option<String>,
+    pub supplier_id: Option<String>,
+    pub warehouse_id: Option<String>,
+    pub rack_id: Option<String>,
+    pub min_stock: f64,
+    pub max_stock: f64,
+    pub price: f64,
+    pub image: String,
+    pub expiry_date: Option<String>,
+    pub is_active: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

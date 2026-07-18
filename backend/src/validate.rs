@@ -48,6 +48,23 @@ pub fn validate_password(value: &str) -> Result<(), AppError> {
     Ok(())
 }
 
+pub async fn get_user_warehouses(pool: &PgPool, user_id: &str) -> Result<Vec<String>, AppError> {
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id=$1")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    if role.as_deref() == Some("admin") {
+        return Ok(Vec::new()); // empty = all warehouses
+    }
+    let rows: Vec<(String,)> = sqlx::query_as(
+        "SELECT warehouse_id FROM user_warehouses WHERE user_id=$1"
+    )
+    .bind(user_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows.into_iter().map(|r| r.0).collect())
+}
+
 pub async fn check_user_permission(pool: &PgPool, user_id: &str, permission: &str) -> Result<bool, AppError> {
     let role_name: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id=$1")
         .bind(user_id)

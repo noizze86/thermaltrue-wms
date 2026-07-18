@@ -1,8 +1,7 @@
 use std::sync::Arc;
 use std::path::Path;
 use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::Request, response::{IntoResponse, Response}, body::Body, http::{Method, StatusCode, Uri, header::{AUTHORIZATION, COOKIE}}};
-use serde::{Deserialize, Serialize};
-use jsonwebtoken::{encode, decode, Header, Validation, EncodingKey, DecodingKey};
+
 use tower_http::cors::CorsLayer;
 use tokio::fs as async_fs;
 use crate::db_pool::DbPool;
@@ -21,24 +20,24 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/users", get(handlers::users::list))
         .route("/api/users/me", get(handlers::users::get_me))
         .route("/api/users", post(handlers::users::create))
-        .route("/api/users/{id}", put(handlers::users::update))
-        .route("/api/users/{id}", delete(handlers::users::delete))
-        .route("/api/users/{id}/change-password", post(handlers::users::change_password))
+        .route("/api/users/:id", put(handlers::users::update))
+        .route("/api/users/:id", delete(handlers::users::delete))
+        .route("/api/users/:id/change-password", post(handlers::users::change_password))
         .route("/api/users/me/change-password", post(handlers::users::change_my_password))
-        .route("/api/users/{id}/photo", put(handlers::users::update_photo))
-        .route("/api/users/{id}/activity", get(handlers::users::get_activity))
-        .route("/api/users/{id}/log-activity", post(handlers::users::log_activity))
+        .route("/api/users/:id/photo", put(handlers::users::update_photo))
+        .route("/api/users/:id/activity", get(handlers::users::get_activity))
+        .route("/api/users/:id/log-activity", post(handlers::users::log_activity))
         // Stock Opname
         .route("/api/stock-opnames", get(handlers::stock_opname::list))
         .route("/api/stock-opnames", post(handlers::stock_opname::create))
-        .route("/api/stock-opnames/{id}/status", put(handlers::stock_opname::update_status))
-        .route("/api/stock-opnames/{id}/items", get(handlers::stock_opname::get_items))
+        .route("/api/stock-opnames/:id/status", put(handlers::stock_opname::update_status))
+        .route("/api/stock-opnames/:id/items", get(handlers::stock_opname::get_items))
         .route("/api/stock-opnames/items", post(handlers::stock_opname::save_item))
         .route("/api/stock-opname-config", get(handlers::stock_opname::get_config))
         .route("/api/stock-opname-config", put(handlers::stock_opname::set_config))
         .route("/api/cycle-schedules", get(handlers::stock_opname::get_cycle_schedules))
         .route("/api/cycle-schedules", post(handlers::stock_opname::create_cycle_schedule))
-        .route("/api/cycle-schedules/{id}", delete(handlers::stock_opname::delete_cycle_schedule))
+        .route("/api/cycle-schedules/:id", delete(handlers::stock_opname::delete_cycle_schedule))
         .route("/api/cycle-opname/generate", post(handlers::stock_opname::auto_generate))
         // Transfers
         .route("/api/transfers/material", post(handlers::transfers::transfer_material))
@@ -46,8 +45,8 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/transfers/rack", post(handlers::transfers::batch_transfer_rack))
         .route("/api/transfer-orders", get(handlers::transfers::get_transfer_orders))
         .route("/api/transfer-orders", post(handlers::transfers::create_transfer_order))
-        .route("/api/transfer-orders/{id}/status", put(handlers::transfers::update_transfer_order_status))
-        .route("/api/transfer-orders/{id}/items", get(handlers::transfers::get_transfer_items))
+        .route("/api/transfer-orders/:id/status", put(handlers::transfers::update_transfer_order_status))
+        .route("/api/transfer-orders/:id/items", get(handlers::transfers::get_transfer_items))
         // Dashboard & Metrics
         .route("/api/dashboard/kpi", get(handlers::dashboard::kpi))
         .route("/api/dashboard/analysis", get(handlers::dashboard::analysis_all))
@@ -61,7 +60,7 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/tx-date-comparison", get(handlers::dashboard::tx_date_comparison))
         .route("/api/reports/category-value-summary", get(handlers::dashboard::category_value_summary))
         .route("/api/stock-valuation", get(handlers::dashboard::stock_valuation))
-        .route("/api/reports/opname-variance/{id}", get(handlers::dashboard::opname_variance))
+        .route("/api/reports/opname-variance/:id", get(handlers::dashboard::opname_variance))
         .route("/api/dashboard/demand-forecast", get(handlers::dashboard::demand_forecast))
         .route("/api/dashboard/reorder-suggestions", get(handlers::dashboard::reorder_suggestions))
         // Throughput & Picker
@@ -71,11 +70,11 @@ pub fn create_router(pool: DbPool) -> Router {
         // Materials
         .route("/api/materials", get(handlers::materials::list))
         .route("/api/materials/low-stock", get(handlers::materials::low_stock))
-        .route("/api/materials/expiring/{days}", get(handlers::materials::expiring))
-        .route("/api/materials/{id}", get(handlers::materials::get_one))
+        .route("/api/materials/expiring/:days", get(handlers::materials::expiring))
+        .route("/api/materials/:id", get(handlers::materials::get_one))
         .route("/api/materials", post(handlers::materials::create))
-        .route("/api/materials/{id}", put(handlers::materials::update))
-        .route("/api/materials/{id}", delete(handlers::materials::delete))
+        .route("/api/materials/:id", put(handlers::materials::update))
+        .route("/api/materials/:id", delete(handlers::materials::delete))
         .route("/api/materials/bulk-delete", post(handlers::materials::bulk_delete))
         .route("/api/materials/bulk-update", put(handlers::materials::bulk_update))
         .route("/api/materials/import-csv", post(handlers::materials::import_csv))
@@ -83,82 +82,82 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/materials/preview-import-xlsx", post(handlers::materials::preview_import_xlsx))
         .route("/api/materials/export-stock-xlsx", get(handlers::materials::export_stock_xlsx))
         .route("/api/materials/generate-zpl", post(handlers::materials::generate_zpl))
-        .route("/api/materials/stock-timeline/{material_id}", get(handlers::materials::get_stock_timeline))
-        .route("/api/materials/{material_id}/batches", get(handlers::materials::get_material_batches))
-        .route("/api/materials/batches/{id}", delete(handlers::materials::delete_material_batch))
+        .route("/api/materials/stock-timeline/:material_id", get(handlers::materials::get_stock_timeline))
+        .route("/api/materials/:material_id/batches", get(handlers::materials::get_material_batches))
+        .route("/api/materials/batches/:id", delete(handlers::materials::delete_material_batch))
         .route("/api/materials/batches", post(handlers::materials::create_material_batch))
-        .route("/api/materials/{material_id}/images", get(handlers::materials::get_material_images))
+        .route("/api/materials/:material_id/images", get(handlers::materials::get_material_images))
         .route("/api/materials/images/reorder", put(handlers::materials::reorder_material_images))
         .route("/api/materials/images", post(handlers::materials::create_material_image))
-        .route("/api/materials/images/{id}", delete(handlers::materials::delete_material_image))
+        .route("/api/materials/images/:id", delete(handlers::materials::delete_material_image))
         // Categories
         .route("/api/categories", get(handlers::categories::list))
         .route("/api/categories/tree", get(handlers::categories::tree))
         .route("/api/categories", post(handlers::categories::create))
         .route("/api/categories", put(handlers::categories::update))
-        .route("/api/categories/{id}", delete(handlers::categories::delete))
+        .route("/api/categories/:id", delete(handlers::categories::delete))
         // Units
         .route("/api/units", get(handlers::units::list))
         .route("/api/units", post(handlers::units::create))
         .route("/api/units", put(handlers::units::update))
-        .route("/api/units/{id}", delete(handlers::units::delete))
+        .route("/api/units/:id", delete(handlers::units::delete))
         .route("/api/units/conversions", get(handlers::units::list_conversions))
         .route("/api/units/conversions", post(handlers::units::create_conversion))
         // Suppliers
         .route("/api/suppliers", get(handlers::suppliers::list))
         .route("/api/suppliers", post(handlers::suppliers::create))
         .route("/api/suppliers", put(handlers::suppliers::update))
-        .route("/api/suppliers/{id}", delete(handlers::suppliers::delete))
-        .route("/api/suppliers/{id}/ratings", get(handlers::suppliers::list_ratings))
+        .route("/api/suppliers/:id", delete(handlers::suppliers::delete))
+        .route("/api/suppliers/:id/ratings", get(handlers::suppliers::list_ratings))
         .route("/api/suppliers/ratings", post(handlers::suppliers::create_rating))
-        .route("/api/suppliers/{id}/prices", get(handlers::suppliers::list_prices))
+        .route("/api/suppliers/:id/prices", get(handlers::suppliers::list_prices))
         .route("/api/suppliers/prices", post(handlers::suppliers::create_price))
         // Warehouses
         .route("/api/warehouses", get(handlers::warehouses::list))
         .route("/api/warehouses/stats", get(handlers::warehouses::stats))
         .route("/api/warehouses", post(handlers::warehouses::create))
-        .route("/api/warehouses/{id}", put(handlers::warehouses::update))
-        .route("/api/warehouses/{id}", delete(handlers::warehouses::delete))
+        .route("/api/warehouses/:id", put(handlers::warehouses::update))
+        .route("/api/warehouses/:id", delete(handlers::warehouses::delete))
         .route("/api/warehouses/zones", get(handlers::warehouses::list_zones))
         .route("/api/warehouses/zones", post(handlers::warehouses::create_zone))
         .route("/api/warehouses/zones", put(handlers::warehouses::update_zone))
-        .route("/api/warehouses/zones/{id}", delete(handlers::warehouses::delete_zone))
+        .route("/api/warehouses/zones/:id", delete(handlers::warehouses::delete_zone))
         .route("/api/warehouses/locations", get(handlers::warehouses::list_locations))
         .route("/api/warehouses/locations", post(handlers::warehouses::create_location))
-        .route("/api/warehouses/locations/{id}", delete(handlers::warehouses::delete_location))
+        .route("/api/warehouses/locations/:id", delete(handlers::warehouses::delete_location))
         // Racks
         .route("/api/racks", get(handlers::racks::list))
         .route("/api/racks", post(handlers::racks::create))
-        .route("/api/racks/{id}", put(handlers::racks::update))
-        .route("/api/racks/{id}", delete(handlers::racks::delete))
+        .route("/api/racks/:id", put(handlers::racks::update))
+        .route("/api/racks/:id", delete(handlers::racks::delete))
         .route("/api/racks/occupancy", get(handlers::racks::occupancy))
         .route("/api/racks/occupancy-details", get(handlers::racks::occupancy_details))
         .route("/api/racks/putaway-suggestion", get(handlers::racks::putaway_suggestion))
-        .route("/api/racks/{rackId}/utilization", get(handlers::racks::utilization_history))
+        .route("/api/racks/:rackId/utilization", get(handlers::racks::utilization_history))
         // Transactions
         .route("/api/transactions", get(handlers::transactions::list))
         .route("/api/transactions/pending", get(handlers::transactions::pending))
         .route("/api/transactions/generate-number", get(handlers::transactions::generate_tx_number))
         .route("/api/transactions", post(handlers::transactions::create))
-        .route("/api/transactions/{id}", get(handlers::transactions::get_one))
-        .route("/api/transactions/{id}/approve", post(handlers::transactions::approve))
-        .route("/api/transactions/{id}/reject", post(handlers::transactions::reject))
-        .route("/api/transactions/{id}/reverse", post(handlers::transactions::reverse))
+        .route("/api/transactions/:id", get(handlers::transactions::get_one))
+        .route("/api/transactions/:id/approve", post(handlers::transactions::approve))
+        .route("/api/transactions/:id/reject", post(handlers::transactions::reject))
+        .route("/api/transactions/:id/reverse", post(handlers::transactions::reverse))
         .route("/api/transactions/reverse-bulk", post(handlers::transactions::reverse_bulk))
-        .route("/api/transactions/{txId}/items", get(handlers::transactions::get_items))
-        .route("/api/transactions/{txId}/attachments", get(handlers::transactions::get_transaction_attachments))
+        .route("/api/transactions/:txId/items", get(handlers::transactions::get_items))
+        .route("/api/transactions/:txId/attachments", get(handlers::transactions::get_transaction_attachments))
         .route("/api/transactions/attachments", post(handlers::transactions::create_transaction_attachment))
-        .route("/api/transactions/attachments/{id}", delete(handlers::transactions::delete_transaction_attachment))
+        .route("/api/transactions/attachments/:id", delete(handlers::transactions::delete_transaction_attachment))
         // Purchase Orders
         .route("/api/purchase-orders", get(handlers::transactions::get_purchase_orders))
         .route("/api/purchase-orders", post(handlers::transactions::create_purchase_order))
-        .route("/api/purchase-orders/{id}/status", put(handlers::transactions::update_purchase_order_status))
-        .route("/api/purchase-orders/{poId}/items", get(handlers::transactions::get_po_items))
+        .route("/api/purchase-orders/:id/status", put(handlers::transactions::update_purchase_order_status))
+        .route("/api/purchase-orders/:poId/items", get(handlers::transactions::get_po_items))
         // Sales Orders
         .route("/api/sales-orders", get(handlers::transactions::get_sales_orders))
         .route("/api/sales-orders", post(handlers::transactions::create_sales_order))
-        .route("/api/sales-orders/{id}/status", put(handlers::transactions::update_sales_order_status))
-        .route("/api/sales-orders/{soId}/items", get(handlers::transactions::get_so_items))
+        .route("/api/sales-orders/:id/status", put(handlers::transactions::update_sales_order_status))
+        .route("/api/sales-orders/:soId/items", get(handlers::transactions::get_so_items))
         // Quality Inspections
         .route("/api/quality-inspections", get(handlers::transactions::get_quality_inspections))
         .route("/api/quality-inspections", post(handlers::transactions::create_quality_inspection))
@@ -167,7 +166,7 @@ pub fn create_router(pool: DbPool) -> Router {
         // Advanced
         .route("/api/budgets", get(handlers::advanced::get_budgets))
         .route("/api/budgets", post(handlers::advanced::save_budget))
-        .route("/api/budgets/{id}", delete(handlers::advanced::delete_budget))
+        .route("/api/budgets/:id", delete(handlers::advanced::delete_budget))
         .route("/api/abc-weights", get(handlers::advanced::get_abc_weights))
         .route("/api/abc-weights", post(handlers::advanced::set_abc_weight))
         .route("/api/forecast-cache", get(handlers::advanced::get_forecast_cache))
@@ -175,14 +174,14 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/forecast-cache", delete(handlers::advanced::delete_forecast_cache))
         .route("/api/login-history", get(handlers::advanced::get_login_history))
         .route("/api/login-history", delete(handlers::advanced::clear_login_history))
-        .route("/api/login-history/user/{userId}", get(handlers::advanced::get_user_login_history))
+        .route("/api/login-history/user/:userId", get(handlers::advanced::get_user_login_history))
         .route("/api/qr-zip-generate", post(handlers::advanced::generate_qr_zip))
         // Label Templates
         .route("/api/label-templates", get(handlers::label_templates::list))
-        .route("/api/label-templates/{id}", get(handlers::label_templates::get_one))
+        .route("/api/label-templates/:id", get(handlers::label_templates::get_one))
         .route("/api/label-templates", post(handlers::label_templates::create))
         .route("/api/label-templates", put(handlers::label_templates::update))
-        .route("/api/label-templates/{id}", delete(handlers::label_templates::delete))
+        .route("/api/label-templates/:id", delete(handlers::label_templates::delete))
         // Settings
         .route("/api/company-profile", get(handlers::settings_handler::get_company_profile))
         .route("/api/company-profile", post(handlers::settings_handler::save_company_profile))
@@ -191,7 +190,7 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/roles", get(handlers::settings_handler::list_roles))
         .route("/api/roles", post(handlers::settings_handler::create_role))
         .route("/api/roles", put(handlers::settings_handler::update_role))
-        .route("/api/roles/{id}", delete(handlers::settings_handler::delete_role))
+        .route("/api/roles/:id", delete(handlers::settings_handler::delete_role))
         .route("/api/app-config", get(handlers::settings_handler::get_app_config))
         .route("/api/app-config", post(handlers::settings_handler::set_app_config))
         .route("/api/inventory-settings", get(handlers::settings_handler::get_inventory_settings))
@@ -207,8 +206,8 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/opname/export-xlsx", get(handlers::reports::export_opname_xlsx))
         .route("/api/reports/schedules", get(handlers::reports::get_schedules))
         .route("/api/reports/schedules", post(handlers::reports::save_schedule))
-        .route("/api/reports/schedules/{id}", delete(handlers::reports::delete_schedule))
-        .route("/api/reports/schedules/{id}/run", post(handlers::reports::run_schedule))
+        .route("/api/reports/schedules/:id", delete(handlers::reports::delete_schedule))
+        .route("/api/reports/schedules/:id/run", post(handlers::reports::run_schedule))
         .route("/api/reports/multi-warehouse", get(handlers::reports::multi_warehouse_comparison))
         .route("/api/reports/pivot", post(handlers::reports::pivot_report))
         .route("/api/reports/receipt-pdf", get(handlers::reports::generate_receipt_pdf))
@@ -222,12 +221,20 @@ pub fn create_router(pool: DbPool) -> Router {
             if origin.is_empty() {
                 CorsLayer::permissive()
             } else {
-                CorsLayer::new()
-                    .allow_origin(origin.as_str().parse::<axum::http::HeaderValue>().unwrap())
-                    .allow_methods([axum::http::Method::GET, axum::http::Method::POST,
-                        axum::http::Method::PUT, axum::http::Method::DELETE, axum::http::Method::OPTIONS])
-                    .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::COOKIE,
-                        axum::http::header::AUTHORIZATION])
+                match origin.as_str().parse::<axum::http::HeaderValue>() {
+                    Ok(parsed_origin) => {
+                        CorsLayer::new()
+                            .allow_origin(parsed_origin)
+                            .allow_methods([axum::http::Method::GET, axum::http::Method::POST,
+                                axum::http::Method::PUT, axum::http::Method::DELETE, axum::http::Method::OPTIONS])
+                            .allow_headers([axum::http::header::CONTENT_TYPE, axum::http::header::COOKIE,
+                                axum::http::header::AUTHORIZATION])
+                    }
+                    Err(e) => {
+                        log::warn!("Invalid CORS_ORIGIN value '{}': {}. Falling back to permissive CORS.", origin, e);
+                        CorsLayer::permissive()
+                    }
+                }
             }
         })
         // Middleware (skip auth for health, login & non-API paths)
@@ -238,19 +245,19 @@ pub fn create_router(pool: DbPool) -> Router {
 }
 
 /// Security headers middleware: adds CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy
-async fn security_headers<B>(request: Request<B>, next: Next<B>) -> Response<Body> {
+async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
-    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
-    headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().unwrap());
-    headers.insert("X-XSS-Protection", "0".parse().unwrap());
+    headers.insert("X-Content-Type-Options", "nosniff".parse().expect("hardcoded 'nosniff' is valid"));
+    headers.insert("X-Frame-Options", "DENY".parse().expect("hardcoded 'DENY' is valid"));
+    headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().expect("hardcoded referrer-policy is valid"));
+    headers.insert("X-XSS-Protection", "0".parse().expect("hardcoded '0' is valid"));
     let csp = if cfg!(debug_assertions) {
         "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://localhost:*;"
     } else {
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';"
     };
-    headers.insert("Content-Security-Policy", csp.parse().unwrap());
+    headers.insert("Content-Security-Policy", csp.parse().expect("hardcoded CSP is valid"));
     response
 }
 
@@ -384,57 +391,8 @@ async fn auth_middleware(
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Claims {
-    pub user_id: String,
-    pub exp: usize,
-}
-
-fn jwt_secret() -> String {
-    if let Ok(secret) = std::env::var("JWT_SECRET") {
-        return secret;
-    }
-    use std::io::{BufRead, Write, BufReader};
-    let secret = format!("{}{}", uuid::Uuid::new_v4(), uuid::Uuid::new_v4());
-    std::env::set_var("JWT_SECRET", &secret);
-    // Persist to .env (replace existing JWT_SECRET line or append)
-    let env_path = Path::new(".env");
-    let mut lines: Vec<String> = vec![];
-    let mut found = false;
-    if let Ok(f) = std::fs::File::open(env_path) {
-        for line in BufReader::new(f).lines().flatten() {
-            if line.starts_with("JWT_SECRET=") {
-                lines.push(format!("JWT_SECRET={}", secret));
-                found = true;
-            } else {
-                lines.push(line);
-            }
-        }
-    }
-    if !found {
-        lines.push(format!("JWT_SECRET={}", secret));
-    }
-    if let Ok(mut f) = std::fs::File::create(env_path) {
-        for line in &lines {
-            writeln!(f, "{}", line).ok();
-        }
-    }
-    secret
-}
-
-pub fn create_jwt(user_id: &str) -> Result<String, jsonwebtoken::errors::Error> {
-    let exp = chrono::Utc::now()
-        .checked_add_signed(chrono::Duration::hours(24))
-        .unwrap()
-        .timestamp() as usize;
-    let claims = Claims { user_id: user_id.to_string(), exp };
-    encode(&Header::default(), &claims, &EncodingKey::from_secret(jwt_secret().as_bytes()))
-}
-
-pub fn verify_jwt(token: &str) -> Result<Claims, jsonwebtoken::errors::Error> {
-    let data = decode::<Claims>(token, &DecodingKey::from_secret(jwt_secret().as_bytes()), &Validation::default())?;
-    Ok(data.claims)
-}
+// Re-export shared JWT functions from the jwt module
+pub use crate::jwt::{Claims, create_jwt, verify_jwt};
 
 pub fn server_error(e: impl std::fmt::Display) -> (StatusCode, Json<serde_json::Value>) {
     log::error!("Internal server error: {}", e);

@@ -59,7 +59,8 @@ pub async fn get_transactions(
     date_end: Option<String>,
     limit: Option<i64>,
 ) -> Result<Vec<Transaction>, AppError> {
-    pool.verify_token(&token)?;
+    let user_id = pool.verify_token(&token)?;
+    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await?;
     use sqlx::QueryBuilder;
 
     let search_pat = search.as_ref().filter(|s| !s.is_empty()).map(|s| format!("%{}%", s));
@@ -97,6 +98,9 @@ pub async fn get_transactions(
     }
     if let Some(ref dv) = de_val {
         builder.push(" AND created_at <= ").push_bind(dv.clone());
+    }
+    if !warehouse_ids.is_empty() {
+        builder.push(" AND warehouse_id = ANY(").push_bind(&warehouse_ids).push(")");
     }
     builder.push(" ORDER BY created_at DESC");
     let limit_val = limit.unwrap_or(200);
@@ -141,8 +145,8 @@ pub async fn create_transaction(
     let mut db_tx = pool.pool.begin().await?;
     let id = gen_id();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let prefix = match tx.tx_type.as_str() {
-        "in" => "IN", "out" => "OUT", "transfer" => "TRF", "opname" => "OPN", _ => "TXN"
+    let prefix = match tx.tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+        TxType::In => "IN", TxType::Out => "OUT", TxType::Transfer => "TRF", TxType::Opname => "OPN",
     };
     let count: i64 = sqlx::query_scalar::<_, i64>(
         "SELECT COUNT(*)+1 FROM transactions WHERE type=$1"
@@ -152,7 +156,7 @@ pub async fn create_transaction(
     .await
     .unwrap_or(1);
     let txn_number = format!("{}-{:04}", prefix, count);
-    let status = if tx.status.is_empty() { "approved".to_string() } else { tx.status.clone() };
+    let status = if tx.status.is_empty() { "pending".to_string() } else { tx.status.clone() };
 
     let (mat_id, qty, price) = if items.is_empty() {
         (tx.material_id.clone(), tx.quantity, tx.price)
@@ -203,57 +207,63 @@ pub async fn create_transaction(
         .await?;
     }
 
-    if status == "approved" && tx.tx_type == "out" {
+    if status.parse::<TxStatus>().ok() == Some(TxStatus::Approved) {
         if items.is_empty() {
-            let stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1")
-                .bind(&tx.material_id)
-                .fetch_optional(&pool.pool).await?
-                .ok_or_else(|| AppError::NotFound("Material not found".into()))?;
-            if stock < tx.quantity {
-                return Err(AppError::Validation(format!("Insufficient stock: available {:.2}, requested {:.2}", stock, tx.quantity)));
-            }
-        } else {
-            for item in &items {
-                let stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1")
-                    .bind(&item.material_id)
-                    .fetch_optional(&pool.pool).await?
-                    .ok_or_else(|| AppError::NotFound("Material not found".into()))?;
-                if stock < item.quantity {
-                    return Err(AppError::Validation(format!("Insufficient stock: available {:.2}, requested {:.2}", stock, item.quantity)));
-                }
-            }
-        }
-    }
-
-    if status == "approved" {
-        if items.is_empty() {
-            if tx.tx_type == "in" {
-                sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                    .bind(tx.quantity)
-                    .bind(&tx.material_id)
-                    .execute(&mut *db_tx).await.ok();
-            } else if tx.tx_type == "out" {
-                sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                    .bind(tx.quantity)
-                    .bind(&tx.material_id)
-                    .execute(&mut *db_tx).await.ok();
-            }
-        } else {
-            for item in &items {
-                if tx.tx_type == "in" {
+            match tx.tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                TxType::In => {
                     sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                        .bind(item.quantity)
-                        .bind(&item.material_id)
-                        .execute(&mut *db_tx).await.ok();
-                } else if tx.tx_type == "out" {
-                    sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                        .bind(item.quantity)
-                        .bind(&item.material_id)
-                        .execute(&mut *db_tx).await.ok();
+                        .bind(tx.quantity)
+                        .bind(&tx.material_id)
+                        .execute(&mut *db_tx)
+                        .await?;
+                }
+                TxType::Out => {
+                    let result = sqlx::query("UPDATE materials SET quantity = quantity - $1 WHERE id=$2 AND quantity >= $1")
+                        .bind(tx.quantity)
+                        .bind(&tx.material_id)
+                        .execute(&mut *db_tx)
+                        .await?;
+                    if result.rows_affected() == 0 {
+                        let stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1 FOR UPDATE")
+                            .bind(&tx.material_id)
+                            .fetch_optional(&mut *db_tx)
+                            .await?
+                            .ok_or_else(|| AppError::NotFound("Material not found".into()))?;
+                        return Err(AppError::Validation(format!("Insufficient stock: available {:.2}, requested {:.2}", stock, tx.quantity)));
+                    }
+                }
+                _ => {}
+            }
+        } else {
+            for item in &items {
+                match tx.tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                    TxType::In => {
+                        sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                            .bind(item.quantity)
+                            .bind(&item.material_id)
+                            .execute(&mut *db_tx)
+                            .await?;
+                    }
+                    TxType::Out => {
+                        let result = sqlx::query("UPDATE materials SET quantity = quantity - $1 WHERE id=$2 AND quantity >= $1")
+                            .bind(item.quantity)
+                            .bind(&item.material_id)
+                            .execute(&mut *db_tx)
+                            .await?;
+                        if result.rows_affected() == 0 {
+                            let stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1 FOR UPDATE")
+                                .bind(&item.material_id)
+                                .fetch_optional(&mut *db_tx)
+                                .await?
+                                .ok_or_else(|| AppError::NotFound("Material not found".into()))?;
+                            return Err(AppError::Validation(format!("Insufficient stock: available {:.2}, requested {:.2}", stock, item.quantity)));
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
-        if tx.tx_type == "in" && !tx.po_number.is_empty() {
+        if tx.tx_type.parse::<TxType>().ok() == Some(TxType::In) && !tx.po_number.is_empty() {
             if items.is_empty() {
                 if let Some(po_row) = sqlx::query("SELECT pi.received_qty, pi.quantity FROM po_items pi JOIN purchase_orders po ON pi.po_id=po.id WHERE po.po_number=$1 AND pi.material_id=$2")
                     .bind(&tx.po_number)
@@ -298,7 +308,7 @@ pub async fn create_transaction(
                 }
             }
         }
-        if tx.tx_type == "out" && !tx.reference.is_empty() && tx.reference.starts_with("SO-") {
+        if tx.tx_type.parse::<TxType>().ok() == Some(TxType::Out) && !tx.reference.is_empty() && tx.reference.starts_with("SO-") {
             if items.is_empty() {
                 let _ = sqlx::query(
                     "UPDATE so_items SET fulfilled_qty = fulfilled_qty + $1 WHERE so_id IN (SELECT id FROM sales_orders WHERE so_number=$2) AND material_id=$3",
@@ -393,49 +403,55 @@ pub async fn approve_transaction(pool: State<'_, DbPool>, token: String, id: Str
         .bind(&id)
         .fetch_one(&mut *db_tx)
         .await?;
-        if tx_type == "out" {
-            let cur_stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1")
-                .bind(&material_id)
-                .fetch_one(&mut *db_tx)
-                .await?;
-            if cur_stock < quantity {
-                return Err(AppError::Validation(format!("Insufficient stock: available {:.2}, requested {:.2}", cur_stock, quantity)));
-            }
-        }
-        if tx_type == "in" {
-            sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                .bind(quantity)
-                .bind(&material_id)
-                .execute(&mut *db_tx).await.ok();
-        } else if tx_type == "out" {
-            sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                .bind(quantity)
-                .bind(&material_id)
-                .execute(&mut *db_tx).await.ok();
-        }
-    } else {
-        if tx_type == "out" {
-            for (mid, qty) in &items {
-                let cur_stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1")
-                    .bind(mid)
-                    .fetch_one(&mut *db_tx)
+        match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+            TxType::In => {
+                sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                    .bind(quantity)
+                    .bind(&material_id)
+                    .execute(&mut *db_tx)
                     .await?;
-                if cur_stock < *qty {
-                    return Err(AppError::Validation(format!("Insufficient stock: available {:.2}, requested {:.2}", cur_stock, qty)));
+            }
+            TxType::Out => {
+                let result = sqlx::query("UPDATE materials SET quantity = quantity - $1 WHERE id=$2 AND quantity >= $1")
+                    .bind(quantity)
+                    .bind(&material_id)
+                    .execute(&mut *db_tx)
+                    .await?;
+                if result.rows_affected() == 0 {
+                    let cur_stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1 FOR UPDATE")
+                        .bind(&material_id)
+                        .fetch_one(&mut *db_tx)
+                        .await?;
+                    return Err(AppError::Validation(format!("Insufficient stock: available {:.2}, requested {:.2}", cur_stock, quantity)));
                 }
             }
+            _ => {}
         }
+    } else {
         for (mid, qty) in &items {
-            if tx_type == "in" {
-                sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                    .bind(qty)
-                    .bind(mid)
-                    .execute(&mut *db_tx).await.ok();
-            } else if tx_type == "out" {
-                sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                    .bind(qty)
-                    .bind(mid)
-                    .execute(&mut *db_tx).await.ok();
+            match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                TxType::In => {
+                    sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                        .bind(qty)
+                        .bind(mid)
+                        .execute(&mut *db_tx)
+                        .await?;
+                }
+                TxType::Out => {
+                    let result = sqlx::query("UPDATE materials SET quantity = quantity - $1 WHERE id=$2 AND quantity >= $1")
+                        .bind(qty)
+                        .bind(mid)
+                        .execute(&mut *db_tx)
+                        .await?;
+                    if result.rows_affected() == 0 {
+                        let cur_stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1 FOR UPDATE")
+                            .bind(mid)
+                            .fetch_one(&mut *db_tx)
+                            .await?;
+                        return Err(AppError::Validation(format!("Insufficient stock: available {:.2}, requested {:.2}", cur_stock, qty)));
+                    }
+                }
+                _ => {}
             }
         }
     }
@@ -563,7 +579,7 @@ pub async fn reverse_transaction(pool: State<'_, DbPool>, token: String, id: Str
     .map(|row| (row.get(0), row.get(1)))
     .ok_or_else(|| AppError::NotFound("Transaction not found".into()))?;
 
-    if cur_status == "reversed" {
+    if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Reversed) {
         return Err(AppError::Validation("Transaction already reversed".into()));
     }
 
@@ -585,29 +601,37 @@ pub async fn reverse_transaction(pool: State<'_, DbPool>, token: String, id: Str
         .fetch_one(&mut *db_tx)
         .await
         .map(|row| (row.get(0), row.get(1)))?;
-        if tx_type == "in" {
-            sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                .bind(qty)
-                .bind(&mid)
-                .execute(&mut *db_tx).await?;
-        } else if tx_type == "out" {
-            sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                .bind(qty)
-                .bind(&mid)
-                .execute(&mut *db_tx).await?;
+        match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+            TxType::In => {
+                sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
+                    .bind(qty)
+                    .bind(&mid)
+                    .execute(&mut *db_tx).await?;
+            }
+            TxType::Out => {
+                sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                    .bind(qty)
+                    .bind(&mid)
+                    .execute(&mut *db_tx).await?;
+            }
+            _ => {}
         }
     } else {
         for (mid, qty) in &items {
-            if tx_type == "in" {
-                sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                    .bind(qty)
-                    .bind(mid)
-                    .execute(&mut *db_tx).await?;
-            } else if tx_type == "out" {
-                sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                    .bind(qty)
-                    .bind(mid)
-                    .execute(&mut *db_tx).await?;
+            match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                TxType::In => {
+                    sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
+                        .bind(qty)
+                        .bind(mid)
+                        .execute(&mut *db_tx).await?;
+                }
+                TxType::Out => {
+                    sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                        .bind(qty)
+                        .bind(mid)
+                        .execute(&mut *db_tx).await?;
+                }
+                _ => {}
             }
         }
     }
@@ -640,7 +664,7 @@ pub async fn reverse_transactions_bulk(pool: State<'_, DbPool>, token: String, i
             Ok(None) => { errors.push(format!("{}: not found", id)); continue; }
             Err(e) => { errors.push(format!("{}: {}", id, e)); continue; }
         };
-        if cur_status == "reversed" {
+        if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Reversed) {
             errors.push(format!("{}: already reversed", id));
             continue;
         }
@@ -663,42 +687,50 @@ pub async fn reverse_transactions_bulk(pool: State<'_, DbPool>, token: String, i
             .await
             {
                 let (mid, qty): (String, f64) = (row.get(0), row.get(1));
-                if tx_type == "in" {
-                    if let Err(e) = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                        .bind(qty)
-                        .bind(&mid)
-                        .execute(&mut *db_tx).await
-                    {
-                        errors.push(format!("{}: material update: {}", id, e));
+                match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                    TxType::In => {
+                        if let Err(e) = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
+                            .bind(qty)
+                            .bind(&mid)
+                            .execute(&mut *db_tx).await
+                        {
+                            errors.push(format!("{}: material update: {}", id, e));
+                        }
                     }
-                } else if tx_type == "out" {
-                    if let Err(e) = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                        .bind(qty)
-                        .bind(&mid)
-                        .execute(&mut *db_tx).await
-                    {
-                        errors.push(format!("{}: material update: {}", id, e));
+                    TxType::Out => {
+                        if let Err(e) = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                            .bind(qty)
+                            .bind(&mid)
+                            .execute(&mut *db_tx).await
+                        {
+                            errors.push(format!("{}: material update: {}", id, e));
+                        }
                     }
+                    _ => {}
                 }
             }
         } else {
                 for (mid, qty) in &items {
-                    if tx_type == "in" {
-                        if let Err(e) = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                            .bind(qty)
-                            .bind(mid)
-                            .execute(&mut *db_tx).await
-                        {
-                            errors.push(format!("{}: material update: {}", id, e));
+                    match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                        TxType::In => {
+                            if let Err(e) = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
+                                .bind(qty)
+                                .bind(mid)
+                                .execute(&mut *db_tx).await
+                            {
+                                errors.push(format!("{}: material update: {}", id, e));
+                            }
                         }
-                    } else if tx_type == "out" {
-                        if let Err(e) = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                            .bind(qty)
-                            .bind(mid)
-                            .execute(&mut *db_tx).await
-                        {
-                            errors.push(format!("{}: material update: {}", id, e));
+                        TxType::Out => {
+                            if let Err(e) = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                                .bind(qty)
+                                .bind(mid)
+                                .execute(&mut *db_tx).await
+                            {
+                                errors.push(format!("{}: material update: {}", id, e));
+                            }
                         }
+                        _ => {}
                     }
                 }
         }
@@ -1270,12 +1302,11 @@ pub async fn get_fifo_fefo_suggestion(
 #[tauri::command]
 pub async fn generate_tx_number(pool: State<'_, DbPool>, token: String, type_: String) -> Result<String, AppError> {
     pool.verify_token(&token)?;
-    let prefix = match type_.as_str() {
-        "in" => "GR",
-        "out" => "DO",
-        "transfer" => "TRF",
-        "opname" => "OPN",
-        _ => "TXN",
+    let prefix = match type_.parse::<TxType>().unwrap_or(TxType::In) {
+        TxType::In => "GR",
+        TxType::Out => "DO",
+        TxType::Transfer => "TRF",
+        TxType::Opname => "OPN",
     };
     let now = chrono::Local::now();
     let yyyymm = now.format("%Y%m").to_string();

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 use std::time::Instant;
-use axum::{Json, extract::State, Extension, response::IntoResponse, http::header::SET_COOKIE};
+use axum::{Json, extract::State, Extension, response::IntoResponse, http::{header::SET_COOKIE, HeaderMap}};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
@@ -48,11 +48,23 @@ fn check_rate_limit(pool: &DbPool, username: &str) -> Result<(), (axum::http::St
     Ok(())
 }
 
+fn client_ip(headers: &HeaderMap) -> String {
+    if let Some(v) = headers.get("X-Forwarded-For").and_then(|v| v.to_str().ok()) {
+        return v.split(',').next().unwrap_or("").trim().to_string();
+    }
+    if let Some(v) = headers.get("X-Real-IP").and_then(|v| v.to_str().ok()) {
+        return v.to_string();
+    }
+    "unknown".into()
+}
+
 pub async fn login(
     State(pool): State<Arc<DbPool>>,
+    headers: HeaderMap,
     Json(req): Json<LoginRequest>,
 ) -> Result<impl IntoResponse, (axum::http::StatusCode, Json<serde_json::Value>)> {
     check_rate_limit(&pool, &req.username)?;
+    let ip = client_ip(&headers);
 
     let user_row = sqlx::query(
         "SELECT id, username, password_hash, full_name, email, role, is_active, photo, \
@@ -66,21 +78,45 @@ pub async fn login(
 
     let user = match user_row {
         Some(row) => row,
-        None => return Err((axum::http::StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid username or password" })))),
+        None => {
+            let _ = sqlx::query("INSERT INTO login_history (id, user_id, username, ip_address, status) VALUES ($1, NULL, $2, $3, 'failed')")
+                .bind(uuid::Uuid::new_v4().to_string()).bind(&req.username).bind(&ip)
+                .execute(&pool.pool).await;
+            return Err((axum::http::StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid username or password" }))));
+        }
     };
 
     let password_hash: String = user.get("password_hash");
     if !bcrypt::verify(&req.password, &password_hash).unwrap_or(false) {
+        let _ = sqlx::query("INSERT INTO login_history (id, user_id, username, ip_address, status) VALUES ($1, NULL, $2, $3, 'failed')")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(&req.username).bind(&ip)
+            .execute(&pool.pool).await;
         return Err((axum::http::StatusCode::UNAUTHORIZED, Json(json!({ "error": "Invalid username or password" }))));
     }
 
     // Reset login attempts on success
     {
-        let mut attempts = pool.login_attempts.lock().unwrap();
+        let mut attempts = match pool.login_attempts.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => {
+                log::error!("Mutex poisoned (login_attempts) on success, recovering: {}", poisoned);
+                poisoned.into_inner()
+            }
+        };
         attempts.remove(&req.username);
     }
 
     let user_id: String = user.get("id");
+
+    // Update last login time and IP
+    let _ = sqlx::query("UPDATE users SET last_login_at=NOW(), last_login_ip=$1 WHERE id=$2")
+        .bind(&ip).bind(&user_id)
+        .execute(&pool.pool).await;
+
+    let _ = sqlx::query("INSERT INTO login_history (id, user_id, username, ip_address, status) VALUES ($1, $2, $3, $4, 'success')")
+        .bind(uuid::Uuid::new_v4().to_string()).bind(&user_id).bind(&req.username).bind(&ip)
+        .execute(&pool.pool).await;
+
     let token = create_jwt(&user_id).map_err(|e| crate::server::server_error(e))?;
 
     let user_json = json!({

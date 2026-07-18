@@ -47,10 +47,10 @@ export default function PivotReportPage() {
     queryFn: () => getPivotReport(rowField, colField, valueField, aggFunction, dateStart || undefined, dateEnd || undefined),
   })
 
-  const totalByRow = pivot?.data?.map((row) => {
-    const rowKey = row.row as string
+  const totalByRow = pivot?.rows?.map((row) => {
+    const rowKey = (row.name ?? row.row) as string
     let sum = 0
-    for (const c of pivot.cols || []) {
+    for (const c of pivot.columns || []) {
       sum += (row[c] as number) || 0
     }
     return { row: rowKey, total: Math.round(sum * 100) / 100 }
@@ -120,27 +120,27 @@ export default function PivotReportPage() {
           </CardTitle>
         </CardHeader>
         <CardContent className="overflow-x-auto">
-          {!pivot || pivot.data.length === 0 ? (
+          {!pivot || !pivot.rows || pivot.rows.length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No data. Click "Generate Pivot" above.</p>
           ) : (
             <Table>
               <TableHeader>
                 <TableRow>
                   <TableHead className="font-bold">{ROW_FIELDS.find((f) => f.value === rowField)?.label}</TableHead>
-                  {(pivot.cols || []).map((c) => (
+                  {(pivot.columns || []).map((c) => (
                     <TableHead key={c} className="text-right font-bold">{c}</TableHead>
                   ))}
                   <TableHead className="text-right font-bold">Total</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {(pivot.data || []).map((row, i) => {
-                  const rowKey = row.row as string
+                {(pivot.rows || []).map((row, i) => {
+                  const rowKey = (row.name ?? row.row) as string
                   const rowTotal = totalByRow[i]?.total || 0
                   return (
                     <TableRow key={rowKey}>
                       <TableCell className="font-medium">{rowKey}</TableCell>
-                      {(pivot.cols || []).map((c) => (
+                      {(pivot.columns || []).map((c) => (
                         <TableCell key={c} className="text-right font-mono text-sm">
                           {(row[c] as number)?.toLocaleString(undefined, { maximumFractionDigits: 2 }) || "0"}
                         </TableCell>
@@ -153,8 +153,8 @@ export default function PivotReportPage() {
               <tfoot>
                 <TableRow className="bg-muted/50 font-bold">
                   <TableCell>Grand Total</TableCell>
-                  {(pivot.cols || []).map((c) => {
-                    const colTotal = (pivot.data || []).reduce((s, row) => s + ((row[c] as number) || 0), 0)
+                  {(pivot.columns || []).map((c) => {
+                    const colTotal = (pivot.rows || []).reduce((s, row) => s + ((row[c] as number) || 0), 0)
                     return <TableCell key={c} className="text-right font-mono">{colTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
                   })}
                   <TableCell className="text-right font-mono">{grandTotal.toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>

@@ -27,7 +27,7 @@ log = "0.4"
 
 # Axum HTTP server (optional, for API server mode)
 axum = { version = "0.7", optional = true }
-jsonwebtoken = { version = "9", optional = true }
+jsonwebtoken = "9"
 tower-http = { version = "0.5", features = ["cors", "fs"], optional = true }
 tower = { version = "0.4", optional = true }
 
@@ -36,5 +36,5 @@ tauri = { version = "2", features = [], optional = true }
 
 [features]
 default = []
-server = ["axum", "jsonwebtoken", "tower-http", "tower"]
+server = ["axum", "tower-http", "tower"]
 tauri = ["dep:tauri"]

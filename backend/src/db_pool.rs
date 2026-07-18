@@ -2,12 +2,12 @@ use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use std::sync::Mutex;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 use crate::error::AppError;
+use crate::jwt;
 
 pub struct DbPool {
     pub pool: PgPool,
-    pub sessions: Mutex<HashMap<String, (String, Instant)>>,
     pub login_attempts: Mutex<HashMap<String, (u32, Instant)>>,
 }
 
@@ -27,7 +27,7 @@ impl DbPool {
                 }
             }
         }
-        Err(last_err.unwrap_or_else(|| Box::new(std::io::Error::new(std::io::ErrorKind::Other, "Failed to connect to database"))))
+        Err(last_err.unwrap_or_else(|| Box::new(std::io::Error::other("Failed to connect to database"))))
     }
 
     async fn try_connect(database_url: &str) -> Result<Self, Box<dyn std::error::Error>> {
@@ -60,7 +60,6 @@ impl DbPool {
         Self::seed_defaults(&pool).await?;
         Ok(DbPool {
             pool,
-            sessions: Mutex::new(HashMap::new()),
             login_attempts: Mutex::new(HashMap::new()),
         })
     }
@@ -100,23 +99,8 @@ impl DbPool {
     }
 
     pub fn verify_token(&self, token: &str) -> Result<String, AppError> {
-        let mut sessions = self.sessions.lock().map_err(|_| AppError::Lock("Session mutex poisoned".into()))?;
-        let entry = sessions.get(token).cloned().ok_or_else(|| AppError::Auth("Invalid or expired session".into()))?;
-        let session_ttl_hours: u64 = std::env::var("SESSION_TTL_HOURS")
-            .ok().and_then(|v| v.parse().ok()).unwrap_or(24);
-        if entry.1.elapsed() > Duration::from_secs(session_ttl_hours * 3600) {
-            sessions.remove(token);
-            return Err(AppError::Auth("Session expired. Please login again.".into()));
-        }
-        Ok(entry.0)
-    }
-
-    pub fn cleanup_expired_sessions(&self) {
-        if let Ok(mut sessions) = self.sessions.lock() {
-            let session_ttl_hours: u64 = std::env::var("SESSION_TTL_HOURS")
-                .ok().and_then(|v| v.parse().ok()).unwrap_or(24);
-            let max_age = Duration::from_secs(session_ttl_hours * 3600);
-            sessions.retain(|_, (_, time)| time.elapsed() <= max_age);
-        }
+        jwt::verify_jwt(token)
+            .map(|claims| claims.user_id)
+            .map_err(|_| AppError::Auth("Invalid or expired token".into()))
     }
 }

@@ -4,6 +4,7 @@ pub mod models;
 pub mod commands;
 pub mod error;
 pub mod validate;
+pub mod jwt;
 
 #[cfg(test)]
 mod tests;

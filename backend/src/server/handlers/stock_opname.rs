@@ -3,6 +3,7 @@ use axum::{Json, extract::{State, Path}, Extension};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
+use crate::models::TxStatus;
 use crate::validate;
 use sqlx::Row;
 
@@ -61,7 +62,7 @@ pub async fn update_status(
         .bind(&body.status).bind(&now).bind(&id)
         .execute(&mut *db_tx).await
         .map_err(|e| crate::server::server_error(e))?;
-    if body.status == "completed" {
+    if body.status.parse::<TxStatus>().ok() == Some(TxStatus::Completed) {
         let threshold_str: String = sqlx::query_scalar("SELECT COALESCE((SELECT value FROM app_config WHERE key='auto_adjust_threshold'),'0')")
             .fetch_one(&mut *db_tx).await.unwrap_or("0".into());
         let threshold: f64 = threshold_str.parse().unwrap_or(0.0);
@@ -73,7 +74,7 @@ pub async fn update_status(
             let diff = phy_qty - sys_qty;
             if threshold > 0.0 && diff.abs() < threshold { continue; }
             sqlx::query("UPDATE materials SET quantity=$1 WHERE id=$2")
-                .bind(phy_qty).bind(&mid).execute(&mut *db_tx).await.ok();
+                .bind(phy_qty).bind(&mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         }
     }
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
@@ -228,7 +229,7 @@ pub async fn auto_generate(
         for (mid, qty) in &materials {
             let iid = uuid::Uuid::new_v4().to_string();
             sqlx::query("INSERT INTO stock_opname_items (id, opname_id, material_id, system_qty, physical_qty, difference) VALUES ($1,$2,$3,$4,$5,0)")
-                .bind(&iid).bind(&oid).bind(mid).bind(qty).bind(qty).execute(&mut *db_tx).await.ok();
+                .bind(&iid).bind(&oid).bind(mid).bind(qty).bind(qty).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         }
         sqlx::query("UPDATE cycle_schedules SET next_date=CURRENT_DATE + $1, last_date=$2 WHERE id=$3")
             .bind(freq).bind(&today).bind(sid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;

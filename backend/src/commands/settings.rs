@@ -81,8 +81,7 @@ pub async fn change_password(db: State<'_, DbPool>, token: String, id: String, n
         .bind(&hash).bind(&now).bind(&id)
         .execute(&db.pool)
         .await?;
-    let mut sessions = db.sessions.lock().map_err(|_| AppError::Lock("Session mutex poisoned".into()))?;
-    sessions.retain(|_, v| v.0 != id);
+    // JWT is stateless — existing tokens remain valid until expiry. Password-changed-at check can be added by extending Claims.
     Ok(())
 }
 
@@ -752,7 +751,7 @@ pub async fn backup_database(db: State<'_, DbPool>, token: String, app_handle: A
         .map_err(|_| AppError::Internal("DATABASE_URL environment variable not set".into()))?;
     let app_dir = app_handle.path().app_data_dir().map_err(|e| AppError::Internal(e.to_string()))?;
     let backup_path = app_dir.join(format!("thermaltrue_backup_{}.sql", chrono::Local::now().format("%Y%m%d_%H%M%S")));
-    let backup_dir = backup_path.parent().unwrap();
+    let backup_dir = backup_path.parent().unwrap_or(&app_dir);
     tokio::fs::create_dir_all(backup_dir).await.map_err(|e| AppError::Db(format!("create backup dir: {}", e)))?;
     let output = tokio::process::Command::new("pg_dump")
         .arg("-d").arg(&database_url)

@@ -113,7 +113,7 @@ export default function DashboardPage() {
   const recentTx = (kpi.recent_transactions || []).slice(0, 10)
 
   // Stock turnover
-  const turnoverOut = recentAll?.filter((t) => t.type === "out").reduce((s, t) => s + t.quantity * t.price, 0) || 0
+  const turnoverOut = (recentAll?.filter((t) => t.type === "out") ?? []).reduce((s, t) => s + t.quantity * t.price, 0) || 0
   const turnoverRatio = kpi.stock_value > 0 ? turnoverOut / kpi.stock_value : 0
 
   // System health

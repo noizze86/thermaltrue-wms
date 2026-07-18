@@ -5,6 +5,7 @@ use crate::models::{User, LoginRequest, AuthResponse};
 use crate::error::AppError;
 use sqlx::Row;
 
+// Tauri IPC is always local; real client IP is captured in server/handlers/auth.rs via X-Forwarded-For
 const LOCAL_IP: &str = "127.0.0.1";
 
 #[tauri::command]
@@ -122,21 +123,14 @@ pub async fn login(pool: State<'_, DbPool>, req: LoginRequest) -> Result<AuthRes
         false
     };
 
-    let token = uuid::Uuid::new_v4().to_string();
-    {
-        let mut sessions = pool.sessions.lock().map_err(|_| AppError::Lock("Session mutex poisoned".into()))?;
-        sessions.insert(token.clone(), (user.id.clone(), Instant::now()));
-    }
+    let token = crate::jwt::create_jwt(&user.id).map_err(|e| AppError::Internal(e.to_string()))?;
     Ok(AuthResponse { user, token, password_expired })
 }
 
 #[tauri::command]
 pub async fn logout(pool: State<'_, DbPool>, token: String) -> Result<(), AppError> {
     let user_id = pool.verify_token(&token)?;
-    {
-        let mut sessions = pool.sessions.lock().map_err(|_| AppError::Lock("Session mutex poisoned".into()))?;
-        sessions.remove(&token);
-    }
+    // JWT is stateless — no server-side session to remove
     crate::commands::audit_log(&pool.pool, &user_id, "logout", "auth", &user_id, "User logged out").await;
     Ok(())
 }

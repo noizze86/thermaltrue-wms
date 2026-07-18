@@ -4,7 +4,7 @@ use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
 use crate::validate;
-use crate::models::{Transaction, TransactionItem, PurchaseOrder, PoItem, SalesOrder, SoItem};
+use crate::models::{Transaction, TransactionItem, PurchaseOrder, PoItem, SalesOrder, SoItem, TxType, TxStatus};
 use sqlx::Row;
 
 fn gen_id() -> String { uuid::Uuid::new_v4().to_string() }
@@ -14,8 +14,11 @@ pub struct ListParams { pub search: Option<String>, pub type_filter: Option<Stri
 
 pub async fn list(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Transaction>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     let search_pat = params.search.as_ref().filter(|s| !s.is_empty()).map(|s| format!("%{}%", s));
     let de_val = params.date_end.as_ref().filter(|d| !d.is_empty()).map(|d| format!("{} 23:59:59", d));
 
@@ -29,6 +32,9 @@ pub async fn list(
     if let Some(ref w) = params.warehouse_id { if !w.is_empty() { builder.push(" AND warehouse_id = ").push_bind(w.clone()); } }
     if let Some(ref ds) = params.date_start { if !ds.is_empty() { builder.push(" AND created_at >= ").push_bind(ds.clone()); } }
     if let Some(ref dv) = de_val { builder.push(" AND created_at <= ").push_bind(dv.clone()); }
+    if !warehouse_ids.is_empty() {
+        builder.push(" AND warehouse_id = ANY(").push_bind(&warehouse_ids).push(")");
+    }
 
     builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(params.limit.unwrap_or(200));
 
@@ -62,10 +68,12 @@ pub async fn create(
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let id = gen_id();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let prefix = match body.tx.tx_type.as_str() { "in" => "IN", "out" => "OUT", "transfer" => "TRF", "opname" => "OPN", _ => "TXN" };
+    let prefix = match body.tx.tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+        TxType::In => "IN", TxType::Out => "OUT", TxType::Transfer => "TRF", TxType::Opname => "OPN",
+    };
     let count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*)+1 FROM transactions WHERE type=$1").bind(&body.tx.tx_type).fetch_one(&mut *db_tx).await.unwrap_or(1);
     let txn_number = format!("{}-{:04}", prefix, count);
-    let status = if body.tx.status.is_empty() { "approved".to_string() } else { body.tx.status.clone() };
+    let status = if body.tx.status.is_empty() { "pending".to_string() } else { body.tx.status.clone() };
     let items = body.items.unwrap_or_default();
 
     let (mat_id, qty, price) = if items.is_empty() { (body.tx.material_id.clone(), body.tx.quantity, body.tx.price) }
@@ -89,9 +97,9 @@ pub async fn create(
             .map_err(|e| crate::server::server_error(e))?;
     }
 
-    match body.tx.tx_type.as_str() {
-        "in" => { sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mat_id).execute(&mut *db_tx).await.ok(); }
-        "out" => { sqlx::query("UPDATE materials SET quantity = GREATEST(quantity - $1, 0) WHERE id=$2").bind(qty).bind(&mat_id).execute(&mut *db_tx).await.ok(); }
+    match body.tx.tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+        TxType::In => { sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mat_id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?; }
+        TxType::Out => { sqlx::query("UPDATE materials SET quantity = GREATEST(quantity - $1, 0) WHERE id=$2").bind(qty).bind(&mat_id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?; }
         _ => {}
     }
 
@@ -190,7 +198,7 @@ pub async fn reverse(
         .map(|row| (row.get(0), row.get(1)))
         .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": "Transaction not found"}))))?;
 
-    if cur_status == "reversed" {
+    if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Reversed) {
         return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Transaction already reversed"}))));
     }
 
@@ -204,21 +212,29 @@ pub async fn reverse(
             .bind(&id).fetch_one(&mut *db_tx).await
             .map_err(|e| crate::server::server_error(e))?;
         let (mid, qty): (String, f64) = (row.get(0), row.get(1));
-        if tx_type == "in" {
-            sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                .bind(qty).bind(&mid).execute(&mut *db_tx).await.ok();
-        } else if tx_type == "out" {
-            sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                .bind(qty).bind(&mid).execute(&mut *db_tx).await.ok();
+        match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+            TxType::In => {
+                sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
+                    .bind(qty).bind(&mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+            }
+            TxType::Out => {
+                sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                    .bind(qty).bind(&mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+            }
+            _ => {}
         }
     } else {
         for (mid, qty) in &items {
-            if tx_type == "in" {
-                sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
-                    .bind(qty).bind(mid).execute(&mut *db_tx).await.ok();
-            } else if tx_type == "out" {
-                sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
-                    .bind(qty).bind(mid).execute(&mut *db_tx).await.ok();
+            match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                TxType::In => {
+                    sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
+                        .bind(qty).bind(mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+                }
+                TxType::Out => {
+                    sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                        .bind(qty).bind(mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+                }
+                _ => {}
             }
         }
     }
@@ -231,7 +247,7 @@ pub async fn reverse(
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("reverse").bind("transaction").bind(&id).bind(&format!("Reversed {} transaction", tx_type)).bind(&now)
-        .execute(&mut *db_tx).await.ok();
+        .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
 
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"message": "Transaction reversed", "id": id})))
@@ -258,7 +274,7 @@ pub async fn reverse_bulk(
             Ok(None) => { errors.push(format!("{}: not found", id)); continue; }
             Err(e) => { errors.push(format!("{}: {}", id, e)); continue; }
         };
-        if cur_status == "reversed" { errors.push(format!("{}: already reversed", id)); continue; }
+        if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Reversed) { errors.push(format!("{}: already reversed", id)); continue; }
         let items: Vec<(String, f64)> = match sqlx::query("SELECT material_id, quantity FROM transaction_items WHERE tx_id=$1")
             .bind(id).fetch_all(&mut *db_tx).await
         {
@@ -270,13 +286,19 @@ pub async fn reverse_bulk(
                 .bind(id).fetch_one(&mut *db_tx).await
             {
                 let (mid, qty): (String, f64) = (row.get(0), row.get(1));
-                if tx_type == "in" { sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await.ok(); }
-                else if tx_type == "out" { sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await.ok(); }
+                match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                    TxType::In => { sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?; }
+                    TxType::Out => { sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?; }
+                    _ => {}
+                }
             }
         } else {
             for (mid, qty) in &items {
-                if tx_type == "in" { sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await.ok(); }
-                else if tx_type == "out" { sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await.ok(); }
+                match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                    TxType::In => { sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?; }
+                    TxType::Out => { sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?; }
+                    _ => {}
+                }
             }
         }
         if let Err(e) = sqlx::query("UPDATE transactions SET status='reversed' WHERE id=$1")
@@ -285,7 +307,7 @@ pub async fn reverse_bulk(
         let audit_id = gen_id();
         sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
             .bind(&audit_id).bind(&user_id).bind("reverse").bind("transaction").bind(id).bind(&format!("Bulk reversed {} transaction", tx_type)).bind(&now)
-            .execute(&mut *db_tx).await.ok();
+            .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         reversed += 1;
     }
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
@@ -683,12 +705,11 @@ pub async fn generate_tx_number(
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<TxNumberQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let prefix = match q.type_.as_deref() {
-        Some("in") => "GR",
-        Some("out") => "DO",
-        Some("transfer") => "TRF",
-        Some("opname") => "OPN",
-        _ => "TXN",
+    let prefix = match q.type_.as_deref().and_then(|s| s.parse::<TxType>().ok()).unwrap_or(TxType::In) {
+        TxType::In => "GR",
+        TxType::Out => "DO",
+        TxType::Transfer => "TRF",
+        TxType::Opname => "OPN",
     };
     let now = chrono::Local::now();
     let yyyymm = now.format("%Y%m").to_string();

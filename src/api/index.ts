@@ -807,7 +807,7 @@ export interface WarehouseComparisonItem {
 export const runReportSchedule = (schedule_id: string) => invokeAuth<string>("run_report_schedule", { scheduleId: schedule_id });
 export const getMultiWarehouseComparison = () => invokeAuth<WarehouseComparisonItem[]>("get_multi_warehouse_comparison");
 export const getPivotReport = (row_field: string, col_field: string, value_field: string, agg_function: string, date_start?: string, date_end?: string) =>
-  invokeAuth<{ rows: string[]; cols: string[]; data: Record<string, unknown>[]; row_field: string; col_field: string; value_field: string; agg_function: string }>("get_pivot_report", { rowField: row_field, colField: col_field, valueField: value_field, aggFunction: agg_function, dateStart: date_start, dateEnd: date_end });
+  invokeAuth<{ columns: string[]; rows: Record<string, unknown>[]; rowField: string; colField: string; valueField: string; aggFunction: string }>("get_pivot_report", { rowField: row_field, colField: col_field, valueField: value_field, aggFunction: agg_function, dateStart: date_start, dateEnd: date_end });
 export const getVarianceRootCause = (opname_id: string) => invokeAuth<Record<string, unknown>[]>("get_variance_root_cause", { opnameId: opname_id });
 export const previewImportXlsx = (base64: string) => invokeAuth<string>("preview_import_xlsx", { xlsxBase64: base64 });
 export const generateReceiptPdf = (tx_id: string) => invokeAuth<number[]>("generate_receipt_pdf", { txId: tx_id });

@@ -12,32 +12,52 @@ pub struct ListParams { pub search: Option<String> }
 
 pub async fn list(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Warehouse>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query(
-        "SELECT id, name, code, location, is_active, capacity, layout_image, created_at FROM warehouses \
-         WHERE ($1 IS NULL OR name LIKE '%' || $1 || '%' OR code LIKE '%' || $1 || '%') ORDER BY name"
-    )
-    .bind(&params.search)
-    .fetch_all(&pool.pool).await
-    .map_err(|e| crate::server::server_error(e))?;
-    let list = rows.iter().map(|row| { Warehouse { id: row.get(0), name: row.get(1), code: row.get(2), location: row.get(3), is_active: row.get(4), capacity: row.get(5), layout_image: row.get(6), created_at: row.get(7) } }).collect();
+    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new(
+        "SELECT id, name, code, location, is_active, capacity, layout_image, created_at FROM warehouses WHERE 1=1"
+    );
+    if let Some(ref s) = params.search {
+        if !s.is_empty() {
+            let pat = format!("%{}%", s);
+            builder.push(" AND (name LIKE ").push_bind(pat.clone()).push(" OR code LIKE ").push_bind(pat).push(")");
+        }
+    }
+    if !warehouse_ids.is_empty() {
+        builder.push(" AND id = ANY(").push_bind(&warehouse_ids).push(")");
+    }
+    builder.push(" ORDER BY name");
+    let rows = builder.build().fetch_all(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let list: Vec<Warehouse> = rows.iter().map(|row| { Warehouse { id: row.get(0), name: row.get(1), code: row.get(2), location: row.get(3), is_active: row.get(4), capacity: row.get(5), layout_image: row.get(6), created_at: row.get(7) } }).collect();
     Ok(Json(list))
 }
 
 pub async fn stats(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
 ) -> Result<Json<Vec<WarehouseStats>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query(
+    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new(
         "SELECT w.id, w.name, w.code, w.location, w.is_active, w.capacity, w.layout_image, w.created_at, \
          (SELECT COUNT(*) FROM racks WHERE warehouse_id=w.id) as rack_count, \
          (SELECT COUNT(*) FROM materials WHERE warehouse_id=w.id AND is_active=true) as material_count, \
          COALESCE((SELECT SUM(m.quantity) FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true), 0) as used_capacity \
-         FROM warehouses w ORDER BY w.name"
-    )
-    .fetch_all(&pool.pool).await
-    .map_err(|e| crate::server::server_error(e))?;
-    let list = rows.iter().map(|row| { WarehouseStats { id: row.get(0), name: row.get(1), code: row.get(2), location: row.get(3), is_active: row.get(4), capacity: row.get(5), layout_image: row.get(6), created_at: row.get(7), rack_count: row.get(8), material_count: row.get(9), used_capacity: row.get(10) } }).collect();
+         FROM warehouses w WHERE 1=1"
+    );
+    if !warehouse_ids.is_empty() {
+        builder.push(" AND w.id = ANY(").push_bind(&warehouse_ids).push(")");
+    }
+    builder.push(" ORDER BY w.name");
+    let rows = builder.build().fetch_all(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let list: Vec<WarehouseStats> = rows.iter().map(|row| { WarehouseStats { id: row.get(0), name: row.get(1), code: row.get(2), location: row.get(3), is_active: row.get(4), capacity: row.get(5), layout_image: row.get(6), created_at: row.get(7), rack_count: row.get(8), material_count: row.get(9), used_capacity: row.get(10) } }).collect();
     Ok(Json(list))
 }
 

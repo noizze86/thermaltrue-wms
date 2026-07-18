@@ -2,7 +2,7 @@ use tauri::State;
 use calamine::{Reader, DataType};
 use serde::{Serialize, Deserialize};
 use crate::db_pool::DbPool;
-use crate::models::{Material, MaterialBatch, MaterialImage, StockValuation};
+use crate::models::{Material, MaterialBatch, MaterialImage, StockValuation, TxType, CreateMaterialInput, UpdateMaterialInput};
 use crate::error::AppError;
 use crate::validate;
 use sqlx::Row;
@@ -10,7 +10,8 @@ use sqlx::QueryBuilder;
 
 #[tauri::command]
 pub async fn get_materials(pool: State<'_, DbPool>, token: String, search: Option<String>, category_id: Option<String>, warehouse_id: Option<String>) -> Result<Vec<Material>, AppError> {
-    pool.verify_token(&token)?;
+    let user_id = pool.verify_token(&token)?;
+    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await?;
     let mut builder = QueryBuilder::new("SELECT id, sku, name, description, category_id, unit_id, supplier_id, warehouse_id, rack_id, quantity, min_stock, max_stock, price, image, expiry_date, is_active, created_at, updated_at FROM materials WHERE 1=1");
     if let Some(ref s) = search {
         if !s.is_empty() {
@@ -27,6 +28,9 @@ pub async fn get_materials(pool: State<'_, DbPool>, token: String, search: Optio
         if !w.is_empty() && w != "all" {
             builder.push(" AND warehouse_id = ").push_bind(w);
         }
+    }
+    if !warehouse_ids.is_empty() {
+        builder.push(" AND warehouse_id = ANY(").push_bind(&warehouse_ids).push(")");
     }
     builder.push(" ORDER BY name ASC");
     let rows = builder.build().fetch_all(&pool.pool).await?;
@@ -66,27 +70,26 @@ pub async fn get_material(pool: State<'_, DbPool>, token: String, id: String) ->
 }
 
 #[tauri::command]
-pub async fn create_material(pool: State<'_, DbPool>, token: String, material: Material) -> Result<Material, AppError> {
+pub async fn create_material(pool: State<'_, DbPool>, token: String, input: CreateMaterialInput) -> Result<Material, AppError> {
     let user_id = pool.verify_token(&token)?;
-    validate::validate_sku(&material.sku)?;
-    validate::validate_string(&material.name, "Material name", 255)?;
-    validate::validate_quantity(material.quantity, "Quantity")?;
+    validate::validate_sku(&input.sku)?;
+    validate::validate_string(&input.name, "Material name", 255)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await? { return Err(AppError::Auth("Permission denied".into())); }
     let id = uuid::Uuid::new_v4().to_string();
     let mut tx = pool.pool.begin().await.map_err(|e| AppError::Db(format!("begin tx: {}", e)))?;
-    sqlx::query("INSERT INTO materials (id, sku, name, description, category_id, unit_id, supplier_id, warehouse_id, rack_id, quantity, min_stock, max_stock, price, image, expiry_date, is_active, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW(),NOW())")
-        .bind(&id).bind(&material.sku).bind(&material.name).bind(&material.description)
-        .bind(&material.category_id).bind(&material.unit_id).bind(&material.supplier_id)
-        .bind(&material.warehouse_id).bind(&material.rack_id).bind(material.quantity)
-        .bind(material.min_stock).bind(material.max_stock).bind(material.price)
-        .bind(&material.image).bind(&material.expiry_date).bind(material.is_active)
+    sqlx::query("INSERT INTO materials (id, sku, name, description, category_id, unit_id, supplier_id, warehouse_id, rack_id, quantity, min_stock, max_stock, price, image, expiry_date, is_active, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,0,$10,$11,$12,$13,$14,$15,NOW(),NOW())")
+        .bind(&id).bind(&input.sku).bind(&input.name).bind(&input.description)
+        .bind(&input.category_id).bind(&input.unit_id).bind(&input.supplier_id)
+        .bind(&input.warehouse_id).bind(&input.rack_id)
+        .bind(input.min_stock).bind(input.max_stock).bind(input.price)
+        .bind(&input.image).bind(&input.expiry_date).bind(input.is_active)
         .execute(&mut *tx).await?;
     let row = sqlx::query("SELECT id, sku, name, description, category_id, unit_id, supplier_id, warehouse_id, rack_id, quantity, min_stock, max_stock, price, image, expiry_date, is_active, created_at, updated_at FROM materials WHERE id = $1")
         .bind(&id)
         .fetch_one(&mut *tx)
         .await?;
     tx.commit().await.map_err(|e| AppError::Db(format!("commit tx: {}", e)))?;
-    crate::commands::audit_log(&pool.pool, &user_id, "create", "material", &id, &format!("SKU {} Name {}", material.sku, material.name)).await;
+    crate::commands::audit_log(&pool.pool, &user_id, "create", "material", &id, &format!("SKU {} Name {}", input.sku, input.name)).await;
     Ok(Material {
         id: row.get("id"), sku: row.get("sku"), name: row.get("name"),
         description: row.get("description"), category_id: row.get("category_id"),
@@ -101,22 +104,21 @@ pub async fn create_material(pool: State<'_, DbPool>, token: String, material: M
 }
 
 #[tauri::command]
-pub async fn update_material(pool: State<'_, DbPool>, token: String, material: Material) -> Result<Material, AppError> {
+pub async fn update_material(pool: State<'_, DbPool>, token: String, input: UpdateMaterialInput) -> Result<Material, AppError> {
     let user_id = pool.verify_token(&token)?;
-    validate::validate_sku(&material.sku)?;
-    validate::validate_string(&material.name, "Material name", 255)?;
-    validate::validate_quantity(material.quantity, "Quantity")?;
+    validate::validate_sku(&input.sku)?;
+    validate::validate_string(&input.name, "Material name", 255)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await? { return Err(AppError::Auth("Permission denied".into())); }
-    sqlx::query("UPDATE materials SET sku=$1, name=$2, description=$3, category_id=$4, unit_id=$5, supplier_id=$6, warehouse_id=$7, rack_id=$8, quantity=$9, min_stock=$10, max_stock=$11, price=$12, image=$13, expiry_date=$14, is_active=$15, updated_at=NOW() WHERE id=$16")
-        .bind(&material.sku).bind(&material.name).bind(&material.description)
-        .bind(&material.category_id).bind(&material.unit_id).bind(&material.supplier_id)
-        .bind(&material.warehouse_id).bind(&material.rack_id).bind(material.quantity)
-        .bind(material.min_stock).bind(material.max_stock).bind(material.price)
-        .bind(&material.image).bind(&material.expiry_date).bind(material.is_active)
-        .bind(&material.id)
+    sqlx::query("UPDATE materials SET sku=$1, name=$2, description=$3, category_id=$4, unit_id=$5, supplier_id=$6, warehouse_id=$7, rack_id=$8, min_stock=$9, max_stock=$10, price=$11, image=$12, expiry_date=$13, is_active=$14, updated_at=NOW() WHERE id=$15")
+        .bind(&input.sku).bind(&input.name).bind(&input.description)
+        .bind(&input.category_id).bind(&input.unit_id).bind(&input.supplier_id)
+        .bind(&input.warehouse_id).bind(&input.rack_id)
+        .bind(input.min_stock).bind(input.max_stock).bind(input.price)
+        .bind(&input.image).bind(&input.expiry_date).bind(input.is_active)
+        .bind(&input.id)
         .execute(&pool.pool).await?;
-    crate::commands::audit_log(&pool.pool, &user_id, "update", "material", &material.id, &format!("SKU {} Name {}", material.sku, material.name)).await;
-    let id = material.id.clone();
+    crate::commands::audit_log(&pool.pool, &user_id, "update", "material", &input.id, &format!("SKU {} Name {}", input.sku, input.name)).await;
+    let id = input.id.clone();
     get_material(pool, token, id).await
 }
 
@@ -331,11 +333,16 @@ pub async fn create_material_image(pool: State<'_, DbPool>, token: String, mater
     let user_id = pool.verify_token(&token)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await? { return Err(AppError::Auth("Permission denied".into())); }
     let id = uuid::Uuid::new_v4().to_string();
+    let mut tx = pool.pool.begin().await?;
+    // Lock parent material row to serialize sort_order assignment
+    sqlx::query("SELECT 1 FROM materials WHERE id=$1 FOR UPDATE")
+        .bind(&material_id).execute(&mut *tx).await?;
     let max_sort: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(sort_order), -1) + 1 FROM material_images WHERE material_id=$1")
-        .bind(&material_id).fetch_optional(&pool.pool).await?.unwrap_or(0);
+        .bind(&material_id).fetch_optional(&mut *tx).await?.unwrap_or(0);
     sqlx::query("INSERT INTO material_images (id, material_id, url, sort_order, created_at) VALUES ($1,$2,$3,$4,NOW())")
         .bind(&id).bind(&material_id).bind(&url).bind(max_sort)
-        .execute(&pool.pool).await?;
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     Ok(MaterialImage { id, material_id, url, sort_order: max_sort, created_at: now })
 }
@@ -700,7 +707,7 @@ pub async fn get_stock_timeline(pool: State<'_, DbPool>, token: String, material
     let mut entries = Vec::new();
     for (id, num, typ, qty, ref_, notes, user, ts) in raw {
         let qty_before = running;
-        running += if typ == "in" { qty } else if typ == "out" { -qty } else { 0.0 };
+        running += if typ.parse::<TxType>().ok() == Some(TxType::In) { qty } else if typ.parse::<TxType>().ok() == Some(TxType::Out) { -qty } else { 0.0 };
         if running < 0.0 { running = 0.0; }
         entries.push(StockTimelineEntry {
             id, transaction_number: num, type_: typ, quantity: qty,

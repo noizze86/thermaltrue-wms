@@ -177,7 +177,7 @@ pub async fn create_transfer_order(
         sqlx::query("INSERT INTO transfer_items (id, transfer_id, material_id, batch_id, quantity, created_at) VALUES ($1,$2,$3,$4,$5,$6)")
             .bind(&iid).bind(&id).bind(item.get("material_id").and_then(|v| v.as_str()).unwrap_or("")).bind(&batch_id)
             .bind(item.get("quantity").and_then(|v| v.as_f64()).unwrap_or(0.0)).bind(&now)
-            .execute(&pool.pool).await.ok();
+            .execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     }
     Ok(Json(json!({"id": id, "transfer_number": txn, "from_warehouse_id": body.from_warehouse_id, "to_warehouse_id": body.to_warehouse_id, "status": "draft", "notes": body.notes, "created_by": user_id, "approved_by": null, "created_at": now, "updated_at": now})))
 }
