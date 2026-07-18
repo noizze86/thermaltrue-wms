@@ -221,6 +221,7 @@ const ROUTES: Record<string, Route> = {
   get_label_template:      { method: "GET", path: (a) => `/api/label-templates/${a.id}` },
   create_label_template:   { method: "POST", path: "/api/label-templates", body: true },
   update_label_template:   { method: "PUT", path: "/api/label-templates", body: true },
+  save_label_template:     { method: "POST", path: "/api/label-templates", body: true },
   delete_label_template:   { method: "DELETE", path: (a) => `/api/label-templates/${a.id}` },
 
   // Company Profile
@@ -230,6 +231,7 @@ const ROUTES: Record<string, Route> = {
   // Notification Config
   get_notification_config: { method: "GET", path: "/api/notification-config" },
   save_notification_config:{ method: "POST", path: "/api/notification-config", body: true },
+  set_notification_config: { method: "POST", path: "/api/notification-config", body: true },
 
   // Roles
   get_roles:               { method: "GET", path: "/api/roles" },
@@ -256,8 +258,11 @@ const ROUTES: Record<string, Route> = {
   // Reports
   export_report_csv:       { method: "GET", path: "/api/reports/csv" },
   export_report_pdf:       { method: "GET", path: "/api/reports/pdf" },
+  generate_report_pdf:     { method: "GET", path: "/api/reports/pdf" },
   export_report_xlsx:      { method: "GET", path: "/api/reports/opname/export-xlsx" },
+  export_opname_xlsx:      { method: "GET", path: "/api/reports/opname/export-xlsx" },
   approve_opname_report:   { method: "POST", path: "/api/reports/opname/approve", body: true },
+  approve_opname_adjustment:{ method: "POST", path: "/api/reports/opname/approve", body: true },
   get_report_schedules:    { method: "GET", path: "/api/reports/schedules" },
   save_report_schedule:    { method: "POST", path: "/api/reports/schedules", body: true },
   delete_report_schedule:  { method: "DELETE", path: (a) => `/api/reports/schedules/${a.id}` },
