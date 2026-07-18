@@ -328,3 +328,173 @@ pub async fn count_filtered_audit_logs(
         .get(0);
     Ok(Json(count))
 }
+
+// ── Type B gaps ──
+
+#[derive(Deserialize)]
+pub struct AddAuditLogBody { pub user_id: Option<String>, pub action: String, pub entity: String, pub entity_id: Option<String>, pub details: String }
+
+pub async fn add_audit_log(
+    State(pool): State<Arc<DbPool>>,
+    Json(body): Json<AddAuditLogBody>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let id = uuid::Uuid::new_v4().to_string();
+    sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details) VALUES ($1,$2,$3,$4,$5,$6)")
+        .bind(&id).bind(&body.user_id).bind(&body.action).bind(&body.entity).bind(&body.entity_id).bind(&body.details)
+        .execute(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+pub struct PurgeAuditLogsQuery { pub months: i64 }
+
+pub async fn purge_old_audit_logs(
+    State(pool): State<Arc<DbPool>>,
+    Query(params): Query<PurgeAuditLogsQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let result = sqlx::query("DELETE FROM audit_log WHERE created_at < NOW() - ($1 * interval '1 month')")
+        .bind(params.months)
+        .execute(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(json!({"deleted": result.rows_affected() as i64})))
+}
+
+#[derive(Deserialize)]
+pub struct ExportAuditCsvQuery { pub action: Option<String>, pub entity: Option<String>, pub user_id: Option<String>, pub date_start: Option<String>, pub date_end: Option<String>, pub limit: Option<i64> }
+
+pub async fn export_audit_csv_filtered(
+    State(pool): State<Arc<DbPool>>,
+    Query(params): Query<ExportAuditCsvQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let limit_val = params.limit.unwrap_or(500);
+    let mut builder = sqlx::QueryBuilder::new(
+        "SELECT a.id, a.user_id, COALESCE(u.username, 'System'), a.action, a.entity, a.entity_id, a.details, a.created_at FROM audit_log a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1"
+    );
+    if let Some(ref a) = params.action { builder.push(" AND a.action = ").push_bind(a); }
+    if let Some(ref e) = params.entity { builder.push(" AND a.entity = ").push_bind(e); }
+    if let Some(ref u) = params.user_id { builder.push(" AND a.user_id = ").push_bind(u); }
+    if let Some(ref d) = params.date_start { builder.push(" AND a.created_at >= ").push_bind(d); }
+    if let Some(ref d) = params.date_end { builder.push(" AND a.created_at < (").push_bind(d); builder.push("::date + interval '1 day')"); }
+    builder.push(" ORDER BY a.created_at DESC LIMIT ").push_bind(limit_val);
+    let rows = builder.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let mut csv = String::from("ID,User ID,Username,Action,Entity,Entity ID,Details,Created At\n");
+    for row in rows {
+        let id: String = row.get(0);
+        let uid: Option<String> = row.get(1);
+        let uname: String = row.get(2);
+        let action: String = row.get(3);
+        let entity: String = row.get(4);
+        let eid: Option<String> = row.get(5);
+        let details: String = row.get(6);
+        let created: String = row.get(7);
+        csv.push_str(&format!("{},{},{},{},{},{},{},{}\n", id, uid.unwrap_or_default(), uname, action, entity, eid.unwrap_or_default(), details.replace(',',";"), created));
+    }
+    Ok(Json(json!({"csv": csv})))
+}
+
+pub async fn get_all_app_config(
+    State(pool): State<Arc<DbPool>>,
+) -> Result<Json<Vec<AppConfig>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let rows = sqlx::query("SELECT key, value FROM app_config ORDER BY key")
+        .fetch_all(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let list = rows.iter().map(|row| AppConfig { key: row.get(0), value: row.get(1) }).collect();
+    Ok(Json(list))
+}
+
+pub async fn delete_app_config(
+    State(pool): State<Arc<DbPool>>,
+    Path(key): Path<String>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    sqlx::query("DELETE FROM app_config WHERE key=$1")
+        .bind(&key).execute(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(()))
+}
+
+pub async fn backup_database(
+    State(_pool): State<Arc<DbPool>>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let database_url = std::env::var("DATABASE_URL").map_err(|_| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"DATABASE_URL not set"}))))?;
+    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "backups".into());
+    tokio::fs::create_dir_all(&backup_dir).await.map_err(|e| crate::server::server_error(e))?;
+    let backup_path = format!("{}/thermaltrue_backup_{}.sql", backup_dir, chrono::Local::now().format("%Y%m%d_%H%M%S"));
+    let output = tokio::process::Command::new("pg_dump")
+        .arg("-d").arg(&database_url).arg("-f").arg(&backup_path).arg("--no-owner")
+        .output().await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("pg_dump failed: {}", e)}))))?;
+    if !output.status.success() {
+        return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("pg_dump: {}", String::from_utf8_lossy(&output.stderr))}))));
+    }
+    Ok(Json(json!({"path": backup_path})))
+}
+
+#[derive(Deserialize)]
+pub struct RestoreDatabaseBody { pub backup_path: String }
+
+pub async fn restore_database(
+    State(_pool): State<Arc<DbPool>>,
+    Json(body): Json<RestoreDatabaseBody>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let database_url = std::env::var("DATABASE_URL").map_err(|_| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"DATABASE_URL not set"}))))?;
+    let output = tokio::process::Command::new("psql")
+        .arg("-d").arg(&database_url).arg("-f").arg(&body.backup_path)
+        .output().await
+        .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("psql failed: {}", e)}))))?;
+    if !output.status.success() {
+        return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("psql restore: {}", String::from_utf8_lossy(&output.stderr))}))));
+    }
+    Ok(Json(json!({"message": "Database restored successfully"})))
+}
+
+#[derive(Deserialize)]
+pub struct GenerateQrCodeBody { pub data: String }
+
+pub async fn generate_qr_code(
+    Json(body): Json<GenerateQrCodeBody>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    use qrcode::QrCode;
+    use image::Luma;
+    let code = QrCode::new(body.data.as_bytes()).map_err(|e| crate::server::server_error(e))?;
+    let img = code.render::<Luma<u8>>().build();
+    let mut buf = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut buf, image::ImageFormat::Png).map_err(|e| crate::server::server_error(e))?;
+    let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.get_ref());
+    Ok(Json(json!({"qr": format!("data:image/png;base64,{}", b64)})))
+}
+
+#[derive(Deserialize)]
+pub struct CloneRoleBody { pub source_role_id: String, pub new_name: String, pub new_description: String }
+
+pub async fn clone_role(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Json(body): Json<CloneRoleBody>,
+) -> Result<Json<Role>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_users").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let row = sqlx::query("SELECT id, name, description, permissions, is_system, created_at FROM roles WHERE id=$1")
+        .bind(&body.source_role_id).fetch_optional(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?
+        .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Role not found"}))))?;
+    let source_permissions: String = row.get(3);
+    let new_id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    sqlx::query("INSERT INTO roles (id, name, description, permissions, is_system) VALUES ($1, $2, $3, $4, false)")
+        .bind(&new_id).bind(&body.new_name).bind(&body.new_description).bind(&source_permissions)
+        .execute(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(Role { id: new_id, name: body.new_name, description: body.new_description, permissions: source_permissions, is_system: false, created_at: now }))
+}
+
+#[derive(Deserialize)]
+pub struct CheckPermissionQuery { pub permission: String }
+
+pub async fn check_permission(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Query(params): Query<CheckPermissionQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let ok = validate::check_user_permission(&pool.pool, &user_id, &params.permission).await.map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(json!({"allowed": ok})))
+}

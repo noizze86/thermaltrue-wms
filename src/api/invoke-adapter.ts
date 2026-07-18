@@ -85,6 +85,8 @@ const ROUTES: Record<string, Route> = {
   delete_unit:         { method: "DELETE", path: (a) => `/api/units/${a.id}` },
   get_unit_conversions: { method: "GET", path: "/api/units/conversions" },
   create_unit_conversion: { method: "POST", path: "/api/units/conversions", body: true },
+  delete_unit_conversion: { method: "DELETE", path: (a) => `/api/units/conversions/${a.id}` },
+  convert_unit:          { method: "GET", path: "/api/units/convert" },
 
   // Suppliers
   get_suppliers:       { method: "GET", path: "/api/suppliers" },
@@ -238,10 +240,14 @@ const ROUTES: Record<string, Route> = {
   create_role:             { method: "POST", path: "/api/roles", body: true },
   update_role:             { method: "PUT", path: "/api/roles", body: true },
   delete_role:             { method: "DELETE", path: (a) => `/api/roles/${a.id}` },
+  clone_role:              { method: "POST", path: "/api/roles/clone", body: true },
+  check_permission:        { method: "GET", path: "/api/check-permission" },
 
   // App Config
   get_app_config:          { method: "GET", path: "/api/app-config" },
   set_app_config:          { method: "POST", path: "/api/app-config", body: true },
+  get_all_app_config:      { method: "GET", path: "/api/app-config/all" },
+  delete_app_config:       { method: "DELETE", path: (a) => `/api/app-config/${a.key}` },
 
   // Inventory Settings
   get_inventory_settings:  { method: "GET", path: "/api/inventory-settings" },
@@ -249,11 +255,17 @@ const ROUTES: Record<string, Route> = {
 
   // Audit Logs
   get_audit_logs:          { method: "GET", path: "/api/audit-logs" },
+  add_audit_log:           { method: "POST", path: "/api/audit-logs", body: true },
   get_audit_logs_filtered: { method: "GET", path: "/api/audit-logs/filtered" },
   count_audit_logs_filtered: { method: "GET", path: "/api/audit-logs/filtered/count" },
+  purge_old_audit_logs:    { method: "DELETE", path: "/api/audit-logs/purge" },
+  export_audit_csv_filtered: { method: "GET", path: "/api/audit-logs/export-csv" },
 
   // System
   get_db_stats:            { method: "GET", path: "/api/db-stats" },
+  backup_database:         { method: "POST", path: "/api/db/backup" },
+  restore_database:        { method: "POST", path: "/api/db/restore", body: true },
+  generate_qr_code:        { method: "POST", path: "/api/qr-generate", body: true },
 
   // Reports
   export_report_csv:       { method: "GET", path: "/api/reports/csv" },
@@ -273,6 +285,7 @@ const ROUTES: Record<string, Route> = {
   generate_receipt_pdf:    { method: "GET", path: "/api/reports/receipt-pdf" },
   generate_picking_list_pdf: { method: "GET", path: "/api/reports/picking-list-pdf" },
   generate_do_pdf:         { method: "GET", path: "/api/reports/do-pdf" },
+  generate_count_sheet_pdf:{ method: "GET", path: "/api/reports/count-sheet-pdf" },
   get_variance_root_cause: { method: "GET", path: (a) => `/api/reports/opname-variance/${a.opnameId}` },
 };
 

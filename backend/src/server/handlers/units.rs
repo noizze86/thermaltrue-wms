@@ -102,3 +102,41 @@ pub async fn create_conversion(
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
+
+// ── Type B gaps ──
+
+pub async fn delete_unit_conversion(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Path(id): Path<String>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    sqlx::query("DELETE FROM unit_conversions WHERE id=$1")
+        .bind(&id).execute(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+pub struct ConvertUnitQuery { pub from_unit_id: String, pub to_unit_id: String, pub quantity: f64 }
+
+pub async fn convert_unit(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Query(params): Query<ConvertUnitQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let direct: Option<f64> = sqlx::query_scalar("SELECT factor FROM unit_conversions WHERE from_unit_id=$1 AND to_unit_id=$2")
+        .bind(&params.from_unit_id).bind(&params.to_unit_id)
+        .fetch_optional(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let factor = match direct {
+        Some(f) => f,
+        None => sqlx::query_scalar("SELECT 1.0/factor FROM unit_conversions WHERE from_unit_id=$1 AND to_unit_id=$2")
+            .bind(&params.to_unit_id).bind(&params.from_unit_id)
+            .fetch_optional(&pool.pool).await
+            .map_err(|e| crate::server::server_error(e))?
+            .unwrap_or(1.0),
+    };
+    Ok(Json(json!({"result": params.quantity * factor})))
+}

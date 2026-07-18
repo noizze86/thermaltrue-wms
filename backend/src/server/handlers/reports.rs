@@ -409,9 +409,49 @@ pub async fn generate_do_pdf(
         cl.use_text(&"\u{2500}".repeat(100),9.0,Mm(20.0),Mm(y),&fm); y-=8.0;
         cl.use_text("No | SKU | Description | Qty | Unit",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
         for (i,(sk,nm,qt,un)) in items.iter().enumerate() { if y<35.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}",i+1,sk,nm,qt,un),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
-        y=30.0; cl.use_text("Dikirim oleh: _______________",10.0,Mm(20.0),Mm(y),&fr);
+        y=30.0;     cl.use_text("Dikirim oleh: _______________",10.0,Mm(20.0),Mm(y),&fr);
         cl.use_text("Diterima oleh: _______________",10.0,Mm(120.0),Mm(y),&fr); y-=12.0;
         cl.use_text(&format!("Page 1 | {} - Delivery Order",co),7.0,Mm(20.0),Mm(y),&fr);
+        Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
+    }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(json!({"pdf": b64})))
+}
+
+// ── Type B gaps ──
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CountSheetQuery { pub warehouse_id: String }
+
+pub async fn generate_count_sheet_pdf(
+    State(pool): State<Arc<DbPool>>,
+    Query(q): Query<CountSheetQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let company: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
+    let wh: String = sqlx::query_scalar("SELECT name FROM warehouses WHERE id=$1").bind(&q.warehouse_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.unwrap_or("Unknown".into());
+    let rows: Vec<(String,String,String,f64)> = sqlx::query("SELECT m.sku,m.name,COALESCE(r.rack_name,'-'),m.quantity FROM materials m LEFT JOIN racks r ON m.rack_id=r.id WHERE m.warehouse_id=$1 AND m.is_active=true ORDER BY m.name")
+        .bind(&q.warehouse_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3))).collect();
+    let b64 = tokio::task::spawn_blocking(move || -> Result<String,String> {
+        use printpdf::*;
+        let (doc,page1,layer1)=PdfDocument::new(&format!("{} - Count Sheet",company),Mm(210.0),Mm(297.0),"CountSheet");
+        let cl=doc.get_page(page1).get_layer(layer1);
+        let fb=doc.add_builtin_font(BuiltinFont::HelveticaBold).map_err(|e|e.to_string())?;
+        let fr=doc.add_builtin_font(BuiltinFont::Helvetica).map_err(|e|e.to_string())?;
+        let fm=doc.add_builtin_font(BuiltinFont::Courier).map_err(|e|e.to_string())?;
+        let mut y=275.0;
+        cl.use_text(&company,18.0,Mm(20.0),Mm(y),&fb); y-=8.0;
+        cl.use_text("COUNT SHEET",16.0,Mm(80.0),Mm(y),&fb); y-=10.0;
+        cl.use_text(&format!("Warehouse: {}",wh),10.0,Mm(20.0),Mm(y),&fr); y-=6.0;
+        cl.use_text(&format!("Date: {}",chrono::Local::now().format("%Y-%m-%d")),10.0,Mm(20.0),Mm(y),&fr); y-=6.0;
+        cl.use_text("Counter: _______________",10.0,Mm(20.0),Mm(y),&fr); y-=10.0;
+        cl.use_text(&"\u{2500}".repeat(100),9.0,Mm(20.0),Mm(y),&fm); y-=8.0;
+        cl.use_text("No | SKU | Material Name | Rack | System Qty | Physical Qty | Diff | Notes",8.0,Mm(20.0),Mm(y),&fb); y-=6.0;
+        let mut idx=1;
+        for (sk,nm,rk,qt) in &rows { if y<25.0{cl.use_text("...continued",8.0,Mm(20.0),Mm(15.0),&fr);break;}
+            cl.use_text(&format!("{}|{}|{}|{}|{}|________|________|________",idx,sk,nm,rk,qt),7.0,Mm(20.0),Mm(y),&fr); y-=5.0; idx+=1; }
+        y=25.0; cl.use_text("Supervisor: _______________",10.0,Mm(20.0),Mm(y),&fr);
+        cl.use_text("Counter: _______________",10.0,Mm(120.0),Mm(y),&fr);
+        cl.use_text(&format!("Page 1 | {} - Count Sheet",company),7.0,Mm(20.0),Mm(10.0),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
     }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({"pdf": b64})))
