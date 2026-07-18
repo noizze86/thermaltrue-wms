@@ -34,6 +34,11 @@ pub async fn export_csv(
             let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<String,_>(4)]).map_err(|e| crate::server::server_error(e))?; }
         }
+        "stock" => {
+            wtr.write_record(["SKU","Name","Warehouse","Quantity","Min Stock"]).map_err(|e| crate::server::server_error(e))?;
+            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY w.name,m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<f64,_>(4).to_string()]).map_err(|e| crate::server::server_error(e))?; }
+        }
         _ => return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Unknown report type"})))),
     }
     let data = wtr.into_inner().map_err(|e| crate::server::server_error(e))?;
