@@ -5,11 +5,11 @@ function getApiBase(): string {
 }
 
 function isTauri(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window && !import.meta.env.VITE_FORCE_HTTP;
+  return typeof window !== "undefined" && ("__TAURI__" in window || "__TAURI_INTERNALS__" in window) && !import.meta.env.VITE_FORCE_HTTP;
 }
 
 function isInWebView(): boolean {
-  return typeof window !== "undefined" && "__TAURI__" in window;
+  return typeof window !== "undefined" && ("__TAURI__" in window || "__TAURI_INTERNALS__" in window);
 }
 
 // Tauri 2 blocks native fetch() from webview — use @tauri-apps/plugin-http instead
@@ -350,9 +350,19 @@ export interface ServerStatus {
 }
 
 export async function ensureServer(): Promise<ServerStatus> {
-  if (isTauri()) {
-    const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
-    return tauriInvoke<ServerStatus>("ensure_server_running");
+  // Retry up to 3 times with delay to handle async __TAURI__ injection
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (isTauri()) {
+      try {
+        const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
+        return await tauriInvoke<ServerStatus>("ensure_server_running");
+      } catch {
+        // invoke failed, retry after delay in case Tauri APIs aren't ready yet
+        if (attempt < 2) await new Promise(r => setTimeout(r, 500));
+        continue;
+      }
+    }
+    break;
   }
   // HTTP mode: just check health directly
   const base = getApiBase();
