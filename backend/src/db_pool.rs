@@ -103,4 +103,10 @@ impl DbPool {
             .map(|claims| claims.user_id)
             .map_err(|_| AppError::Auth("Invalid or expired token".into()))
     }
+
+    pub fn cleanup_expired_sessions(&self) {
+        let mut attempts = self.login_attempts.lock().unwrap();
+        let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(3600);
+        attempts.retain(|_, (_, time)| *time > cutoff);
+    }
 }

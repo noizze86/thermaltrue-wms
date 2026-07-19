@@ -9,7 +9,16 @@
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:e2e": "cd tests && npm install && npm run test:all",
+    "test:e2e:dashboard": "cd tests && npm run test:dashboard",
+    "test:e2e:master-data": "cd tests && npm run test:master-data",
+    "test:e2e:transactions": "cd tests && npm run test:transactions",
+    "test:e2e:warehouse": "cd tests && npm run test:warehouse",
+    "test:e2e:analysis": "cd tests && npm run test:analysis",
+    "test:e2e:reports": "cd tests && npm run test:reports",
+    "test:e2e:settings": "cd tests && npm run test:settings",
+    "test:e2e:negative": "cd tests && npm run test:negative"
   },
   "dependencies": {
     "@radix-ui/react-avatar": "^1.2.0",

@@ -1,0 +1,22 @@
+{
+  "name": "thermaltrue-e2e-tests",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "npx tsx runner.ts",
+    "test:dashboard": "npx tsx runner.ts dashboard",
+    "test:master-data": "npx tsx runner.ts master-data",
+    "test:transactions": "npx tsx runner.ts transactions",
+    "test:reports": "npx tsx runner.ts reports",
+    "test:warehouse": "npx tsx runner.ts warehouse",
+    "test:analysis": "npx tsx runner.ts analysis",
+    "test:settings": "npx tsx runner.ts settings",
+    "test:negative": "npx tsx runner.ts negative",
+    "test:all": "npx tsx runner.ts"
+  },
+  "dependencies": {
+    "@hypothesi/tauri-mcp-server": "latest",
+    "tsx": "^4.19.0"
+  }
+}

@@ -1,0 +1,108 @@
+export const testData = {
+  material: {
+    sku: "TEST-SKU-001",
+    name: "Test Material E2E",
+    category: "Raw Materials",
+    unit: "PCS",
+    supplier: "Test Supplier",
+    warehouse: "Main Warehouse",
+    quantity: 100,
+    price: 50000,
+    minStock: 10,
+    maxStock: 200,
+  },
+  material2: {
+    sku: "TEST-SKU-002",
+    name: "Test Material E2E 2",
+    quantity: 50,
+    price: 75000,
+  },
+  material3: {
+    sku: "TEST-SKU-003",
+    name: "Test Material E2E 3",
+    quantity: 25,
+    price: 100000,
+  },
+  warehouse: {
+    name: "Test Warehouse E2E",
+    code: "TW-E2E",
+    location: "Test Location",
+    capacity: 5000,
+  },
+  warehouse2: {
+    name: "Test Warehouse E2E 2",
+    code: "TW-E2E-2",
+    location: "Test Location 2",
+    capacity: 3000,
+  },
+  zone: {
+    name: "Test Zone A",
+    code: "TZ-A",
+    capacity: 1000,
+  },
+  rack: {
+    name: "RACK-E2E-01",
+    area: "A",
+    binLocation: "A-01-01",
+    maxCapacity: 500,
+  },
+  category: {
+    name: "Test Category E2E",
+    description: "Category for E2E testing",
+  },
+  unit: {
+    name: "Test Unit",
+    symbol: "TU",
+    category: "Quantity",
+  },
+  unitConversion: {
+    factor: 1000,
+  },
+  supplier: {
+    name: "Test Supplier E2E",
+    contact: "021-12345678",
+    phone: "08123456789",
+    contactPerson: "John Doe",
+    picPhone: "08123456780",
+    picEmail: "john@test.com",
+    email: "supplier@test.com",
+    address: "Test Address",
+  },
+  user: {
+    username: `tester_${Date.now()}`,
+    password: "test123",
+    fullName: "E2E Tester",
+    email: "tester@test.com",
+    role: "operator",
+  },
+  role: {
+    name: "Test Role E2E",
+    description: "Role for E2E testing",
+  },
+  transaction: {
+    poNumber: "PO-E2E-001",
+    invoiceNo: "INV-E2E-001",
+    reference: "REF-E2E-001",
+    destination: "Customer E2E",
+    notes: "E2E test transaction",
+  },
+  labelTemplate: {
+    name: "Test Template E2E",
+    layoutStyle: "standard",
+    widthMm: 100,
+    heightMm: 70,
+  },
+  appConfig: {
+    key: "TEST_CONFIG_KEY",
+    value: "test_value_123",
+  },
+  budget: {
+    period: new Date().toISOString().slice(0, 7),
+    amount: 5000000,
+  },
+  abcWeights: {
+    valueWeight: 0.5,
+    turnoverWeight: 0.3,
+    recencyWeight: 0.2,
+  },
+};
