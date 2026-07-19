@@ -716,5 +716,5 @@ pub async fn generate_tx_number(
     let pattern = format!("{}-{}%", prefix, yyyymm);
     let count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*)+1 FROM transactions WHERE transaction_number LIKE $1")
         .bind(&pattern).fetch_one(&pool.pool).await.unwrap_or(1);
-    Ok(Json(json!({"number": format!("{}-{}-{:06}", prefix, yyyymm, count)})))
+    Ok(Json(json!(format!("{}-{}-{:06}", prefix, yyyymm, count))))
 }
