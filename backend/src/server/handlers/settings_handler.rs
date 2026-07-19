@@ -357,7 +357,7 @@ pub async fn purge_old_audit_logs(
         .bind(params.months)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"deleted": result.rows_affected() as i64})))
+    Ok(Json(json!(result.rows_affected() as i64)))
 }
 
 #[derive(Deserialize)]
@@ -390,7 +390,7 @@ pub async fn export_audit_csv_filtered(
         let created: String = row.get(7);
         csv.push_str(&format!("{},{},{},{},{},{},{},{}\n", id, uid.unwrap_or_default(), uname, action, entity, eid.unwrap_or_default(), details.replace(',',";"), created));
     }
-    Ok(Json(json!({"csv": csv})))
+    Ok(Json(json!(csv)))
 }
 
 pub async fn get_all_app_config(
@@ -427,7 +427,7 @@ pub async fn backup_database(
     if !output.status.success() {
         return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("pg_dump: {}", String::from_utf8_lossy(&output.stderr))}))));
     }
-    Ok(Json(json!({"path": backup_path})))
+    Ok(Json(json!(backup_path)))
 }
 
 #[derive(Deserialize)]
@@ -445,7 +445,7 @@ pub async fn restore_database(
     if !output.status.success() {
         return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("psql restore: {}", String::from_utf8_lossy(&output.stderr))}))));
     }
-    Ok(Json(json!({"message": "Database restored successfully"})))
+    Ok(Json(json!("Database restored successfully")))
 }
 
 #[derive(Deserialize)]
@@ -461,7 +461,7 @@ pub async fn generate_qr_code(
     let mut buf = std::io::Cursor::new(Vec::new());
     img.write_to(&mut buf, image::ImageFormat::Png).map_err(|e| crate::server::server_error(e))?;
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, buf.get_ref());
-    Ok(Json(json!({"qr": format!("data:image/png;base64,{}", b64)})))
+    Ok(Json(json!(format!("data:image/png;base64,{}", b64))))
 }
 
 #[derive(Deserialize)]
@@ -496,5 +496,5 @@ pub async fn check_permission(
     Query(params): Query<CheckPermissionQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let ok = validate::check_user_permission(&pool.pool, &user_id, &params.permission).await.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"allowed": ok})))
+    Ok(Json(json!(ok)))
 }

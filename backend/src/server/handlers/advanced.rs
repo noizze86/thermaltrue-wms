@@ -231,5 +231,5 @@ pub async fn generate_qr_zip(
         .map_err(|e| crate::server::server_error(e))?;
 
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &result);
-    Ok(Json(json!({"zipBase64": format!("data:application/zip;base64,{}", b64)})))
+    Ok(Json(json!(format!("data:application/zip;base64,{}", b64))))
 }

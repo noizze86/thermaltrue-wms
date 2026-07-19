@@ -138,5 +138,5 @@ pub async fn convert_unit(
             .map_err(|e| crate::server::server_error(e))?
             .unwrap_or(1.0),
     };
-    Ok(Json(json!({"result": params.quantity * factor})))
+    Ok(Json(json!(params.quantity * factor)))
 }

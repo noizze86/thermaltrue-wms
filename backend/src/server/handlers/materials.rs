@@ -146,7 +146,7 @@ pub async fn bulk_delete(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let ids: Vec<String> = body.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     for id in &ids { sqlx::query("DELETE FROM materials WHERE id=$1").bind(id).execute(&pool.pool).await.ok(); }
-    Ok(Json(json!({"deleted": ids.len()})))
+    Ok(Json(json!(format!("Deleted {} material(s)", ids.len()))))
 }
 
 pub async fn bulk_update(
@@ -285,7 +285,7 @@ pub async fn export_stock_xlsx(
     }
     let data = workbook.save_to_buffer().map_err(|e| crate::server::server_error(e))?;
     let b64 = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &data);
-    Ok(Json(json!({"data": b64})))
+    Ok(Json(json!(b64)))
 }
 
 pub async fn generate_zpl(
@@ -380,7 +380,7 @@ pub async fn generate_zpl(
         }
     }
     zpl.push_str("^XZ");
-    Ok(Json(json!({"zpl": zpl})))
+    Ok(Json(json!(zpl)))
 }
 
 pub async fn get_stock_timeline(

@@ -95,7 +95,7 @@ pub async fn transfer_bulk(
     }
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     let msg = if errors.is_empty() { format!("{} material(s) transferred", tx_count) } else { format!("{} transferred, {} errors: {}", tx_count, errors.len(), errors.join("\n")) };
-    Ok(Json(json!({"message": msg})))
+    Ok(Json(json!(msg)))
 }
 
 pub async fn batch_transfer_rack(
@@ -134,7 +134,7 @@ pub async fn batch_transfer_rack(
         tx_count += 1;
     }
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"message": format!("Transferred {} material(s)", tx_count)})))
+    Ok(Json(json!(format!("Transferred {} material(s)", tx_count))))
 }
 
 pub async fn get_transfer_orders(

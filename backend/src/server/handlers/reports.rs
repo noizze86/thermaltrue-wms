@@ -42,7 +42,7 @@ pub async fn export_csv(
         _ => return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Unknown report type"})))),
     }
     let data = wtr.into_inner().map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"csv": String::from_utf8(data).unwrap_or_default()})))
+    Ok(Json(json!(String::from_utf8(data).unwrap_or_default())))
 }
 
 pub async fn export_pdf(
@@ -128,7 +128,7 @@ pub async fn export_pdf(
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes))
     }).await.map_err(|e| crate::server::server_error(e))?
     .map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"pdf": b64})))
+    Ok(Json(json!(b64)))
 }
 
 pub async fn approve_opname(
@@ -186,7 +186,7 @@ pub async fn export_opname_xlsx(
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &bytes))
     }).await.map_err(|e| crate::server::server_error(e))?
     .map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"xlsx": b64})))
+    Ok(Json(json!(b64)))
 }
 
 pub async fn get_schedules(
@@ -250,7 +250,7 @@ pub async fn run_schedule(
     sqlx::query("INSERT INTO audit_log (id,user_id,action,entity,entity_id,details) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&user_id).bind("run_schedule").bind("report_schedule").bind(&id).bind(&lines[..std::cmp::min(500,lines.len())])
         .execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"message": format!("Report generated at {} ({} lines)",now_str,lines.lines().count())})))
+    Ok(Json(json!(format!("Report generated at {} ({} lines)",now_str,lines.lines().count()))))
 }
 
 pub async fn multi_warehouse_comparison(
@@ -348,7 +348,7 @@ pub async fn generate_receipt_pdf(
         cl.use_text(&format!("Page 1 | {} - Receipt",co),7.0,Mm(20.0),Mm(10.0),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
     }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"pdf": b64})))
+    Ok(Json(json!(b64)))
 }
 
 pub async fn generate_picking_list_pdf(
@@ -375,7 +375,7 @@ pub async fn generate_picking_list_pdf(
         cl.use_text(&format!("Page 1 | {} - Picking List",co),7.0,Mm(20.0),Mm(10.0),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
     }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"pdf": b64})))
+    Ok(Json(json!(b64)))
 }
 
 pub async fn generate_do_pdf(
@@ -414,7 +414,7 @@ pub async fn generate_do_pdf(
         cl.use_text(&format!("Page 1 | {} - Delivery Order",co),7.0,Mm(20.0),Mm(y),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
     }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"pdf": b64})))
+    Ok(Json(json!(b64)))
 }
 
 // ── Type B gaps ──
@@ -454,5 +454,5 @@ pub async fn generate_count_sheet_pdf(
         cl.use_text(&format!("Page 1 | {} - Count Sheet",company),7.0,Mm(20.0),Mm(10.0),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
     }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"pdf": b64})))
+    Ok(Json(json!(b64)))
 }

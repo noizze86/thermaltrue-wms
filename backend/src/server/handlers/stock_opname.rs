@@ -236,5 +236,5 @@ pub async fn auto_generate(
         created += 1;
     }
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"message": format!("Created {} opname(s) from cycle schedules", created)})))
+    Ok(Json(json!(format!("Created {} opname(s) from cycle schedules", created))))
 }
