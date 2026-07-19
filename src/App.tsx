@@ -68,12 +68,38 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function ServerCheck({ children }: { children: React.ReactNode }) {
   const [check, setCheck] = useState<ServerStatus | null>(null)
+  const [diag, setDiag] = useState<string[]>([])
+  const addDiag = (msg: string) => {
+    setDiag(prev => [...prev, msg])
+    console.log("[DIAG]", msg)
+  }
 
   useEffect(() => {
     let cancelled = false
     const run = async () => {
-      const result = await ensureServer()
-      if (!cancelled) setCheck(result)
+      addDiag("ServerCheck mounted")
+      addDiag(`window.__TAURI__: ${"__TAURI__" in window}`)
+      addDiag(`window.__TAURI_INTERNALS__: ${"__TAURI_INTERNALS__" in window}`)
+      addDiag(`typeof window.__TAURI_INTERNALS__: ${typeof (window as any).__TAURI_INTERNALS__}`)
+      try {
+        const mod = await import("@tauri-apps/api/core")
+        addDiag(`core module loaded, typeof invoke: ${typeof mod.invoke}`)
+        try {
+          const result = await mod.invoke<ServerStatus>("ensure_server_running")
+          addDiag(`invoke OK: ${result.status} - ${result.message}`)
+          if (!cancelled) setCheck(result)
+        } catch (e2) {
+          addDiag(`invoke threw: ${e2}`)
+          // fallback via ensureServer
+          const result = await ensureServer()
+          if (!cancelled) setCheck(result)
+        }
+      } catch (e1) {
+        addDiag(`core import threw: ${e1}`)
+        // try original ensureServer
+        const result = await ensureServer()
+        if (!cancelled) setCheck(result)
+      }
     }
     run()
     return () => { cancelled = true }
@@ -85,6 +111,9 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
         <div style={{ width: 40, height: 40, border: "4px solid #e5e7eb", borderTopColor: "#2563eb", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
         <p style={{ color: "#6b7280", fontSize: 14 }}>Menghubungkan ke server...</p>
         <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
+        <pre style={{ fontSize: 10, color: "#9ca3af", maxWidth: 500, whiteSpace: "pre-wrap", textAlign: "left", marginTop: 16 }}>
+          {diag.join("\n")}
+        </pre>
       </div>
     )
   }

@@ -4,22 +4,17 @@ function getApiBase(): string {
   return localStorage.getItem(STORAGE_KEY) || import.meta.env.VITE_API_URL || "http://localhost:3000";
 }
 
-function isTauri(): boolean {
-  return typeof window !== "undefined" && ("__TAURI__" in window || "__TAURI_INTERNALS__" in window) && !import.meta.env.VITE_FORCE_HTTP;
-}
-
-function isInWebView(): boolean {
-  return typeof window !== "undefined" && ("__TAURI__" in window || "__TAURI_INTERNALS__" in window);
-}
-
 // Tauri 2 blocks native fetch() from webview — use @tauri-apps/plugin-http instead
 let tauriFetch: typeof globalThis.fetch | null = null;
 async function resolveFetch(): Promise<typeof globalThis.fetch> {
-  if (!isInWebView()) return globalThis.fetch;
   if (tauriFetch) return tauriFetch;
-  const mod = await import("@tauri-apps/plugin-http");
-  tauriFetch = mod.fetch;
-  return tauriFetch;
+  try {
+    const mod = await import("@tauri-apps/plugin-http");
+    tauriFetch = mod.fetch;
+    return tauriFetch;
+  } catch {
+    return globalThis.fetch;
+  }
 }
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -350,19 +345,13 @@ export interface ServerStatus {
 }
 
 export async function ensureServer(): Promise<ServerStatus> {
-  // Retry up to 3 times with delay to handle async __TAURI__ injection
-  for (let attempt = 0; attempt < 3; attempt++) {
-    if (isTauri()) {
-      try {
-        const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
-        return await tauriInvoke<ServerStatus>("ensure_server_running");
-      } catch {
-        // invoke failed, retry after delay in case Tauri APIs aren't ready yet
-        if (attempt < 2) await new Promise(r => setTimeout(r, 500));
-        continue;
-      }
-    }
-    break;
+  // Always try Tauri invoke first — no runtime detection needed
+  try {
+    const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
+    const result = await tauriInvoke<ServerStatus>("ensure_server_running");
+    return result;
+  } catch {
+    // Not in Tauri, or Tauri not ready — use HTTP mode
   }
   // HTTP mode: just check health directly
   const base = getApiBase();
@@ -379,9 +368,10 @@ export async function ensureServer(): Promise<ServerStatus> {
 }
 
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  if (isTauri()) {
+  try {
     const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
-    return tauriInvoke<T>(cmd, args);
+    return await tauriInvoke<T>(cmd, args);
+  } catch {
+    return httpCall<T>(cmd, args || {});
   }
-  return httpCall<T>(cmd, args || {});
 }
