@@ -323,6 +323,10 @@ export default function DashboardPage() {
     }
   }
 
+  if (isLoading) return <LoadingState />
+  if (isError) return <ErrorState message={error ? String(error) : "Failed to load dashboard"} onRetry={refetch} />
+  if (!kpi) return <LoadingState />
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
