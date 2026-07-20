@@ -1,6 +1,17 @@
+import { detectApiUrl, addEntry } from "./lan-detector";
+
 const STORAGE_KEY = "wms_api_url";
 
+let detectedBaseUrl: string | null = null;
+
+export function setDetectedBaseUrl(url: string | null) {
+  detectedBaseUrl = url;
+  if (url) localStorage.setItem(STORAGE_KEY, url);
+  else localStorage.removeItem(STORAGE_KEY);
+}
+
 function getApiBase(): string {
+  if (detectedBaseUrl) return detectedBaseUrl;
   return localStorage.getItem(STORAGE_KEY) || import.meta.env.VITE_API_URL || "http://localhost:3000";
 }
 
@@ -345,33 +356,57 @@ export interface ServerStatus {
 }
 
 export async function ensureServer(): Promise<ServerStatus> {
-  // Always try Tauri invoke first — no runtime detection needed
   try {
-    const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
-    const result = await tauriInvoke<ServerStatus>("ensure_server_running");
+    const mod = await import("@tauri-apps/api/core");
+    const result = await mod.invoke<ServerStatus>("ensure_server_running");
     return result;
-  } catch {
-    // Not in Tauri, or Tauri not ready — use HTTP mode
+  } catch (e) {
+    console.warn("[ensureServer] Tauri IPC unavailable or failed, trying HTTP:", e);
   }
-  // HTTP mode: just check health directly
-  const base = getApiBase();
   const doFetch = await resolveFetch();
-  try {
-    const res = await doFetch(`${base}/api/health`, { signal: AbortSignal.timeout(5000) });
-    if (res.ok) {
-      return { status: "running", message: "Server is reachable." };
+
+  async function tryHealth(url: string, timeoutMs = 5000): Promise<boolean> {
+    try {
+      const res = await doFetch(`${url}/api/health`, { signal: AbortSignal.timeout(timeoutMs) });
+      return res.ok;
+    } catch {
+      return false;
     }
-    return { status: "unreachable", message: `Server returned ${res.status}` };
-  } catch {
-    return { status: "unreachable", message: `Cannot connect to ${base}. Ensure the server is running.` };
   }
+
+  // 1. Try configured/localhost URL first
+  const base = getApiBase();
+  if (await tryHealth(base)) {
+    addEntry(base);
+    setDetectedBaseUrl(base);
+    return { status: "running", message: "Server is reachable." };
+  }
+
+  // 2. Try LAN detection (cached + scan)
+  const lanUrl = await detectApiUrl();
+  if (lanUrl) {
+    setDetectedBaseUrl(lanUrl);
+    return { status: "running", message: `Server is reachable at ${lanUrl}.` };
+  }
+
+  return {
+    status: "unreachable",
+    message: `Cannot connect to ${base}. Start server.exe or use a different URL.`,
+  };
 }
 
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
+  let tauriAvailable = false;
   try {
-    const { invoke: tauriInvoke } = await import("@tauri-apps/api/core");
-    return await tauriInvoke<T>(cmd, args);
-  } catch {
+    const mod = await import("@tauri-apps/api/core");
+    tauriAvailable = true;
+    return await mod.invoke<T>(cmd, args);
+  } catch (e) {
+    if (tauriAvailable) {
+      console.error(`[invoke] Tauri IPC error for ${cmd}:`, e);
+      throw e;
+    }
+    console.warn(`[invoke] Tauri not available, falling back to HTTP for ${cmd}:`, e);
     return httpCall<T>(cmd, args || {});
   }
 }

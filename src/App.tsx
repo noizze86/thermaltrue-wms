@@ -6,7 +6,8 @@ import { ErrorBoundary } from "./components/ErrorBoundary"
 import { Toaster } from "./components/Toaster"
 import { toast } from "./hooks/use-toast"
 import { AppError } from "./api"
-import { ensureServer, type ServerStatus } from "./api/invoke-adapter"
+import { ensureServer, setDetectedBaseUrl, type ServerStatus } from "./api/invoke-adapter"
+import { getDetectedUrl } from "./api/lan-detector"
 import DashboardLayout from "./layouts/DashboardLayout"
 import LoginPage from "./pages/LoginPage"
 import DashboardPage from "./pages/dashboard/DashboardPage"
@@ -76,32 +77,14 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
-    const run = async () => {
+    ;(async () => {
       addDiag("ServerCheck mounted")
       addDiag(`window.__TAURI__: ${"__TAURI__" in window}`)
       addDiag(`window.__TAURI_INTERNALS__: ${"__TAURI_INTERNALS__" in window}`)
-      addDiag(`typeof window.__TAURI_INTERNALS__: ${typeof (window as any).__TAURI_INTERNALS__}`)
-      try {
-        const mod = await import("@tauri-apps/api/core")
-        addDiag(`core module loaded, typeof invoke: ${typeof mod.invoke}`)
-        try {
-          const result = await mod.invoke<ServerStatus>("ensure_server_running")
-          addDiag(`invoke OK: ${result.status} - ${result.message}`)
-          if (!cancelled) setCheck(result)
-        } catch (e2) {
-          addDiag(`invoke threw: ${e2}`)
-          // fallback via ensureServer
-          const result = await ensureServer()
-          if (!cancelled) setCheck(result)
-        }
-      } catch (e1) {
-        addDiag(`core import threw: ${e1}`)
-        // try original ensureServer
-        const result = await ensureServer()
-        if (!cancelled) setCheck(result)
-      }
-    }
-    run()
+      const result = await ensureServer()
+      addDiag(`result: ${result.status} - ${result.message}`)
+      if (!cancelled) setCheck(result)
+    })()
     return () => { cancelled = true }
   }, [])
 
@@ -119,19 +102,7 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
   }
 
   if (check.status === "running" || check.status === "started") {
-    return <>{children}</>
-  }
-
-  if (check.status === "not_installed") {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", gap: 12, padding: 24, textAlign: "center" }}>
-        <h2 style={{ fontSize: 20, fontWeight: 600, color: "#dc2626" }}>Server Belum Terinstal</h2>
-        <p style={{ color: "#6b7280", maxWidth: 400 }}>{check.message}</p>
-        <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-          <button onClick={() => window.location.reload()} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Coba Lagi</button>
-        </div>
-      </div>
-    )
+    return <><LanToastDetector />{children}</>
   }
 
   return (
@@ -140,10 +111,23 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
       <p style={{ color: "#6b7280", maxWidth: 400 }}>{check.message}</p>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
         <button onClick={() => window.location.reload()} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Coba Lagi</button>
-        <button onClick={() => { const u = prompt("Masukkan URL server:", localStorage.getItem("wms_api_url") || "http://localhost:3000"); if (u) { localStorage.setItem("wms_api_url", u); window.location.reload() } }} style={{ padding: "8px 16px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Ubah URL</button>
+        <button onClick={() => { const u = prompt("Masukkan URL server:", getDetectedUrl() || "http://localhost:3000"); if (u) { setDetectedBaseUrl(u); window.location.reload() } }} style={{ padding: "8px 16px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Ubah URL</button>
       </div>
     </div>
   )
+}
+
+function LanToastDetector() {
+  const [notified, setNotified] = useState(false);
+  useEffect(() => {
+    if (notified) return;
+    const url = getDetectedUrl();
+    if (url) {
+      toast({ title: "Terhubung ke server", description: `API: ${url}` });
+    }
+    setNotified(true);
+  }, [notified]);
+  return null;
 }
 
 export default function App() {

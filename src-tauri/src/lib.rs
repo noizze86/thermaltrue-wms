@@ -3,6 +3,7 @@ use backend::commands;
 use tauri::Manager;
 use serde::Serialize;
 use std::io::Write;
+use std::time::Duration;
 
 fn startup_log(msg: &str) {
     eprintln!("{}", msg);
@@ -66,22 +67,31 @@ async fn check_health(timeout_secs: u64) -> bool {
 
 #[tauri::command]
 async fn ensure_server_running() -> Result<ServerStatus, String> {
+    startup_log("ensure_server_running ENTERED");
     #[cfg(windows)]
     {
+        startup_log("ensure_server_running: cfg(windows) active, running sc query ThermaltrueServer...");
         let output = std::process::Command::new("sc")
             .args(["query", "ThermaltrueServer"])
             .output()
-            .map_err(|e| format!("Failed to run sc query: {}", e))?;
+            .map_err(|e| {
+                let msg = format!("Failed to run sc query: {}", e);
+                startup_log(&msg);
+                msg
+            })?;
         let stdout = String::from_utf8_lossy(&output.stdout);
+        startup_log(&format!("ensure_server_running: sc query result: {}", stdout.lines().next().unwrap_or("(empty)")));
 
         if stdout.contains("1060") || stdout.contains("FAILED") || stdout.contains("not exist") {
-            // Service not installed — try direct HTTP health check as fallback
+            startup_log("ensure_server_running: service not installed, checking HTTP health...");
             if check_health(5).await {
+                startup_log("ensure_server_running: HTTP health check OK");
                 return Ok(ServerStatus {
                     status: "running".into(),
                     message: "Server is reachable via HTTP.".into(),
                 });
             }
+            startup_log("ensure_server_running: HTTP health check FAILED after 5s");
             return Ok(ServerStatus {
                 status: "not_installed".into(),
                 message: "Server service 'ThermaltrueServer' is not installed. Run 'server.exe install' as Administrator first.".into(),
@@ -89,12 +99,15 @@ async fn ensure_server_running() -> Result<ServerStatus, String> {
         }
 
         if stdout.contains("RUNNING") || stdout.contains("STOP_PENDING") {
+            startup_log("ensure_server_running: service found, checking HTTP health...");
             if check_health(5).await {
+                startup_log("ensure_server_running: HTTP health OK");
                 return Ok(ServerStatus {
                     status: "running".into(),
                     message: "Server is running.".into(),
                 });
             }
+            startup_log("ensure_server_running: health check timed out");
             return Ok(ServerStatus {
                 status: "timeout".into(),
                 message: "Server service found but health check timed out.".into(),
@@ -145,6 +158,100 @@ async fn ensure_server_running() -> Result<ServerStatus, String> {
             })
         }
     }
+}
+
+#[tauri::command]
+async fn get_detected_api_url(ports: Option<Vec<u16>>) -> Result<Option<String>, String> {
+    let ports = ports.unwrap_or_else(|| vec![3000, 3001, 3002, 4173, 5173, 5000, 8000, 8080]);
+    let ports_str: Vec<String> = ports.iter().map(u16::to_string).collect();
+    startup_log(&format!("get_detected_api_url: scanning ports {}", ports_str.join(",")));
+
+    // 1. Localhost first
+    for port in &ports {
+        let url = format!("http://localhost:{}", port);
+        if probe_url(&url).await {
+            startup_log(&format!("get_detected_api_url: FOUND localhost:{}", port));
+            return Ok(Some(url));
+        }
+    }
+
+    // 2. Scan non-loopback interfaces
+    let mut interfaces = if_addrs::get_if_addrs().map_err(|e| format!("Failed to list interfaces: {}", e))?;
+    interfaces.retain(|iface| {
+        let ip = iface.ip();
+        if ip.is_loopback() { return false; }
+        if let std::net::IpAddr::V4(v4) = ip {
+            if v4.is_link_local() { return false; }
+            let o = v4.octets();
+            if o[0] == 172 && o[1] >= 16 && o[1] <= 31 { return false; }
+        }
+        true
+    });
+    interfaces.sort_by_key(|iface| match iface.ip() {
+        std::net::IpAddr::V4(v4) => match v4.octets() {
+            [192, 168, ..] => 0,
+            [10, ..] => 1,
+            [172, ..] => 2,
+            _ => 3,
+        },
+        std::net::IpAddr::V6(_) => 4,
+    });
+
+    for iface in &interfaces {
+        for port in &ports {
+            let url = format!("http://{}:{}", iface.ip(), port);
+            startup_log(&format!("get_detected_api_url: probing {}", &url));
+            if probe_url(&url).await {
+                startup_log(&format!("get_detected_api_url: FOUND at {}", &url));
+                return Ok(Some(url));
+            }
+        }
+    }
+
+    startup_log("get_detected_api_url: no server found on any interface");
+    Ok(None)
+}
+
+async fn probe_url(url: &str) -> bool {
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(2))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let health_url = format!("{}/api/health", url.trim_end_matches('/'));
+    match client.get(&health_url).send().await {
+        Ok(resp) => resp.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+#[tauri::command]
+async fn open_in_browser(url: String) -> Result<(), String> {
+    #[cfg(windows)]
+    {
+        std::process::Command::new("cmd")
+            .args(["/c", "start", &url])
+            .spawn()
+            .map_err(|e| format!("Failed to open browser: {}", e))?;
+    }
+    #[cfg(target_os = "macos")]
+    {
+        std::process::Command::new("open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open browser: {}", e))?;
+    }
+    #[cfg(target_os = "linux")]
+    {
+        std::process::Command::new("xdg-open")
+            .arg(&url)
+            .spawn()
+            .map_err(|e| format!("Failed to open browser: {}", e))?;
+    }
+    startup_log(&format!("open_in_browser: {}", url));
+    Ok(())
 }
 
 fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
@@ -390,6 +497,8 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_label_template,
             commands::save_label_template,
             commands::delete_label_template,
+            get_detected_api_url,
+            open_in_browser,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| {

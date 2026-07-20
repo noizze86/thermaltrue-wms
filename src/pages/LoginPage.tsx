@@ -36,7 +36,7 @@ export default function LoginPage() {
         navigate("/dashboard")
       }
     } catch (err) {
-      setError(String(err))
+      setError((err as Record<string, unknown>)?.message as string || String(err))
     } finally {
       setLoading(false)
     }
