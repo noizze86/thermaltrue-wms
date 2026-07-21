@@ -76,8 +76,18 @@ jobs:
           fi
       - name: Build frontend
         run: npm ci && npm run build
-      - name: Import Windows certificate
+      - name: Check Windows certificate
         if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrEmpty($env:WINDOWS_CERTIFICATE)) {
+            Write-Host "::warning::WINDOWS_CERTIFICATE secret not set. Windows installer will be unsigned."
+          } else {
+            Write-Host "WINDOWS_CERTIFICATE secret found. Will sign the installer."
+          }
+
+      - name: Import Windows certificate
+        if: matrix.os == 'windows-latest' && env.WINDOWS_CERTIFICATE != ''
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Path certificate -Force
