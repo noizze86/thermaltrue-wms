@@ -159,6 +159,22 @@ fn ensure_env() {
     ensure_jwt_secret();
 }
 
+fn is_production() -> bool {
+    let mode = std::env::var("APP_MODE")
+        .or_else(|_| std::env::var("NODE_ENV"))
+        .unwrap_or_default();
+    mode.eq_ignore_ascii_case("production")
+}
+
+fn get_local_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:53").ok()?;
+    let local = socket.local_addr().ok()?;
+    Some(local.ip().to_string())
+}
+
+
+
 async fn init_db() -> DbPool {
     ensure_env();
     let url = get_database_url();
@@ -172,9 +188,22 @@ async fn init_db() -> DbPool {
 async fn serve(pool: DbPool) {
     spawn_backup_scheduler();
     let app = create_router(pool);
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".into());
-    let addr = format!("0.0.0.0:{}", port);
-    log::info!("Server listening on http://{}", addr);
+
+    let prod = is_production();
+    let host = if prod { "0.0.0.0" } else { "127.0.0.1" };
+    let port = std::env::var("PORT").unwrap_or_else(|_| if prod { "8000" } else { "3000" }.into());
+    let addr = format!("{}:{}", host, port);
+
+    log::info!("┌─────────────────────────────────────┐");
+    log::info!("│ Thermaltrue WMS API Server          │");
+    log::info!("│ Mode:    {}", format_args!("{:<28}", if prod { "PRODUCTION" } else { "DEVELOPMENT" }));
+    log::info!("│ Bind:    {:<28}", addr);
+    if prod {
+        if let Some(local) = get_local_ip() {
+            log::info!("│ Access:  http://{}:{:<21}", local, port);
+        }
+    }
+    log::info!("└─────────────────────────────────────┘");
 
     let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
         log::error!("Cannot bind to {}: {}", addr, e);

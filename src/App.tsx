@@ -7,7 +7,9 @@ import { Toaster } from "./components/Toaster"
 import { toast } from "./hooks/use-toast"
 import { AppError } from "./api"
 import { ensureServer, setDetectedBaseUrl, type ServerStatus } from "./api/invoke-adapter"
-import { getDetectedUrl } from "./api/lan-detector"
+import { getDetectedUrl, getDetectedUrlDisplay } from "./api/lan-detector"
+import { isTauri } from "./lib/tauri"
+import { check } from "@tauri-apps/plugin-updater"
 import DashboardLayout from "./layouts/DashboardLayout"
 import LoginPage from "./pages/LoginPage"
 import DashboardPage from "./pages/dashboard/DashboardPage"
@@ -69,20 +71,11 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function ServerCheck({ children }: { children: React.ReactNode }) {
   const [check, setCheck] = useState<ServerStatus | null>(null)
-  const [diag, setDiag] = useState<string[]>([])
-  const addDiag = (msg: string) => {
-    setDiag(prev => [...prev, msg])
-    console.log("[DIAG]", msg)
-  }
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      addDiag("ServerCheck mounted")
-      addDiag(`window.__TAURI__: ${"__TAURI__" in window}`)
-      addDiag(`window.__TAURI_INTERNALS__: ${"__TAURI_INTERNALS__" in window}`)
       const result = await ensureServer()
-      addDiag(`result: ${result.status} - ${result.message}`)
       if (!cancelled) setCheck(result)
     })()
     return () => { cancelled = true }
@@ -94,15 +87,12 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
         <div style={{ width: 40, height: 40, border: "4px solid #e5e7eb", borderTopColor: "#2563eb", borderRadius: "50%", animation: "spin 0.8s linear infinite" }} />
         <p style={{ color: "#6b7280", fontSize: 14 }}>Menghubungkan ke server...</p>
         <style>{`@keyframes spin { to { transform: rotate(360deg) } }`}</style>
-        <pre style={{ fontSize: 10, color: "#9ca3af", maxWidth: 500, whiteSpace: "pre-wrap", textAlign: "left", marginTop: 16 }}>
-          {diag.join("\n")}
-        </pre>
       </div>
     )
   }
 
   if (check.status === "running" || check.status === "started") {
-    return <><LanToastDetector />{children}</>
+    return <><TauriUpdateChecker /><LanToastDetector />{children}</>
   }
 
   return (
@@ -110,11 +100,44 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
       <h2 style={{ fontSize: 20, fontWeight: 600, color: "#dc2626" }}>Server Tidak Dijangkau</h2>
       <p style={{ color: "#6b7280", maxWidth: 400 }}>{check.message}</p>
       <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <button onClick={() => window.location.reload()} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Coba Lagi</button>
-        <button onClick={() => { const u = prompt("Masukkan URL server:", getDetectedUrl() || "http://localhost:3000"); if (u) { setDetectedBaseUrl(u); window.location.reload() } }} style={{ padding: "8px 16px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Ubah URL</button>
+        <button onClick={() => { setCheck(null); ensureServer().then(r => setCheck(r)) }} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Coba Lagi</button>
+        <button onClick={() => { const u = prompt("Masukkan URL server:", getDetectedUrl() || "http://127.0.0.1:3000"); if (u) { setDetectedBaseUrl(u); window.location.reload() } }} style={{ padding: "8px 16px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Ubah URL</button>
       </div>
     </div>
   )
+}
+
+function TauriUpdateChecker() {
+  useEffect(() => {
+    if (!isTauri()) return
+    let cancelled = false
+    ;(async () => {
+      try {
+        const update = await check()
+        if (!cancelled && update?.available) {
+          await update.downloadAndInstall()
+        }
+      } catch {
+        // updater check failed silently
+      }
+    })()
+    return () => { cancelled = true }
+  }, [])
+  return null
+}
+
+function modeLabel(): string {
+  if (isTauri()) return "Tauri Desktop"
+  const mode = import.meta.env.MODE
+  if (mode === "development") return "Development"
+  return "Browser"
+}
+
+function urlSource(): string {
+  if (import.meta.env.VITE_API_URL) return "Konfigurasi (.env)"
+  const display = getDetectedUrlDisplay()
+  if (display && !display.isExpired) return "Cache tersimpan"
+  return "LAN Scan"
 }
 
 function LanToastDetector() {
@@ -123,7 +146,10 @@ function LanToastDetector() {
     if (notified) return;
     const url = getDetectedUrl();
     if (url) {
-      toast({ title: "Terhubung ke server", description: `API: ${url}` });
+      toast({
+        title: "Terhubung ke server",
+        description: `API: ${url}\nMode: ${modeLabel()} | Sumber: ${urlSource()}`,
+      });
     }
     setNotified(true);
   }, [notified]);

@@ -1,4 +1,5 @@
 import { detectApiUrl, addEntry } from "./lan-detector";
+import { isTauriInvokeAvailable, tauriInvoke } from "../lib/tauri";
 
 const STORAGE_KEY = "wms_api_url";
 
@@ -11,21 +12,13 @@ export function setDetectedBaseUrl(url: string | null) {
 }
 
 function getApiBase(): string {
-  if (detectedBaseUrl) return detectedBaseUrl;
-  return localStorage.getItem(STORAGE_KEY) || import.meta.env.VITE_API_URL || "http://localhost:3000";
-}
-
-// Tauri 2 blocks native fetch() from webview — use @tauri-apps/plugin-http instead
-let tauriFetch: typeof globalThis.fetch | null = null;
-async function resolveFetch(): Promise<typeof globalThis.fetch> {
-  if (tauriFetch) return tauriFetch;
-  try {
-    const mod = await import("@tauri-apps/plugin-http");
-    tauriFetch = mod.fetch;
-    return tauriFetch;
-  } catch {
-    return globalThis.fetch;
-  }
+  if (detectedBaseUrl) return detectedBaseUrl
+  const stored = localStorage.getItem(STORAGE_KEY)
+  if (stored) return stored
+  const env = import.meta.env.VITE_API_URL
+  if (env) return env
+  if (import.meta.env.PROD) return ""
+  return "http://127.0.0.1:3000"
 }
 
 type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -37,11 +30,8 @@ interface Route {
 }
 
 const ROUTES: Record<string, Route> = {
-  // Auth
   login:               { method: "POST", path: "/api/login", body: true },
   logout:              { method: "POST", path: "/api/logout", body: false },
-
-  // Users
   get_users:           { method: "GET", path: "/api/users" },
   get_current_user:    { method: "GET", path: "/api/users/me" },
   create_user:         { method: "POST", path: "/api/users", body: true },
@@ -52,8 +42,6 @@ const ROUTES: Record<string, Route> = {
   get_user_activity:   { method: "GET", path: (a) => `/api/users/${a.userId}/activity` },
   log_user_activity:   { method: "POST", path: (a) => `/api/users/${a.userId}/log-activity`, body: true },
   change_my_password:  { method: "POST", path: "/api/users/me/change-password", body: true },
-
-  // Materials
   get_materials:       { method: "GET", path: "/api/materials" },
   get_material:        { method: "GET", path: (a) => `/api/materials/${a.id}` },
   create_material:     { method: "POST", path: "/api/materials", body: true },
@@ -76,15 +64,11 @@ const ROUTES: Record<string, Route> = {
   create_material_image:  { method: "POST", path: "/api/materials/images", body: true },
   delete_material_image:  { method: "DELETE", path: (a) => `/api/materials/images/${a.id}` },
   reorder_material_images:{ method: "PUT", path: "/api/materials/images/reorder", body: true },
-
-  // Categories
   get_categories:      { method: "GET", path: "/api/categories" },
   get_category_tree:   { method: "GET", path: "/api/categories/tree" },
   create_category:     { method: "POST", path: "/api/categories", body: true },
   update_category:     { method: "PUT", path: "/api/categories", body: true },
   delete_category:     { method: "DELETE", path: (a) => `/api/categories/${a.id}` },
-
-  // Units
   get_units:           { method: "GET", path: "/api/units" },
   create_unit:         { method: "POST", path: "/api/units", body: true },
   update_unit:         { method: "PUT", path: "/api/units", body: true },
@@ -93,8 +77,6 @@ const ROUTES: Record<string, Route> = {
   create_unit_conversion: { method: "POST", path: "/api/units/conversions", body: true },
   delete_unit_conversion: { method: "DELETE", path: (a) => `/api/units/conversions/${a.id}` },
   convert_unit:          { method: "GET", path: "/api/units/convert" },
-
-  // Suppliers
   get_suppliers:       { method: "GET", path: "/api/suppliers" },
   create_supplier:     { method: "POST", path: "/api/suppliers", body: true },
   update_supplier:     { method: "PUT", path: "/api/suppliers", body: true },
@@ -103,8 +85,6 @@ const ROUTES: Record<string, Route> = {
   create_supplier_rating: { method: "POST", path: "/api/suppliers/ratings", body: true },
   get_supplier_prices: { method: "GET", path: (a) => `/api/suppliers/${a.supplierId}/prices` },
   create_supplier_price: { method: "POST", path: "/api/suppliers/prices", body: true },
-
-  // Warehouses
   get_warehouses:      { method: "GET", path: "/api/warehouses" },
   get_warehouse_stats: { method: "GET", path: "/api/warehouses/stats" },
   create_warehouse:    { method: "POST", path: "/api/warehouses", body: true },
@@ -117,8 +97,6 @@ const ROUTES: Record<string, Route> = {
   get_locations:       { method: "GET", path: "/api/warehouses/locations" },
   create_location:     { method: "POST", path: "/api/warehouses/locations", body: true },
   delete_location:     { method: "DELETE", path: (a) => `/api/warehouses/locations/${a.id}` },
-
-  // Racks
   get_racks:           { method: "GET", path: "/api/racks" },
   create_rack:         { method: "POST", path: "/api/racks", body: true },
   update_rack:         { method: "PUT", path: (a) => `/api/racks/${a.rack?.id || a.id}`, body: true },
@@ -127,8 +105,6 @@ const ROUTES: Record<string, Route> = {
   get_rack_occupancy_details: { method: "GET", path: "/api/racks/occupancy-details" },
   get_rack_utilization_history: { method: "GET", path: (a) => `/api/racks/${a.rackId}/utilization` },
   suggest_putaway:     { method: "GET", path: "/api/racks/putaway-suggestion" },
-
-  // Transactions
   get_transactions:    { method: "GET", path: "/api/transactions" },
   get_transaction:     { method: "GET", path: (a) => `/api/transactions/${a.id}` },
   create_transaction:  { method: "POST", path: "/api/transactions", body: true },
@@ -142,23 +118,17 @@ const ROUTES: Record<string, Route> = {
   get_transaction_attachments: { method: "GET", path: (a) => `/api/transactions/${a.txId}/attachments` },
   create_transaction_attachment: { method: "POST", path: "/api/transactions/attachments", body: true },
   delete_transaction_attachment: { method: "DELETE", path: (a) => `/api/transactions/attachments/${a.id}` },
-  // Purchase Orders
   get_purchase_orders: { method: "GET", path: "/api/purchase-orders" },
   create_purchase_order: { method: "POST", path: "/api/purchase-orders", body: true },
   update_purchase_order_status: { method: "PUT", path: (a) => `/api/purchase-orders/${a.id}/status`, body: true },
   get_po_items:        { method: "GET", path: (a) => `/api/purchase-orders/${a.poId}/items` },
-  // Sales Orders
   get_sales_orders:    { method: "GET", path: "/api/sales-orders" },
   create_sales_order:  { method: "POST", path: "/api/sales-orders", body: true },
   update_sales_order_status: { method: "PUT", path: (a) => `/api/sales-orders/${a.id}/status`, body: true },
   get_so_items:        { method: "GET", path: (a) => `/api/sales-orders/${a.soId}/items` },
-  // Quality Inspections
   get_quality_inspections: { method: "GET", path: "/api/quality-inspections" },
   create_quality_inspection: { method: "POST", path: "/api/quality-inspections", body: true },
-  // FIFO/FEFO
   get_fifo_fefo_suggestion: { method: "GET", path: "/api/fifo-fefo-suggestion" },
-
-  // Stock Opname
   get_stock_opnames:       { method: "GET", path: "/api/stock-opnames" },
   create_stock_opname:     { method: "POST", path: "/api/stock-opnames", body: true },
   update_stock_opname_status: { method: "PUT", path: (a) => `/api/stock-opnames/${a.id}/status`, body: true },
@@ -170,8 +140,6 @@ const ROUTES: Record<string, Route> = {
   create_cycle_schedule:   { method: "POST", path: "/api/cycle-schedules", body: true },
   delete_cycle_schedule:   { method: "DELETE", path: (a) => `/api/cycle-schedules/${a.id}` },
   auto_generate_cycle_opname: { method: "POST", path: "/api/cycle-opname/generate" },
-
-  // Transfers
   transfer_material:       { method: "POST", path: "/api/transfers/material", body: true },
   transfer_materials_bulk: { method: "POST", path: "/api/transfers/bulk", body: true },
   batch_transfer_rack:     { method: "POST", path: "/api/transfers/rack", body: true },
@@ -179,8 +147,6 @@ const ROUTES: Record<string, Route> = {
   create_transfer_order:   { method: "POST", path: "/api/transfer-orders", body: true },
   update_transfer_order_status: { method: "PUT", path: (a) => `/api/transfer-orders/${a.id}/status`, body: true },
   get_transfer_items:      { method: "GET", path: (a) => `/api/transfer-orders/${a.transferId}/items` },
-
-  // Dashboard
   get_dashboard_kpi:       { method: "GET", path: "/api/dashboard/kpi" },
   get_demand_forecast:     { method: "GET", path: "/api/dashboard/demand-forecast" },
   get_reorder_suggestions: { method: "GET", path: "/api/dashboard/reorder-suggestions" },
@@ -196,84 +162,54 @@ const ROUTES: Record<string, Route> = {
   get_category_value_summary: { method: "GET", path: "/api/reports/category-value-summary" },
   get_stock_valuation:     { method: "GET", path: "/api/stock-valuation" },
   get_opname_variance:     { method: "GET", path: (a) => `/api/reports/opname-variance/${a.opnameId}` },
-
-  // Throughput & Picker
   get_throughput_metrics:  { method: "GET", path: "/api/warehouse/throughput" },
   get_picker_activity:     { method: "GET", path: "/api/warehouse/picker-activity" },
   get_slotting_suggestions:{ method: "GET", path: "/api/warehouse/slotting-suggestions" },
-
-  // Budgets
   get_budgets:             { method: "GET", path: "/api/budgets" },
   save_budget:             { method: "POST", path: "/api/budgets", body: true },
   delete_budget:           { method: "DELETE", path: (a) => `/api/budgets/${a.id}` },
-
-  // ABC Weights
   get_abc_weights:         { method: "GET", path: "/api/abc-weights" },
   set_abc_weight:          { method: "POST", path: "/api/abc-weights", body: true },
-
-  // Forecast Cache
   get_forecast_cache:      { method: "GET", path: "/api/forecast-cache" },
   set_forecast_cache:      { method: "POST", path: "/api/forecast-cache", body: true },
   delete_forecast_cache:   { method: "DELETE", path: "/api/forecast-cache" },
-
-  // Login History
   get_login_history:       { method: "GET", path: "/api/login-history" },
   get_user_login_history:  { method: "GET", path: (a) => `/api/login-history/user/${a.userId}` },
   clear_login_history:     { method: "DELETE", path: "/api/login-history" },
-
-  // QR ZIP
   generate_qr_zip:         { method: "POST", path: "/api/qr-zip-generate", body: true },
-
-  // Label Templates
   get_label_templates:     { method: "GET", path: "/api/label-templates" },
   get_label_template:      { method: "GET", path: (a) => `/api/label-templates/${a.id}` },
   create_label_template:   { method: "POST", path: "/api/label-templates", body: true },
   update_label_template:   { method: "PUT", path: "/api/label-templates", body: true },
   save_label_template:     { method: "POST", path: "/api/label-templates", body: true },
   delete_label_template:   { method: "DELETE", path: (a) => `/api/label-templates/${a.id}` },
-
-  // Company Profile
   get_company_profile:     { method: "GET", path: "/api/company-profile" },
   save_company_profile:    { method: "POST", path: "/api/company-profile", body: true },
-
-  // Notification Config
   get_notification_config: { method: "GET", path: "/api/notification-config" },
   save_notification_config:{ method: "POST", path: "/api/notification-config", body: true },
   set_notification_config: { method: "POST", path: "/api/notification-config", body: true },
-
-  // Roles
   get_roles:               { method: "GET", path: "/api/roles" },
   create_role:             { method: "POST", path: "/api/roles", body: true },
   update_role:             { method: "PUT", path: "/api/roles", body: true },
   delete_role:             { method: "DELETE", path: (a) => `/api/roles/${a.id}` },
   clone_role:              { method: "POST", path: "/api/roles/clone", body: true },
   check_permission:        { method: "GET", path: "/api/check-permission" },
-
-  // App Config
   get_app_config:          { method: "GET", path: "/api/app-config" },
   set_app_config:          { method: "POST", path: "/api/app-config", body: true },
   get_all_app_config:      { method: "GET", path: "/api/app-config/all" },
   delete_app_config:       { method: "DELETE", path: (a) => `/api/app-config/${a.key}` },
-
-  // Inventory Settings
   get_inventory_settings:  { method: "GET", path: "/api/inventory-settings" },
   save_inventory_setting:  { method: "POST", path: "/api/inventory-settings", body: true },
-
-  // Audit Logs
   get_audit_logs:          { method: "GET", path: "/api/audit-logs" },
   add_audit_log:           { method: "POST", path: "/api/audit-logs", body: true },
   get_audit_logs_filtered: { method: "GET", path: "/api/audit-logs/filtered" },
   count_audit_logs_filtered: { method: "GET", path: "/api/audit-logs/filtered/count" },
   purge_old_audit_logs:    { method: "DELETE", path: "/api/audit-logs/purge" },
   export_audit_csv_filtered: { method: "GET", path: "/api/audit-logs/export-csv" },
-
-  // System
   get_db_stats:            { method: "GET", path: "/api/db-stats" },
   backup_database:         { method: "POST", path: "/api/db/backup" },
   restore_database:        { method: "POST", path: "/api/db/restore", body: true },
   generate_qr_code:        { method: "POST", path: "/api/qr-generate", body: true },
-
-  // Reports
   export_report_csv:       { method: "GET", path: "/api/reports/csv" },
   export_report_pdf:       { method: "GET", path: "/api/reports/pdf" },
   generate_report_pdf:     { method: "GET", path: "/api/reports/pdf" },
@@ -295,6 +231,13 @@ const ROUTES: Record<string, Route> = {
   get_variance_root_cause: { method: "GET", path: (a) => `/api/reports/opname-variance/${a.opnameId}` },
 };
 
+function rawFetch(url: string, options: RequestInit, timeoutMs = 15000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  const opts = { ...options, signal: options.signal || controller.signal };
+  return globalThis.fetch(url, opts).finally(() => clearTimeout(timer));
+}
+
 async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<T> {
   const route = ROUTES[cmd];
   if (!route) {
@@ -302,7 +245,6 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
   }
 
   const path = typeof route.path === "function" ? route.path(args) : route.path;
-  // Auth is handled by httpOnly cookie set on login; no need to send Authorization header
   const headers: Record<string, string> = {};
 
   let url = `${getApiBase()}${path}`;
@@ -328,13 +270,13 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
     }
   }
 
-  const doFetch = await resolveFetch();
   let res: Response;
   try {
-    res = await doFetch(url, { method: route.method, headers, body, signal: AbortSignal.timeout(15000) });
-  } catch (e) {
+    res = await rawFetch(url, { method: route.method, headers, body });
+  } catch (e: any) {
     console.error(`[httpCall] fetch error for ${cmd} ${route.method} ${url}:`, e);
-    throw { type: "Network", message: `Failed to connect to ${url}. ${e instanceof DOMException && e.name === 'TimeoutError' ? 'Request timed out.' : 'Check that the server is running.'}` };
+    const isTimeout = e?.name === "AbortError" || e?.message?.includes?.("aborted");
+    throw { type: "Network", message: `Failed to connect to ${url}. ${isTimeout ? 'Request timed out.' : 'Check that the server is running.'}` };
   }
   if (res.status === 401) {
     localStorage.removeItem("wms_token");
@@ -355,34 +297,44 @@ export interface ServerStatus {
   message: string;
 }
 
-export async function ensureServer(): Promise<ServerStatus> {
+async function tryUrl(url: string): Promise<boolean> {
+  const healthUrl = `${url}/api/health`;
   try {
-    const mod = await import("@tauri-apps/api/core");
-    const result = await mod.invoke<ServerStatus>("ensure_server_running");
-    return result;
-  } catch (e) {
-    console.warn("[ensureServer] Tauri IPC unavailable or failed, trying HTTP:", e);
+    const res = await rawFetch(healthUrl, { method: "GET" }, 5000);
+    return res.ok;
+  } catch {
+    return false;
   }
-  const doFetch = await resolveFetch();
+}
 
-  async function tryHealth(url: string, timeoutMs = 5000): Promise<boolean> {
-    try {
-      const res = await doFetch(`${url}/api/health`, { signal: AbortSignal.timeout(timeoutMs) });
-      return res.ok;
-    } catch {
-      return false;
+const CANDIDATES = [
+  () => "http://127.0.0.1:3000",
+  () => "http://localhost:3000",
+];
+
+export async function ensureServer(): Promise<ServerStatus> {
+  // 1. Tauri invoke — scan all LAN interfaces via Rust (most reliable)
+  if (isTauriInvokeAvailable()) {
+    const tauriUrl = await tauriInvoke<string>("get_detected_api_url", { ports: [3000, 3001, 3002] })
+    if (tauriUrl) {
+      addEntry(tauriUrl)
+      setDetectedBaseUrl(tauriUrl)
+      return { status: "running", message: `Server detected via LAN scan at ${tauriUrl}.` }
     }
   }
 
-  // 1. Try configured/localhost URL first
-  const base = getApiBase();
-  if (await tryHealth(base)) {
-    addEntry(base);
-    setDetectedBaseUrl(base);
-    return { status: "running", message: "Server is reachable." };
+  // 2. Localhost
+  for (const candidate of CANDIDATES) {
+    const base = candidate();
+    const ok = await tryUrl(base);
+    if (ok) {
+      addEntry(base);
+      setDetectedBaseUrl(base);
+      return { status: "running", message: `Server is reachable at ${base}.` };
+    }
   }
 
-  // 2. Try LAN detection (cached + scan)
+  // 3. LAN detection (cache + env var + subnet scan)
   const lanUrl = await detectApiUrl();
   if (lanUrl) {
     setDetectedBaseUrl(lanUrl);
@@ -391,22 +343,10 @@ export async function ensureServer(): Promise<ServerStatus> {
 
   return {
     status: "unreachable",
-    message: `Cannot connect to ${base}. Start server.exe or use a different URL.`,
+    message: "Cannot connect to server. Start server.exe first, or click 'Ubah URL' to enter the address manually.",
   };
 }
 
 export async function invoke<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
-  let tauriAvailable = false;
-  try {
-    const mod = await import("@tauri-apps/api/core");
-    tauriAvailable = true;
-    return await mod.invoke<T>(cmd, args);
-  } catch (e) {
-    if (tauriAvailable) {
-      console.error(`[invoke] Tauri IPC error for ${cmd}:`, e);
-      throw e;
-    }
-    console.warn(`[invoke] Tauri not available, falling back to HTTP for ${cmd}:`, e);
-    return httpCall<T>(cmd, args || {});
-  }
+  return httpCall<T>(cmd, args || {});
 }

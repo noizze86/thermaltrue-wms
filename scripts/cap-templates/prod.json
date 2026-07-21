@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Development capability — localhost only",
+  "description": "Production capability — localhost + LAN IP",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -16,7 +16,13 @@
       "identifier": "http:default",
       "allow": [
         { "url": "http://localhost:3000" },
-        { "url": "https://localhost:3443" }
+        { "url": "http://localhost:3001" },
+        { "url": "http://localhost:3002" },
+        { "url": "http://*:8000/**" },
+        { "url": "https://localhost:3443" },
+        { "url": "https://*:443/**" },
+        { "url": "https://*:8443/**" },
+        { "url": "https://*:**" }
       ]
     }
   ]

@@ -1,0 +1,15 @@
+{
+  "name": "thermaltrue-update-server",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Self-hosted update server for Thermaltrue WMS",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "express": "^4.21",
+    "cors": "^2.8",
+    "morgan": "^1.10"
+  }
+}
