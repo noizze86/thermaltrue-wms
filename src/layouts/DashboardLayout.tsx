@@ -9,7 +9,7 @@ import {
   LayoutDashboard, Package, ArrowRightLeft, BarChart3, Warehouse,
   FileText, Settings, LogOut, Menu, X, ChevronDown, QrCode,
   Tags, Truck, Users, ClipboardList, FileBarChart, Sun, Moon, Shield,
-  Plus, Search, Radio,
+  Plus, Search, Radio, Download,
 } from "lucide-react"
 
 const menuItems = [
@@ -76,6 +76,7 @@ const menuItems = [
       { to: "/settings/label-templates", label: "Label Templates", icon: Tags },
       { to: "/settings/api", label: "API Settings", icon: Settings },
       { to: "/settings/network-test", label: "Network Test", icon: Radio },
+      { to: "/settings/update-test", label: "Update Test", icon: Download },
     ],
   },
 ]

@@ -9,7 +9,7 @@ import { AppError } from "./api"
 import { ensureServer, setDetectedBaseUrl, type ServerStatus } from "./api/invoke-adapter"
 import { getDetectedUrl, getDetectedUrlDisplay } from "./api/lan-detector"
 import { isTauri } from "./lib/tauri"
-import { check } from "@tauri-apps/plugin-updater"
+import { useUpdateLogger } from "./hooks/useUpdateLogger"
 import DashboardLayout from "./layouts/DashboardLayout"
 import LoginPage from "./pages/LoginPage"
 import DashboardPage from "./pages/dashboard/DashboardPage"
@@ -47,6 +47,7 @@ import RolesPage from "./pages/settings/RolesPage"
 import LabelTemplatesPage from "./pages/settings/LabelTemplatesPage"
 import ApiSettingsPage from "./pages/settings/ApiSettingsPage"
 import NetworkTestPage from "./pages/settings/NetworkTestPage"
+import UpdateTestPage from "./pages/settings/UpdateTestPage"
 import MasterDataPage from "./pages/MasterDataPage"
 
 const queryClient = new QueryClient({
@@ -109,21 +110,26 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
 }
 
 function TauriUpdateChecker() {
+  const { phase, updateVersion } = useUpdateLogger()
+  const notified = useRef(false)
+
   useEffect(() => {
-    if (!isTauri()) return
-    let cancelled = false
-    ;(async () => {
-      try {
-        const update = await check()
-        if (!cancelled && update?.available) {
-          await update.downloadAndInstall()
-        }
-      } catch {
-        // updater check failed silently
-      }
-    })()
-    return () => { cancelled = true }
-  }, [])
+    if (notified.current) return
+    if (phase === "downloading") {
+      notified.current = true
+      toast({
+        title: "Downloading Update",
+        description: `Installing version ${updateVersion}...`,
+      })
+    }
+    if (phase === "error") {
+      notified.current = true
+    }
+    if (phase === "idle" || phase === "available") {
+      notified.current = false
+    }
+  }, [phase, updateVersion])
+
   return null
 }
 
@@ -211,6 +217,7 @@ export default function App() {
                 <Route path="settings/label-templates" element={<LabelTemplatesPage />} />
                 <Route path="settings/api" element={<ApiSettingsPage />} />
                 <Route path="settings/network-test" element={<NetworkTestPage />} />
+                <Route path="settings/update-test" element={<UpdateTestPage />} />
               </Route>
             </Routes>
             <Toaster />
