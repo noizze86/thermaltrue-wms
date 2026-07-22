@@ -111,16 +111,32 @@ jobs:
             target/release/bundle/dmg/*.dmg
             target/release/bundle/deb/*.deb
             target/release/bundle/appimage/*.AppImage
+      - name: Sign bundles for updater
+        if: env.TAURI_PRIVATE_KEY != ''
+        shell: pwsh
+        run: |
+          $bundles = Get-ChildItem -Path "target/release/bundle" -Recurse -File | Where-Object {
+            $_.Extension -match '\.(msi|exe|dmg|deb|AppImage)$' -and
+            -not ($_.Name -like '*.sig')
+          }
+          if ($bundles.Count -eq 0) {
+            Write-Host "No bundle files found to sign."
+          } else {
+            foreach ($bundle in $bundles) {
+              $sigPath = "$($bundle.FullName).sig"
+              Write-Host "Signing: $($bundle.Name) -> $($sigPath)"
+              npx tauri signer sign --private-key "$env:TAURI_PRIVATE_KEY" `
+                --password "$env:TAURI_KEY_PASSWORD" `
+                "$($bundle.FullName)"
+            }
+          }
+
       - name: Upload signature artifact
         uses: actions/upload-artifact@v4
         with:
           name: sig-${{ matrix.platform-key }}
           path: |
-            target/release/bundle/msi/*.sig
-            target/release/bundle/nsis/*.sig
-            target/release/bundle/dmg/*.sig
-            target/release/bundle/deb/*.sig
-            target/release/bundle/appimage/*.sig
+            target/release/bundle/**/*.sig
           if-no-files-found: ignore
   generate-update-json:
     needs: [create-release, build]
