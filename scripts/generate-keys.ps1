@@ -125,7 +125,7 @@ if (-not (Test-Path $PublicKeyPath)) {
 # ── Read public key ─────────────────────────────────────────────────────
 
 $PublicKey = (Get-Content $PublicKeyPath -Raw).Trim()
-$PrivateKeyBase64 = [Convert]::ToBase64String([System.IO.File]::ReadAllBytes($PrivateKeyPath))
+$PrivateKeyContent = (Get-Content $PrivateKeyPath -Raw).Trim()
 
 # ── Output GitHub Secrets format ────────────────────────────────────────
 
@@ -135,7 +135,7 @@ Write-Host "        GITHUB REPOSITORY SECRETS" -ForegroundColor Cyan
 Write-Host "═══════════════════════════════════════════════" -ForegroundColor Magenta
 Write-Host "`nSet these secrets in your GitHub repository:" -ForegroundColor Yellow
 Write-Host "  (https://github.com/thermaltrue/wms/settings/secrets/actions)`n"
-Write-Host "  gh secret set TAURI_PRIVATE_KEY --body ""$PrivateKeyBase64""" -ForegroundColor White
+Write-Host "  gh secret set TAURI_PRIVATE_KEY --body ""$PrivateKeyContent""" -ForegroundColor White
 Write-Host "  gh secret set TAURI_KEY_PASSWORD --body ""$Password""" -ForegroundColor White
 Write-Host "  gh secret set TAURI_PUBLIC_KEY --body ""$PublicKey""" -ForegroundColor White
 Write-Host "`nOr manually from the GitHub UI:" -ForegroundColor Yellow
