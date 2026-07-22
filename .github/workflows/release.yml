@@ -32,10 +32,6 @@ jobs:
             rust-target: x86_64-pc-windows-msvc
             bundles: msi,nsis
             platform-key: windows-x86_64
-          - os: macos-13
-            rust-target: x86_64-apple-darwin
-            bundles: dmg
-            platform-key: darwin-x86_64
           - os: macos-latest
             rust-target: aarch64-apple-darwin
             bundles: dmg
