@@ -1,5 +1,6 @@
 use backend::db_pool::DbPool;
 use backend::commands;
+mod network_test;
 use tauri::Manager;
 use serde::Serialize;
 use std::io::Write;
@@ -499,6 +500,17 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             commands::delete_label_template,
             get_detected_api_url,
             open_in_browser,
+            network_test::get_local_ip,
+            network_test::get_listener_status,
+            network_test::get_listener_port,
+            network_test::send_ping,
+            network_test::start_udp_listener,
+            network_test::stop_udp_listener,
+            network_test::get_discovered_devices,
+            network_test::clear_discovered_devices,
+            network_test::get_test_log,
+            network_test::clear_test_log,
+            network_test::export_test_log_csv,
         ])
         .run(tauri::generate_context!())
         .map_err(|e| {

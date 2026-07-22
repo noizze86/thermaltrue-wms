@@ -46,6 +46,7 @@ import AuditLogPage from "./pages/settings/AuditLogPage"
 import RolesPage from "./pages/settings/RolesPage"
 import LabelTemplatesPage from "./pages/settings/LabelTemplatesPage"
 import ApiSettingsPage from "./pages/settings/ApiSettingsPage"
+import NetworkTestPage from "./pages/settings/NetworkTestPage"
 import MasterDataPage from "./pages/MasterDataPage"
 
 const queryClient = new QueryClient({
@@ -209,6 +210,7 @@ export default function App() {
                 <Route path="settings/roles" element={<RolesPage />} />
                 <Route path="settings/label-templates" element={<LabelTemplatesPage />} />
                 <Route path="settings/api" element={<ApiSettingsPage />} />
+                <Route path="settings/network-test" element={<NetworkTestPage />} />
               </Route>
             </Routes>
             <Toaster />
