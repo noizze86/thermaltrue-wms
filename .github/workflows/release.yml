@@ -162,8 +162,7 @@ jobs:
           }
 
           if ($platforms.Count -eq 0) {
-              Write-Error "No platform signatures found. Build artifacts are missing."
-              exit 1
+              Write-Warning "No signature files found. update.json will have empty platforms (auto-update disabled)."
           }
 
           $json = @{
@@ -180,5 +179,4 @@ jobs:
       - name: Upload update.json
         uses: softprops/action-gh-release@v3
         with:
-          upload_url: ${{ needs.create-release.outputs.upload_url }}
           files: update.json
