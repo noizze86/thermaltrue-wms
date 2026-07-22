@@ -4,7 +4,7 @@ import { relaunch } from "@tauri-apps/plugin-process"
 import { isTauri } from "../../lib/tauri"
 import {
   RefreshCw, Download, CheckCircle, AlertCircle, RotateCcw,
-  FileText, PackageOpen, ExternalLink,
+  FileText, PackageOpen,
 } from "lucide-react"
 
 interface UpdateLog {
@@ -12,8 +12,6 @@ interface UpdateLog {
   message: string
   level: "info" | "success" | "error" | "warning"
 }
-
-let logId = 0
 
 export default function UpdateTestPage() {
   const [logs, setLogs] = useState<UpdateLog[]>([])
@@ -47,7 +45,8 @@ export default function UpdateTestPage() {
         return
       }
 
-      const url = update.rawJson?.platforms?.["windows-x86_64"]?.url ?? "unknown"
+      const plats = update.rawJson?.platforms as Record<string, { url?: string }> | undefined
+      const url = plats?.["windows-x86_64"]?.url ?? "unknown"
       addLog(`Downloading update from ${url}`, "info")
       addLog(`Update version: ${update.version}`, "info")
       setUpdateInfo({ version: update.version, body: update.body, date: update.date })

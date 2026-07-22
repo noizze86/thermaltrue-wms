@@ -62,7 +62,7 @@ export function useUdpListener() {
 
   useEffect(() => {
     if (!isTauri()) return
-    tauriInvoke<boolean>("get_listener_status").then(setActive)
+    tauriInvoke<boolean>("get_listener_status").then((v) => { if (v !== null) setActive(v) })
     tauriInvoke<number>("get_listener_port").then((p) => {
       if (p && p > 0) setPort(p)
     })
