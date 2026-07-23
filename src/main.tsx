@@ -6,6 +6,17 @@ import { OfflineProvider } from "./contexts/OfflineContext"
 import App from "./App"
 import "./index.css"
 
+// Guard: prevent any <a> click from causing full-page navigation
+document.addEventListener("click", (e) => {
+  const a = (e.target as Element)?.closest?.("a");
+  if (!a) return;
+  const href = a.getAttribute("href");
+  if (href && !href.startsWith("#") && !href.startsWith("http") && !href.startsWith("tauri") && !href.startsWith("mailto")) {
+    e.preventDefault();
+    window.location.hash = href;
+  }
+}, false);
+
 if (import.meta.env.VITE_SENTRY_DSN) {
   Sentry.init({
     dsn: import.meta.env.VITE_SENTRY_DSN,

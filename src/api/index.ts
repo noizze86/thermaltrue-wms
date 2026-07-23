@@ -20,7 +20,7 @@ async function invokeAuth<T>(cmd: string, args?: Record<string, unknown>): Promi
     if (err?.type === "Auth") {
       localStorage.removeItem("wms_token");
       localStorage.removeItem("wms_user");
-      window.location.href = "/login";
+      window.location.hash = "#/login";
     }
     throw new AppError(err?.type || "Unknown", err?.message || String(e));
   }

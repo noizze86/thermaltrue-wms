@@ -17,7 +17,6 @@ function getApiBase(): string {
   if (stored) return stored
   const env = import.meta.env.VITE_API_URL
   if (env) return env
-  if (import.meta.env.PROD) return ""
   return "http://127.0.0.1:3000"
 }
 
@@ -281,7 +280,7 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
   if (res.status === 401) {
     localStorage.removeItem("wms_token");
     localStorage.removeItem("wms_user");
-    window.location.href = "/login";
+    window.location.hash = "#/login";
     throw { type: "Auth", message: "Session expired or not logged in" };
   }
   if (!res.ok) {

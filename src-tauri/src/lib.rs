@@ -8,11 +8,17 @@ use std::time::Duration;
 
 fn startup_log(msg: &str) {
     eprintln!("{}", msg);
+    // Always write to TEMP for reliable access
+    let log_path = std::env::temp_dir().join("thermaltrue.log");
+    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(&log_path) {
+        let _ = writeln!(f, "{}", msg);
+    }
+    // Also try app directory (may fail in Program Files)
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            let log_path = dir.join("startup.log");
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(log_path) {
-            let _ = writeln!(f, "{}", msg);
+            let alt_path = dir.join("startup.log");
+            if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(alt_path) {
+                let _ = writeln!(f, "{}", msg);
             }
         }
     }
@@ -269,6 +275,45 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
 
         .setup(|app| {
             startup_log("Tauri setup hook started...");
+            // Ensure backend server is running
+            startup_log("ensure_server_running: masuk setup");
+            let server_exe = std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.join("server.exe")))
+                .filter(|p| p.exists());
+            if let Some(srv) = server_exe {
+                startup_log(&format!("ensure_server_running: server.exe ditemukan di {:?}", srv));
+                match std::process::Command::new("sc")
+                    .args(["query", "ThermaltrueServer"])
+                    .output()
+                {
+                    Ok(out) => {
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        if stdout.contains("STOPPED") {
+                            startup_log("ensure_server_running: service STOPPED, mencoba start...");
+                            let _ = std::process::Command::new("sc")
+                                .args(["start", "ThermaltrueServer"])
+                                .spawn();
+                            // Beri waktu server untuk start
+                            std::thread::sleep(std::time::Duration::from_secs(2));
+                        } else if stdout.contains("RUNNING") {
+                            startup_log("ensure_server_running: service already RUNNING");
+                        } else {
+                            startup_log(&format!("ensure_server_running: sc query result: {}", stdout.lines().next().unwrap_or("(empty)")));
+                        }
+                    }
+                    Err(e) => {
+                        startup_log(&format!("ensure_server_running: sc query error: {}", e));
+                    }
+                }
+            } else {
+                startup_log("ensure_server_running: server.exe not found alongside app.exe");
+            }
+            // Log window URL for debugging
+            if let Some(window) = app.get_webview_window("main") {
+                let url = window.url().map(|u| u.to_string()).unwrap_or_default();
+                startup_log(&format!("Main window URL: {}", url));
+            }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
                     tauri_plugin_log::Builder::default()
