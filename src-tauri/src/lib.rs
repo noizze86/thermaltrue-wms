@@ -291,11 +291,31 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
                         let stdout = String::from_utf8_lossy(&out.stdout);
                         if stdout.contains("STOPPED") {
                             startup_log("ensure_server_running: service STOPPED, mencoba start...");
-                            let _ = std::process::Command::new("sc")
+                            match std::process::Command::new("sc")
                                 .args(["start", "ThermaltrueServer"])
-                                .spawn();
-                            // Beri waktu server untuk start
-                            std::thread::sleep(std::time::Duration::from_secs(2));
+                                .output()
+                            {
+                                Ok(start_out) => {
+                                    let start_stdout = String::from_utf8_lossy(&start_out.stdout);
+                                    let start_stderr = String::from_utf8_lossy(&start_out.stderr);
+                                    startup_log(&format!("ensure_server_running: sc start result: {}", start_stdout.lines().next().unwrap_or("(empty)")));
+                                    if !start_stderr.is_empty() {
+                                        startup_log(&format!("ensure_server_running: sc start stderr: {}", start_stderr));
+                                    }
+                                    // Tunggu server benar-benar siap via health check
+                                    for i in 1..=10 {
+                                        if tauri::async_runtime::block_on(check_health(1)) {
+                                            startup_log("ensure_server_running: health OK after start");
+                                            break;
+                                        }
+                                        startup_log(&format!("ensure_server_running: menunggu server... attempt {}/10", i));
+                                        std::thread::sleep(std::time::Duration::from_secs(1));
+                                    }
+                                }
+                                Err(e) => {
+                                    startup_log(&format!("ensure_server_running: sc start error: {}", e));
+                                }
+                            }
                         } else if stdout.contains("RUNNING") {
                             startup_log("ensure_server_running: service already RUNNING");
                         } else {

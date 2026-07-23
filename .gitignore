@@ -38,3 +38,6 @@ tauri-updater.pub
 src-tauri/capabilities/default.json
 
 certificate/
+
+# Helper scripts
+start

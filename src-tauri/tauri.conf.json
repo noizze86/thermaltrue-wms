@@ -21,8 +21,7 @@
         "resizable": true,
         "fullscreen": false,
         "url": "http://127.0.0.1:3000",
-        "devtools": true,
-        "additionalBrowserArgs": "--auto-open-devtools-for-tabs"
+        "devtools": false
       }
     ],
     "security": {
