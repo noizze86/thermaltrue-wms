@@ -53,7 +53,9 @@ export interface Material {
   name: string;
   description: string;
   category_id: string | null;
+  category_name: string | null;
   unit_id: string | null;
+  unit_name: string | null;
   supplier_id: string | null;
   warehouse_id: string | null;
   rack_id: string | null;

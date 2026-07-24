@@ -109,7 +109,7 @@ export default function MaterialTable({
   const columns = [
     { key: "sku", label: "SKU", sortable: true },
     { key: "name", label: "Name", sortable: true },
-    { key: "category_id", label: "Category" },
+    { key: "category_name", label: "Category" },
     { key: "quantity", label: "Qty", sortable: true },
     { key: "price", label: "Price", sortable: true },
     { key: "min_stock", label: "Min Stock" },
@@ -187,7 +187,7 @@ export default function MaterialTable({
                     <TableCell className="font-mono text-xs">{item.sku}</TableCell>
                     <TableCell className="font-medium">{item.name}</TableCell>
                     <TableCell className="text-xs text-muted-foreground">
-                      {categories?.find((c) => c.id === item.category_id)?.name || item.category_id || "-"}
+                      {item.category_name || item.category_id || "-"}
                     </TableCell>
                     <TableCell>{item.quantity}</TableCell>
                     <TableCell>{item.price.toLocaleString()}</TableCell>

@@ -417,7 +417,7 @@ export default function StockPage() {
     { key: "sku", label: "SKU", sortable: true, render: (m) => <span className="font-mono">{m.sku}</span> },
     { key: "barcode", label: "Barcode", render: (m) => <BarcodeCell sku={m.sku} /> },
     { key: "name", label: "Name", sortable: true, render: (m) => <span className="font-medium">{m.name}</span> },
-    { key: "category_id", label: "Category", render: (m) => categories?.find((c) => c.id === m.category_id)?.name || "-" },
+    { key: "category_name", label: "Category", render: (m) => m.category_name || "-" },
     { key: "quantity", label: "Quantity", sortable: true, render: (m) => (
       <Badge variant={m.quantity <= m.min_stock ? "destructive" : m.quantity <= m.min_stock * 1.5 ? "secondary" : "default"}>{m.quantity}</Badge>
     )},

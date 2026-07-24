@@ -92,6 +92,12 @@ export function useUpdateLogger() {
 
     } catch (err) {
       const msg = String(err)
+      // ACL / origin errors are expected when running in HTTP mode
+      if (msg.includes("not allowed by ACL") || msg.includes("plugin:updater")) {
+        addLog(`Update check skipped (HTTP mode): ${msg}`, "info")
+        setPhase("idle")
+        return
+      }
       addLog(`Update error: ${msg}`, "error")
       setErrorMsg(msg)
       setPhase("error")
