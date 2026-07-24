@@ -80,6 +80,17 @@ pub async fn create(
         else if items.len() == 1 { (items[0].material_id.clone(), items[0].quantity, items[0].price) }
         else { let total_qty: f64 = items.iter().map(|i| i.quantity).sum(); (items[0].material_id.clone(), total_qty, 0.0) };
 
+    if !mat_id.is_empty() {
+        let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM materials WHERE id=$1 AND is_active=true)")
+            .bind(&mat_id)
+            .fetch_one(&mut *db_tx)
+            .await
+            .map_err(|e| crate::server::server_error(e))?;
+        if !exists {
+            return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error": format!("Material with ID '{}' not found or inactive", mat_id)}))));
+        }
+    }
+
     sqlx::query(
         "INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, price, reference, notes, user_id, status, approved_by, po_number, invoice_no, destination, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)",
     )

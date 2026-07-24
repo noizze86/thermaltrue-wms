@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
+import { getMaterialBySku } from "../../api"
 import {
   getMaterials, getWarehouses, getTransactions, createTransaction,
   getPendingTransactions, approveTransaction, rejectTransaction,
@@ -94,14 +95,15 @@ export default function TransactionInPage() {
   }, [tab])
 
   // Single-item handlers
-  const handleSkuLookup = () => {
-    const match = materials?.find((m) => m.sku.toLowerCase() === skuInput.toLowerCase())
-    if (match) {
+  const handleSkuLookup = async () => {
+    if (!skuInput.trim()) return
+    try {
+      const match = await getMaterialBySku(skuInput.trim())
       setMaterialId(match.id)
       setSkuInput("")
       setErrors({})
-    } else {
-      toast({ title: "Not Found", description: `No material with SKU "${skuInput}"`, variant: "destructive" })
+    } catch (e: any) {
+      toast({ title: "Not Found", description: e?.message || `No material with SKU "${skuInput}"`, variant: "destructive" })
     }
   }
 
@@ -124,13 +126,14 @@ export default function TransactionInPage() {
   }
 
   // Multi-item handlers
-  const handleAddSkuLookup = () => {
-    const match = materials?.find((m) => m.sku.toLowerCase() === addSkuInput.toLowerCase())
-    if (match) {
+  const handleAddSkuLookup = async () => {
+    if (!addSkuInput.trim()) return
+    try {
+      const match = await getMaterialBySku(addSkuInput.trim())
       setAddMaterialId(match.id)
       setAddSkuInput("")
-    } else {
-      toast({ title: "Not Found", description: `No material with SKU "${addSkuInput}"`, variant: "destructive" })
+    } catch (e: any) {
+      toast({ title: "Not Found", description: e?.message || `No material with SKU "${addSkuInput}"`, variant: "destructive" })
     }
   }
 

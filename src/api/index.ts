@@ -425,6 +425,7 @@ export const deleteMaterialsBulk = (ids: string[]) => invokeAuth<string>("delete
 export const updateMaterialsBulk = (ids: string[], updates: Record<string, unknown>) => invokeAuth<void>("update_materials_bulk", { ids, updates });
 export const importMaterialsCsv = (csvContent: string) => invokeAuth<string>("import_materials_csv", { csvContent });
 export const getMaterialsLowStock = () => invokeAuth<Material[]>("get_materials_low_stock");
+export const getMaterialBySku = (sku: string) => invokeAuth<Material>("get_material_by_sku", { sku });
 export const getExpiringMaterials = (days: number) => invokeAuth<Material[]>("get_expiring_materials", { days });
 
 // Transactions

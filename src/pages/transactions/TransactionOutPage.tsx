@@ -4,7 +4,7 @@ import {
   getMaterials, getTransactions,
   createTransaction, getPendingTransactions, approveTransaction, rejectTransaction,
   getFifoFefoSuggestion, getSalesOrders, getSoItems, generateTxNumber,
-  generateDoPdf, generatePickingListPdf,
+  generateDoPdf, generatePickingListPdf, getMaterialBySku,
 } from "../../api"
 import type { Transaction, MaterialBatch, SalesOrderWithCount, SoItem, TransactionItem } from "../../api"
 import { useAuth } from "../../contexts/AuthContext"
@@ -73,24 +73,26 @@ export default function TransactionOutPage() {
   })
 
   const selectedMaterial = materials?.find((m) => m.id === materialId)
-  const handleSkuLookup = () => {
-    const match = materials?.find((m) => m.sku.toLowerCase() === skuInput.toLowerCase())
-    if (match) {
+  const handleSkuLookup = async () => {
+    if (!skuInput.trim()) return
+    try {
+      const match = await getMaterialBySku(skuInput.trim())
       setMaterialId(match.id)
       setSkuInput("")
       setErrors({})
-    } else {
-      toast({ title: "Not Found", description: `No material with SKU "${skuInput}"`, variant: "destructive" })
+    } catch (e: any) {
+      toast({ title: "Not Found", description: e?.message || `No material with SKU "${skuInput}"`, variant: "destructive" })
     }
   }
 
-  const handleCartSkuLookup = () => {
-    const match = materials?.find((m) => m.sku.toLowerCase() === cartSkuInput.toLowerCase())
-    if (match) {
+  const handleCartSkuLookup = async () => {
+    if (!cartSkuInput.trim()) return
+    try {
+      const match = await getMaterialBySku(cartSkuInput.trim())
       setCartMaterialId(match.id)
       setCartSkuInput("")
-    } else {
-      toast({ title: "Not Found", description: `No material with SKU "${cartSkuInput}"`, variant: "destructive" })
+    } catch (e: any) {
+      toast({ title: "Not Found", description: e?.message || `No material with SKU "${cartSkuInput}"`, variant: "destructive" })
     }
   }
 

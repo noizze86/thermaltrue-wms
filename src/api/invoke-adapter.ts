@@ -50,6 +50,7 @@ const ROUTES: Record<string, Route> = {
   update_materials_bulk: { method: "PUT", path: "/api/materials/bulk-update", body: true },
   import_materials_csv: { method: "POST", path: "/api/materials/import-csv", body: true },
   get_materials_low_stock: { method: "GET", path: "/api/materials/low-stock" },
+  get_material_by_sku:    { method: "GET", path: (a) => `/api/materials/by-sku/${a.sku}` },
   get_expiring_materials: { method: "GET", path: (a) => `/api/materials/expiring/${a.days}` },
   import_materials_xlsx:  { method: "POST", path: "/api/materials/import-xlsx", body: true },
   preview_import_xlsx:    { method: "POST", path: "/api/materials/preview-import-xlsx", body: true },

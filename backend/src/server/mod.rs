@@ -69,6 +69,7 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/warehouse/slotting-suggestions", get(handlers::transfers::get_slotting_suggestions))
         // Materials
         .route("/api/materials", get(handlers::materials::list))
+        .route("/api/materials/by-sku/:sku", get(handlers::materials::get_by_sku))
         .route("/api/materials/low-stock", get(handlers::materials::low_stock))
         .route("/api/materials/expiring/:days", get(handlers::materials::expiring))
         .route("/api/materials/:id", get(handlers::materials::get_one))

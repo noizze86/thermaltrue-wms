@@ -58,6 +58,32 @@ pub async fn list(
     Ok(Json(json!(materials)))
 }
 
+pub async fn get_by_sku(
+    State(pool): State<Arc<DbPool>>,
+    Path(sku): Path<String>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let row = sqlx::query(
+        "SELECT m.id, m.sku, m.name, m.quantity, m.price, c.name as category_name, u.name as unit_name, w.name as warehouse_name \
+         FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id \
+         LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.sku = $1 AND m.is_active=true"
+    )
+    .bind(&sku)
+    .fetch_optional(&pool.pool)
+    .await
+    .map_err(|e| crate::server::server_error(e))?
+    .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": format!("Material with SKU '{}' not found", sku)}))))?;
+    Ok(Json(json!({
+        "id": row.get::<String,_>("id"),
+        "sku": row.get::<String,_>("sku"),
+        "name": row.get::<String,_>("name"),
+        "quantity": row.get::<f64,_>("quantity"),
+        "price": row.get::<f64,_>("price"),
+        "category_name": row.get::<Option<String>,_>("category_name"),
+        "unit_name": row.get::<Option<String>,_>("unit_name"),
+        "warehouse_name": row.get::<Option<String>,_>("warehouse_name"),
+    })))
+}
+
 pub async fn low_stock(
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
