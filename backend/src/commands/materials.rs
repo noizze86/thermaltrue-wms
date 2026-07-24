@@ -12,7 +12,7 @@ use sqlx::QueryBuilder;
 pub async fn get_materials(pool: State<'_, DbPool>, token: String, search: Option<String>, category_id: Option<String>, warehouse_id: Option<String>) -> Result<Vec<Material>, AppError> {
     let user_id = pool.verify_token(&token)?;
     let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await?;
-    let mut builder = QueryBuilder::new("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE 1=1");
+    let mut builder = QueryBuilder::new("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE 1=1");
     if let Some(ref s) = search {
         if !s.is_empty() {
             let pattern = format!("%{}%", s);
@@ -45,6 +45,7 @@ pub async fn get_materials(pool: State<'_, DbPool>, token: String, search: Optio
         is_active: row.get::<bool, _>("is_active"),
         created_at: row.get("created_at"), updated_at: row.get("updated_at"),
         category_name: row.get("category_name"), unit_name: row.get("unit_name"),
+        warehouse_name: row.get("warehouse_name"),
     }).collect();
     Ok(materials)
 }
@@ -52,7 +53,7 @@ pub async fn get_materials(pool: State<'_, DbPool>, token: String, search: Optio
 #[tauri::command]
 pub async fn get_material(pool: State<'_, DbPool>, token: String, id: String) -> Result<Material, AppError> {
     pool.verify_token(&token)?;
-    sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE m.id = $1")
+    sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.id = $1")
         .bind(&id)
         .fetch_optional(&pool.pool)
         .await?
@@ -67,6 +68,7 @@ pub async fn get_material(pool: State<'_, DbPool>, token: String, id: String) ->
             is_active: row.get::<bool, _>("is_active"),
             created_at: row.get("created_at"), updated_at: row.get("updated_at"),
             category_name: row.get("category_name"), unit_name: row.get("unit_name"),
+            warehouse_name: row.get("warehouse_name"),
         })
         .ok_or_else(|| AppError::NotFound("Material not found".into()))
 }
@@ -86,7 +88,7 @@ pub async fn create_material(pool: State<'_, DbPool>, token: String, input: Crea
         .bind(input.min_stock).bind(input.max_stock).bind(input.price)
         .bind(&input.image).bind(&input.expiry_date).bind(input.is_active)
         .execute(&mut *tx).await?;
-    let row = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE m.id = $1")
+    let row = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.id = $1")
         .bind(&id)
         .fetch_one(&mut *tx)
         .await?;
@@ -103,6 +105,7 @@ pub async fn create_material(pool: State<'_, DbPool>, token: String, input: Crea
         is_active: row.get::<bool, _>("is_active"),
         created_at: row.get("created_at"), updated_at: row.get("updated_at"),
         category_name: row.get("category_name"), unit_name: row.get("unit_name"),
+        warehouse_name: row.get("warehouse_name"),
     })
 }
 
@@ -137,7 +140,7 @@ pub async fn delete_material(pool: State<'_, DbPool>, token: String, id: String)
 #[tauri::command]
 pub async fn get_materials_low_stock(pool: State<'_, DbPool>, token: String) -> Result<Vec<Material>, AppError> {
     pool.verify_token(&token)?;
-    let rows = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE m.quantity <= m.min_stock AND m.min_stock > 0 ORDER BY (m.quantity / CASE WHEN m.min_stock=0 THEN 1 ELSE m.min_stock END) ASC")
+    let rows = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.quantity <= m.min_stock AND m.min_stock > 0 ORDER BY (m.quantity / CASE WHEN m.min_stock=0 THEN 1 ELSE m.min_stock END) ASC")
         .fetch_all(&pool.pool).await?;
     let materials = rows.iter().map(|row| Material {
         id: row.get("id"), sku: row.get("sku"), name: row.get("name"),
@@ -150,6 +153,7 @@ pub async fn get_materials_low_stock(pool: State<'_, DbPool>, token: String) -> 
         is_active: row.get::<bool, _>("is_active"),
         created_at: row.get("created_at"), updated_at: row.get("updated_at"),
         category_name: row.get("category_name"), unit_name: row.get("unit_name"),
+        warehouse_name: row.get("warehouse_name"),
     }).collect();
     Ok(materials)
 }
@@ -264,7 +268,7 @@ pub async fn update_materials_bulk(pool: State<'_, DbPool>, token: String, ids: 
 pub async fn get_expiring_materials(pool: State<'_, DbPool>, token: String, days: i32) -> Result<Vec<Material>, AppError> {
     pool.verify_token(&token)?;
     let rows = sqlx::query(
-        "SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE m.expiry_date IS NOT NULL AND m.expiry_date != '' AND m.expiry_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + $1::integer AND m.is_active=true ORDER BY m.expiry_date ASC"
+        "SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.expiry_date IS NOT NULL AND m.expiry_date != '' AND m.expiry_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + $1::integer AND m.is_active=true ORDER BY m.expiry_date ASC"
     )
     .bind(days)
     .fetch_all(&pool.pool).await?;
@@ -279,6 +283,7 @@ pub async fn get_expiring_materials(pool: State<'_, DbPool>, token: String, days
         is_active: row.get::<bool, _>("is_active"),
         created_at: row.get("created_at"), updated_at: row.get("updated_at"),
         category_name: row.get("category_name"), unit_name: row.get("unit_name"),
+        warehouse_name: row.get("warehouse_name"),
     }).collect();
     Ok(materials)
 }

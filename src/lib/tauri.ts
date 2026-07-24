@@ -17,6 +17,10 @@ export function isTauri(): boolean {
   return getTauri() !== undefined
 }
 
+export function isTauriProtocol(): boolean {
+  return isTauri() && typeof window !== "undefined" && window.location.protocol.startsWith("tauri:")
+}
+
 export function isTauriInvokeAvailable(): boolean {
   return isTauri()
 }

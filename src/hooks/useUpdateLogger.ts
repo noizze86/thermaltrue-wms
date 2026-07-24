@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react"
 import { check } from "@tauri-apps/plugin-updater"
 import { relaunch } from "@tauri-apps/plugin-process"
-import { isTauri } from "../lib/tauri"
+import { isTauriProtocol } from "../lib/tauri"
 import { toast } from "./use-toast"
 
 export type UpdatePhase =
@@ -34,7 +34,7 @@ export function useUpdateLogger() {
   }, [])
 
   const checkAndInstall = useCallback(async (autoTrigger = false) => {
-    if (!isTauri()) return
+    if (!isTauriProtocol()) return
 
     setPhase("checking")
     setErrorMsg("")

@@ -22,8 +22,9 @@ pub async fn list(
     let mut builder = QueryBuilder::new(
         "SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, \
          m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, \
-         c.name as category_name, u.name as unit_name \
-         FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE 1=1"
+         c.name as category_name, u.name as unit_name, w.name as warehouse_name \
+         FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id \
+         LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE 1=1"
     );
     if let Some(ref s) = q.search { if !s.is_empty() {
         let pat = format!("%{}%", s);
@@ -51,7 +52,8 @@ pub async fn list(
             "image": row.get::<String,_>("image"), "expiry_date": row.get::<Option<String>,_>("expiry_date"),
             "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"),
             "updated_at": row.get::<String,_>("updated_at"),
-            "category_name": row.get::<Option<String>,_>("category_name"), "unit_name": row.get::<Option<String>,_>("unit_name")})
+            "category_name": row.get::<Option<String>,_>("category_name"), "unit_name": row.get::<Option<String>,_>("unit_name"),
+            "warehouse_name": row.get::<Option<String>,_>("warehouse_name")})
     }).collect();
     Ok(Json(json!(materials)))
 }
@@ -59,31 +61,31 @@ pub async fn list(
 pub async fn low_stock(
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT m.id, m.sku, m.name, m.quantity, m.min_stock, m.warehouse_id, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE m.quantity <= m.min_stock AND m.min_stock > 0 AND m.is_active=true ORDER BY m.name")
+    let rows = sqlx::query("SELECT m.id, m.sku, m.name, m.quantity, m.min_stock, m.warehouse_id, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.quantity <= m.min_stock AND m.min_stock > 0 AND m.is_active=true ORDER BY m.name")
         .fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!(rows.iter().map(|r| json!({"id": r.get::<String,_>("id"), "sku": r.get::<String,_>("sku"), "name": r.get::<String,_>("name"), "quantity": r.get::<f64,_>("quantity"), "min_stock": r.get::<f64,_>("min_stock"), "warehouse_id": r.get::<String,_>("warehouse_id"), "category_name": r.get::<Option<String>,_>("category_name"), "unit_name": r.get::<Option<String>,_>("unit_name")})).collect::<Vec<_>>())))
+    Ok(Json(json!(rows.iter().map(|r| json!({"id": r.get::<String,_>("id"), "sku": r.get::<String,_>("sku"), "name": r.get::<String,_>("name"), "quantity": r.get::<f64,_>("quantity"), "min_stock": r.get::<f64,_>("min_stock"), "warehouse_id": r.get::<String,_>("warehouse_id"), "category_name": r.get::<Option<String>,_>("category_name"), "unit_name": r.get::<Option<String>,_>("unit_name"), "warehouse_name": r.get::<Option<String>,_>("warehouse_name")})).collect::<Vec<_>>())))
 }
 
 pub async fn expiring(
     State(pool): State<Arc<DbPool>>,
     Path(days): Path<i64>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT m.id, m.sku, m.name, m.quantity, m.expiry_date, m.warehouse_id, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE m.is_active=true AND m.expiry_date IS NOT NULL AND m.expiry_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1 || ' days')::interval ORDER BY m.expiry_date")
+    let rows = sqlx::query("SELECT m.id, m.sku, m.name, m.quantity, m.expiry_date, m.warehouse_id, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true AND m.expiry_date IS NOT NULL AND m.expiry_date::date BETWEEN CURRENT_DATE AND CURRENT_DATE + ($1 || ' days')::interval ORDER BY m.expiry_date")
         .bind(days).fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!(rows.iter().map(|r| json!({"id": r.get::<String,_>("id"), "sku": r.get::<String,_>("sku"), "name": r.get::<String,_>("name"), "quantity": r.get::<f64,_>("quantity"), "expiry_date": r.get::<String,_>("expiry_date"), "warehouse_id": r.get::<String,_>("warehouse_id"), "category_name": r.get::<Option<String>,_>("category_name"), "unit_name": r.get::<Option<String>,_>("unit_name")})).collect::<Vec<_>>())))
+    Ok(Json(json!(rows.iter().map(|r| json!({"id": r.get::<String,_>("id"), "sku": r.get::<String,_>("sku"), "name": r.get::<String,_>("name"), "quantity": r.get::<f64,_>("quantity"), "expiry_date": r.get::<String,_>("expiry_date"), "warehouse_id": r.get::<String,_>("warehouse_id"), "category_name": r.get::<Option<String>,_>("category_name"), "unit_name": r.get::<Option<String>,_>("unit_name"), "warehouse_name": r.get::<Option<String>,_>("warehouse_name")})).collect::<Vec<_>>())))
 }
 
 pub async fn get_one(
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let row = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE m.id=$1")
+    let row = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.id=$1")
         .bind(&id).fetch_optional(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?
         .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"}))))?;
-    Ok(Json(json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"), "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"), "unit_id": row.get::<Option<String>,_>("unit_id"), "supplier_id": row.get::<Option<String>,_>("supplier_id"), "warehouse_id": row.get::<Option<String>,_>("warehouse_id"), "rack_id": row.get::<Option<String>,_>("rack_id"), "quantity": row.get::<f64,_>("quantity"), "min_stock": row.get::<f64,_>("min_stock"), "max_stock": row.get::<f64,_>("max_stock"), "price": row.get::<f64,_>("price"), "image": row.get::<String,_>("image"), "expiry_date": row.get::<Option<String>,_>("expiry_date"), "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at"), "category_name": row.get::<Option<String>,_>("category_name"), "unit_name": row.get::<Option<String>,_>("unit_name")})))
+    Ok(Json(json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"), "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"), "unit_id": row.get::<Option<String>,_>("unit_id"), "supplier_id": row.get::<Option<String>,_>("supplier_id"), "warehouse_id": row.get::<Option<String>,_>("warehouse_id"), "rack_id": row.get::<Option<String>,_>("rack_id"), "quantity": row.get::<f64,_>("quantity"), "min_stock": row.get::<f64,_>("min_stock"), "max_stock": row.get::<f64,_>("max_stock"), "price": row.get::<f64,_>("price"), "image": row.get::<String,_>("image"), "expiry_date": row.get::<Option<String>,_>("expiry_date"), "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at"), "category_name": row.get::<Option<String>,_>("category_name"), "unit_name": row.get::<Option<String>,_>("unit_name"), "warehouse_name": row.get::<Option<String>,_>("warehouse_name")})))
 }
 
 pub async fn create(
@@ -103,9 +105,9 @@ pub async fn create(
         .bind(&input.image).bind(&input.expiry_date).bind(input.is_active)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
-    let row = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id WHERE m.id=$1").bind(&id).fetch_one(&pool.pool).await
+    let row = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.id=$1").bind(&id).fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"), "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"), "unit_id": row.get::<Option<String>,_>("unit_id"), "supplier_id": row.get::<Option<String>,_>("supplier_id"), "warehouse_id": row.get::<Option<String>,_>("warehouse_id"), "rack_id": row.get::<Option<String>,_>("rack_id"), "quantity": row.get::<f64,_>("quantity"), "min_stock": row.get::<f64,_>("min_stock"), "max_stock": row.get::<f64,_>("max_stock"), "price": row.get::<f64,_>("price"), "image": row.get::<String,_>("image"), "expiry_date": row.get::<Option<String>,_>("expiry_date"), "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at"), "category_name": row.get::<Option<String>,_>("category_name"), "unit_name": row.get::<Option<String>,_>("unit_name")})))
+    Ok(Json(json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"), "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"), "unit_id": row.get::<Option<String>,_>("unit_id"), "supplier_id": row.get::<Option<String>,_>("supplier_id"), "warehouse_id": row.get::<Option<String>,_>("warehouse_id"), "rack_id": row.get::<Option<String>,_>("rack_id"), "quantity": row.get::<f64,_>("quantity"), "min_stock": row.get::<f64,_>("min_stock"), "max_stock": row.get::<f64,_>("max_stock"), "price": row.get::<f64,_>("price"), "image": row.get::<String,_>("image"), "expiry_date": row.get::<Option<String>,_>("expiry_date"), "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at"), "category_name": row.get::<Option<String>,_>("category_name"), "unit_name": row.get::<Option<String>,_>("unit_name"), "warehouse_name": row.get::<Option<String>,_>("warehouse_name")})))
 }
 
 pub async fn update(

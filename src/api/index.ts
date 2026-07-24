@@ -58,6 +58,7 @@ export interface Material {
   unit_name: string | null;
   supplier_id: string | null;
   warehouse_id: string | null;
+  warehouse_name: string | null;
   rack_id: string | null;
   quantity: number;
   min_stock: number;

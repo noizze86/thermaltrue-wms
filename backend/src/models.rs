@@ -348,6 +348,7 @@ pub struct Material {
     pub category_name: Option<String>,
     pub unit_id: Option<String>,
     pub unit_name: Option<String>,
+    pub warehouse_name: Option<String>,
     pub supplier_id: Option<String>,
     pub warehouse_id: Option<String>,
     pub rack_id: Option<String>,

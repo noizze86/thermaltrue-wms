@@ -30,8 +30,8 @@ export const resources: Resource[] = [
     columns: [
       { key: "sku", label: "SKU", type: "text" },
       { key: "name", label: "Name", type: "text" },
-      { key: "category_id", label: "Category", type: "text" },
-      { key: "unit_id", label: "Unit", type: "text" },
+      { key: "category_name", label: "Category", type: "text" },
+      { key: "unit_name", label: "Unit", type: "text" },
       { key: "quantity", label: "Qty", type: "number" },
       { key: "price", label: "Price", type: "number" },
       { key: "min_stock", label: "Min Stock", type: "number" },
@@ -185,8 +185,10 @@ export const resources: Resource[] = [
     columns: [
       { key: "sku", label: "SKU", type: "text" },
       { key: "name", label: "Name", type: "text" },
+      { key: "category_name", label: "Category", type: "text" },
+      { key: "unit_name", label: "Unit", type: "text" },
       { key: "quantity", label: "Quantity", type: "number" },
-      { key: "warehouse_id", label: "Warehouse", type: "text" },
+      { key: "warehouse_name", label: "Warehouse", type: "text" },
       { key: "min_stock", label: "Min Stock", type: "number" },
     ],
     permission: "manage_materials",
