@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use axum::{Json, extract::{State, Query, Path}};
+use chrono::Datelike;
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
@@ -101,16 +102,40 @@ pub async fn abc_analysis(
 pub async fn mom_kpis(
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let current = chrono::Local::now().format("%Y-%m").to_string();
-    let prior = chrono::Local::now().checked_sub_months(chrono::Months::new(1)).map(|d| d.format("%Y-%m").to_string()).unwrap_or_default();
-    async fn month_val(pool: &Arc<DbPool>, month: &str) -> f64 {
-        sqlx::query_scalar("SELECT COALESCE(SUM(quantity),0) FROM transactions WHERE type='in' AND to_char(created_at,'YYYY-MM')=$1")
-            .bind(month).fetch_one(&pool.pool).await.unwrap_or(0.0)
-    }
-    let cv = month_val(&pool, &current).await;
-    let pv = month_val(&pool, &prior).await;
-    let change = if pv > 0.0 { ((cv - pv) / pv * 100.0) as f64 } else { 0.0 };
-    Ok(Json(json!({"inbound": json!({"current_value": cv, "prev_value": pv, "change_pct": change})})))
+    let now = chrono::Local::now().naive_local();
+    let cur_month_start = now.format("%Y-%m-01 00:00:00").to_string();
+    let prev_month_start = (now - chrono::Duration::days(now.day() as i64)).format("%Y-%m-01 00:00:00").to_string();
+
+    let cur_materials: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE is_active=true")
+        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let cur_value: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity*price),0) FROM materials WHERE is_active=true")
+        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let cur_low_stock: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE quantity<=min_stock AND min_stock>0 AND is_active=true")
+        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let cur_transactions: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions")
+        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let cur_tx_month: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE created_at>=$1")
+        .bind(&cur_month_start).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+
+    let prev_materials: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE is_active=true AND created_at<$1")
+        .bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(cur_materials);
+    let prev_value: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity*price),0) FROM materials WHERE is_active=true AND created_at<$1")
+        .bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let prev_low_stock: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE quantity<=min_stock AND min_stock>0 AND is_active=true AND created_at<$1")
+        .bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let prev_transactions: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE created_at>=$1 AND created_at<$2")
+        .bind(&prev_month_start).bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(0.0);
+
+    let pct = |cur: f64, prev: f64| -> f64 { if prev == 0.0 { 0.0 } else { ((cur - prev) / prev * 100.0 * 100.0).round() / 100.0 } };
+
+    let result = json!([
+        {"current_value": cur_materials, "prev_value": prev_materials, "change_pct": pct(cur_materials, prev_materials)},
+        {"current_value": cur_value, "prev_value": prev_value, "change_pct": pct(cur_value, prev_value)},
+        {"current_value": cur_low_stock, "prev_value": prev_low_stock, "change_pct": pct(cur_low_stock, prev_low_stock)},
+        {"current_value": cur_transactions, "prev_value": prev_transactions, "change_pct": pct(cur_transactions, prev_transactions)},
+        {"current_value": cur_tx_month, "prev_value": prev_transactions, "change_pct": pct(cur_tx_month, prev_transactions)},
+    ]);
+    Ok(Json(result))
 }
 
 pub async fn aging_report(
