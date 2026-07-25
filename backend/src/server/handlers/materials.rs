@@ -11,6 +11,9 @@ use calamine::{Reader, DataType};
 #[derive(Deserialize)]
 pub struct ListQuery { pub search: Option<String>, pub category_id: Option<String>, pub warehouse_id: Option<String> }
 
+#[derive(Deserialize)]
+pub struct SkuQuery { pub sku: String }
+
 pub async fn list(
     State(pool): State<Arc<DbPool>>,
     Extension(user_id): Extension<String>,
@@ -60,18 +63,18 @@ pub async fn list(
 
 pub async fn get_by_sku(
     State(pool): State<Arc<DbPool>>,
-    Path(sku): Path<String>,
+    Query(q): Query<SkuQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let row = sqlx::query(
         "SELECT m.id, m.sku, m.name, m.quantity, m.price, c.name as category_name, u.name as unit_name, w.name as warehouse_name \
          FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id \
          LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.sku = $1 AND m.is_active=true"
     )
-    .bind(&sku)
+    .bind(&q.sku)
     .fetch_optional(&pool.pool)
     .await
     .map_err(|e| crate::server::server_error(e))?
-    .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": format!("Material with SKU '{}' not found", sku)}))))?;
+    .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": format!("Material with SKU '{}' not found", q.sku)}))))?;
     Ok(Json(json!({
         "id": row.get::<String,_>("id"),
         "sku": row.get::<String,_>("sku"),
