@@ -429,8 +429,8 @@ export const getMaterialBySku = (sku: string) => invokeAuth<Material>("get_mater
 export const getExpiringMaterials = (days: number) => invokeAuth<Material[]>("get_expiring_materials", { days });
 
 // Transactions
-export const getTransactions = (search?: string, type_filter?: string, material_id?: string, warehouse_id?: string, date_start?: string, date_end?: string, limit?: number) =>
-  invokeAuth<Transaction[]>("get_transactions", { search, typeFilter: type_filter, materialId: material_id, warehouseId: warehouse_id, dateStart: date_start, dateEnd: date_end, limit });
+export const getTransactions = (search?: string, type_filter?: string, material_id?: string, warehouse_id?: string, date_start?: string, date_end?: string, limit?: number, status_filter?: string) =>
+  invokeAuth<Transaction[]>("get_transactions", { search, typeFilter: type_filter, materialId: material_id, warehouseId: warehouse_id, dateStart: date_start, dateEnd: date_end, limit, statusFilter: status_filter });
 export const createTransaction = (tx: Transaction, items?: TransactionItem[]) => invokeAuth<Transaction>("create_transaction", { tx, items: items || [] });
 export const approveTransaction = (id: string) => invokeAuth<void>("approve_transaction", { id });
 export const rejectTransaction = (id: string) => invokeAuth<void>("reject_transaction", { id });
@@ -492,8 +492,222 @@ export const transferMaterialsBulk = (transfers: Record<string, unknown>[], user
 export const getDashboardKpi = () => invokeAuth<DashboardKpi>("get_dashboard_kpi");
 export const getAnalysisAll = (warehouse_id?: string) =>
   invokeAuth<AnalysisItem[]>("get_analysis_all", { warehouseId: warehouse_id || null });
-export const getAbcAnalysis = (warehouse_id?: string) =>
-  invokeAuth<AbcAnalysis>("get_abc_analysis", { warehouseId: warehouse_id || null });
+export const getAbcAnalysis = (warehouse_id?: string, mode?: string) =>
+  invokeAuth<AbcAnalysis>("get_abc_analysis", { warehouseId: warehouse_id || null, mode: mode || "single" });
+
+// Fase 5 — Dashboard Health Index
+export interface HealthComponent {
+  score: number;
+  weight: number;
+}
+export interface HealthIndexResponse {
+  score: number;
+  status: "good" | "warning" | "critical";
+  trend_direction?: "▲" | "▼" | "→";
+  yesterday_score?: number;
+  avg_7days_score?: number;
+  components: {
+    inventory_accuracy: HealthComponent;
+    productivity: HealthComponent;
+    on_time_rate: HealthComponent;
+    space_utilization: HealthComponent;
+    stock_availability: HealthComponent;
+  };
+}
+export interface BiggestLossItem {
+  material_id: string;
+  material_name: string;
+  sku: string;
+  dead_stock_loss: number;
+  stockout_loss: number;
+  variance_loss: number;
+  total_loss: number;
+}
+export interface CapacityPressure {
+  total_capacity: number;
+  used_capacity: number;
+  available_capacity: number;
+  utilization_pct: number;
+  avg_daily_inbound: number;
+  avg_daily_outbound: number;
+  days_to_full: number;
+  status: "normal" | "warning" | "critical";
+  capacity_pressure_score?: number;
+  predicted_full_date?: string;
+}
+export const getHealthIndex = () => invokeAuth<HealthIndexResponse>("get_health_index");
+export const getBiggestLosses = () => invokeAuth<BiggestLossItem[]>("get_biggest_losses");
+export const getCapacityPressure = () => invokeAuth<CapacityPressure>("get_capacity_pressure");
+
+// Consolidated Dashboard Metrics (Latest Row)
+export interface DashboardMetricsLatest {
+  health_index: number;
+  accuracy_rate: number;
+  productivity_rate: number;
+  on_time_shipping_rate: number;
+  utilization_rate: number;
+  stock_availability_rate: number;
+  yesterday_health_index: number;
+  avg_7days_health_index: number;
+  trend_direction: "▲" | "▼" | "→";
+  capacity_pressure_score: number;
+  predicted_full_date: string;
+  capacity_status: string;
+  total_capacity: number;
+  used_capacity: number;
+  available_capacity: number;
+  utilization_pct: number;
+  avg_daily_inbound: number;
+  avg_daily_outbound: number;
+  days_to_full: number;
+  metric_date: string;
+  metric_hour: string;
+  updated_at: string;
+}
+export const getMetricsLatest = () => invokeAuth<DashboardMetricsLatest>("get_metrics_latest");
+
+// Fase 6 — Cost Analysis
+export interface CostSummary {
+  total_inventory_value: number;
+  total_quantity: number;
+  material_count: number;
+  transactions_30d: number;
+  carrying_cost_rate: number;
+  estimated_annual_carrying_cost: number;
+  avg_purchase_price_90d: number;
+  avg_value_per_material: number;
+}
+export interface CarryingCostItem {
+  material_id: string;
+  material_name: string;
+  sku: string;
+  quantity: number;
+  price: number;
+  inventory_value: number;
+  carrying_cost: number;
+  shrinkage_cost: number;
+  storage_cost: number;
+  total_carrying_cost: number;
+  carrying_cost_rate: number;
+  true_unit_cost: number;
+}
+export interface CarryingCostResponse {
+  carrying_cost_rate: number;
+  items: CarryingCostItem[];
+}
+export interface CostToServeItem {
+  transaction_id: string;
+  transaction_number: string;
+  type: string;
+  material_name: string;
+  sku: string;
+  picking_cost: number;
+  packing_cost: number;
+  admin_cost: number;
+  total_cost: number;
+  order_margin: number;
+  is_profitable: boolean;
+}
+export interface CostToServeResponse {
+  total_orders_analyzed: number;
+  profitable_count: number;
+  unprofitable_count: number;
+  profitability_rate: number;
+  total_cost_all: number;
+  items: CostToServeItem[];
+}
+export interface EfficiencyPenaltyDetail {
+  transaction_type: string;
+  count: number;
+  avg_actual_minutes: number;
+  standard_minutes: number;
+  variance_minutes: number;
+  penalty_per_tx: number;
+  total_penalty: number;
+}
+export interface EfficiencyPenaltyResponse {
+  hourly_labor_rate: number;
+  total_efficiency_penalty: number;
+  details: EfficiencyPenaltyDetail[];
+}
+export const getCostSummary = () => invokeAuth<CostSummary>("get_cost_summary");
+export const getCarryingCost = () => invokeAuth<CarryingCostResponse>("get_carrying_cost");
+export const getCostToServe = () => invokeAuth<CostToServeResponse>("get_cost_to_serve");
+export const getEfficiencyPenalty = () => invokeAuth<EfficiencyPenaltyResponse>("get_efficiency_penalty");
+
+// Fase 7 — Material Analysis
+export interface MaterialSummary {
+  total_materials: number;
+  dead_stock_count: number;
+  slow_moving_count: number;
+  avg_turnover_ratio: number;
+  avg_stockout_risk: number;
+  high_risk_count: number;
+}
+export interface MaterialDetail {
+  material_id: string;
+  material_name: string;
+  sku: string;
+  quantity: number;
+  unit_price: number;
+  inventory_value: number;
+  min_stock: number;
+  max_stock: number;
+  consumption_3mo: number;
+  consumption_6mo: number;
+  consumption_12mo: number;
+  inbound_30d: number;
+  outbound_30d: number;
+  turnover_ratio: number;
+  days_cover: number;
+  stockout_risk: number;
+  is_dead_stock: boolean;
+  is_slow_moving: boolean;
+  days_since_last_tx: number;
+  last_tx_date: string;
+  lead_time_days: number;
+}
+export const getMaterialSummary = () => invokeAuth<MaterialSummary>("get_material_analysis_summary");
+export const getMaterialDetails = () => invokeAuth<MaterialDetail[]>("get_material_analysis_details");
+
+// Fase 8 — Consumption Analysis
+export interface ConsumptionSummary {
+  total_consumption_3mo: number;
+  total_consumption_6mo: number;
+  total_consumption_12mo: number;
+  avg_lead_time_days: number;
+}
+export interface ConsumptionDetail {
+  material_id: string;
+  material_name: string;
+  sku: string;
+  current_qty: number;
+  consumption_1mo: number;
+  consumption_3mo: number;
+  consumption_6mo: number;
+  consumption_12mo: number;
+  avg_monthly_1mo: number;
+  avg_monthly_3mo: number;
+  avg_monthly_6mo: number;
+  avg_monthly_12mo: number;
+  seasonal_index: number;
+  is_seasonal_high: boolean;
+  is_seasonal_low: boolean;
+  std_dev: number;
+  lead_time_days: number;
+  safety_stock: number;
+  reorder_point: number;
+}
+export interface SeasonalEntry {
+  name: string;
+  avg: number;
+  index: number;
+  season: string;
+}
+export const getConsumptionSummary = () => invokeAuth<ConsumptionSummary>("get_consumption_summary");
+export const getConsumptionDetails = (warehouse_id?: string) =>
+  invokeAuth<ConsumptionDetail[]>("get_consumption_details", { warehouseId: warehouse_id || null });
+export const getConsumptionSeasonal = () => invokeAuth<SeasonalEntry[]>("get_consumption_seasonal");
 
 // Reports
 export const exportReportCsv = (report_type: string) => invokeAuth<string>("export_report_csv", { reportType: report_type });
@@ -721,6 +935,8 @@ export interface TransactionAttachment {
 export const getTransactionItems = (tx_id: string) => invokeAuth<TransactionItem[]>("get_transaction_items", { txId: tx_id });
 export const reverseTransaction = (id: string) => invokeAuth<void>("reverse_transaction", { id });
 export const reverseTransactionsBulk = (ids: string[]) => invokeAuth<string>("reverse_transactions_bulk", { ids });
+export const deleteTransaction = (id: string) => invokeAuth<void>("delete_transaction", { id });
+export const deleteTransactionsBulk = (ids: string[]) => invokeAuth<string>("delete_transactions_bulk", { ids });
 
 // FIFO/FEFO
 export const getFifoFefoSuggestion = (material_id: string, type_: string) =>
@@ -785,6 +1001,106 @@ export const deleteBudget = (id: string) => invokeAuth<void>("delete_budget", { 
 // ── Phase 9A — ABC Weights ──
 export const getAbcWeights = () => invokeAuth<AbcWeight[]>("get_abc_weights");
 export const setAbcWeight = (key: string, value: number) => invokeAuth<void>("set_abc_weight", { key, value });
+
+// ── Fase 10 — Forecast Metrics ──
+export interface ForecastMetricItem {
+  material_id: string;
+  material_name: string;
+  sku: string;
+  current_qty: number;
+  min_stock: number;
+  forecast_1mo: number;
+  forecast_3mo: number;
+  forecast_6mo: number;
+  confidence_lower_1mo: number;
+  confidence_upper_1mo: number;
+  mape: number;
+  mae: number;
+  rmse: number;
+  trend: string;
+  is_seasonal: boolean;
+  recommendations: string;
+  consumption_3mo: number;
+  consumption_6mo: number;
+  consumption_12mo: number;
+}
+export interface ForecastGenerateResult {
+  generated: number;
+  period: string;
+  items: ForecastMetricItem[];
+}
+export interface ForecastSummaryResult {
+  total_materials: number;
+  forecasted: number;
+  trend_up: number;
+  trend_down: number;
+  seasonal_count: number;
+  avg_mape: number;
+}
+export interface ForecastDetailsItem {
+  material_id: string;
+  material_name: string;
+  sku: string;
+  forecast_1mo: number;
+  forecast_3mo: number;
+  forecast_6mo: number;
+  confidence_lower_1mo: number;
+  confidence_upper_1mo: number;
+  confidence_lower_3mo: number;
+  confidence_upper_3mo: number;
+  confidence_lower_6mo: number;
+  confidence_upper_6mo: number;
+  mape: number;
+  mae: number;
+  rmse: number;
+  trend: string;
+  is_seasonal: boolean;
+  recommendations: string;
+}
+export interface ForecastDetailsResult {
+  items: ForecastDetailsItem[];
+  total: number;
+  period: string;
+}
+export const forecastGenerate = (warehouse_id?: string) =>
+  invokeAuth<ForecastGenerateResult>("forecast_generate", { warehouseId: warehouse_id || "" });
+export const getForecastSummary = () => invokeAuth<ForecastSummaryResult>("get_forecast_summary");
+export const getForecastDetails = (material_id?: string, warehouse_id?: string) =>
+  invokeAuth<ForecastDetailsResult>("get_forecast_details", { materialId: material_id || "", warehouseId: warehouse_id || "" });
+
+// ── Fase 9 — ABC Classification (persisted) ──
+export interface AbcClassifiedItem {
+  material_id: string;
+  material_name: string;
+  sku: string;
+  current_qty: number;
+  unit_price: number;
+  inventory_value: number;
+  consumption_12mo: number;
+  turnover: number;
+  abc_class: string;
+  xyz_class: string;
+  composite_score: number;
+  value_contribution_pct: number;
+  days_since_last_tx: number;
+}
+export interface AbcClassifyResult {
+  class_a: AbcClassifiedItem[];
+  class_b: AbcClassifiedItem[];
+  class_c: AbcClassifiedItem[];
+  mode: string;
+  total_materials: number;
+  weights: { value_w: number; turnover_w: number; recency_w: number };
+}
+export interface AbcSummaryResult {
+  class_a_count: number;
+  class_b_count: number;
+  class_c_count: number;
+  total_classified: number;
+}
+export const abcClassify = (mode?: string, warehouse_id?: string) =>
+  invokeAuth<AbcClassifyResult>("abc_classify", { mode: mode || "single", warehouseId: warehouse_id || "" });
+export const getAbcSummary = () => invokeAuth<AbcSummaryResult>("get_abc_summary");
 
 // ── Phase 9A — Forecast Cache ──
 export const getForecastCache = (material_id: string, model: string, horizon: number) => invokeAuth<ForecastCache | null>("get_forecast_cache", { materialId: material_id, model, horizon });

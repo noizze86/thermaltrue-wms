@@ -31,7 +31,7 @@ export default function AnalysisDashboardPage() {
   const { data: momKpis } = useQuery({ queryKey: ["momKpis"], queryFn: getMomKpis })
   const { data: filteredTxs } = useQuery({
     queryKey: ["txDateRange", dateRange.start, dateRange.end],
-    queryFn: () => getTransactions(undefined, undefined, undefined, dateRange.start || undefined, dateRange.end || undefined),
+    queryFn: () => getTransactions(undefined, undefined, undefined, undefined, dateRange.start || undefined, dateRange.end || undefined, undefined, "active"),
     enabled: !!dateRange.start && !!dateRange.end,
   })
 

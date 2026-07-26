@@ -20,7 +20,7 @@ pub async fn export_report_csv(pool: State<'_, DbPool>, token: String, report_ty
         }
         "transactions" => {
             wtr.write_record(["Number", "Type", "Material", "Quantity", "Date"]).map_err(|e| AppError::Internal(e.to_string()))?;
-            let rows = sqlx::query("SELECT t.transaction_number, t.type, COALESCE(m.name,''), t.quantity, t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC")
+            let rows = sqlx::query("SELECT t.transaction_number, t.type, COALESCE(m.name,''), t.quantity, t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE t.status NOT IN ('voided','reversed') ORDER BY t.created_at DESC")
                 .fetch_all(&pool.pool).await?;
             for row in &rows { wtr.write_record([row.get::<String,_>(0), row.get::<String,_>(1), row.get::<String,_>(2), row.get::<f64,_>(3).to_string(), row.get::<String,_>(4)]).map_err(|e| AppError::Internal(e.to_string()))?; }
         }
@@ -44,7 +44,7 @@ pub async fn export_report_csv(pool: State<'_, DbPool>, token: String, report_ty
         }
         "transaction_details" => {
             wtr.write_record(["Number","Type","Material","Warehouse","Qty","Price","Status","User","Reference","PO","Invoice","Date"]).map_err(|e| AppError::Internal(e.to_string()))?;
-            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),COALESCE(w.name,''),t.quantity,t.price,t.status,COALESCE(u.full_name,''),t.reference,t.po_number,t.invoice_no,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id LEFT JOIN warehouses w ON t.warehouse_id=w.id LEFT JOIN users u ON t.user_id=u.id ORDER BY t.created_at DESC")
+            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),COALESCE(w.name,''),t.quantity,t.price,t.status,COALESCE(u.full_name,''),t.reference,t.po_number,t.invoice_no,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id LEFT JOIN warehouses w ON t.warehouse_id=w.id LEFT JOIN users u ON t.user_id=u.id WHERE t.status NOT IN ('voided','reversed') ORDER BY t.created_at DESC")
                 .fetch_all(&pool.pool).await?;
             for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<String,_>(3),row.get::<f64,_>(4).to_string(),row.get::<f64,_>(5).to_string(),row.get::<String,_>(6),row.get::<String,_>(7),row.get::<String,_>(8),row.get::<String,_>(9),row.get::<String,_>(10),row.get::<String,_>(11)]).map_err(|e| AppError::Internal(e.to_string()))?; }
         }
@@ -203,9 +203,9 @@ pub async fn get_mom_kpis(pool: State<'_, DbPool>, token: String) -> Result<Vec<
         .fetch_one(&pool.pool).await?;
     let cur_low_stock: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE quantity<=min_stock AND min_stock>0 AND is_active=true")
         .fetch_one(&pool.pool).await?;
-    let cur_transactions: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions")
+    let cur_transactions: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed')")
         .fetch_one(&pool.pool).await?;
-    let cur_tx_month: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE created_at>=$1")
+    let cur_tx_month: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at>=$1")
         .bind(&cur_month_start).fetch_one(&pool.pool).await?;
 
     let prev_materials: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE is_active=true AND created_at<$1")
@@ -214,7 +214,7 @@ pub async fn get_mom_kpis(pool: State<'_, DbPool>, token: String) -> Result<Vec<
         .bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(0.0);
     let prev_low_stock: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE quantity<=min_stock AND min_stock>0 AND is_active=true AND created_at<$1")
         .bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let prev_transactions: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE created_at>=$1 AND created_at<$2")
+    let prev_transactions: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at>=$1 AND created_at<$2")
         .bind(&prev_month_start).bind(&prev_month_end).fetch_one(&pool.pool).await.unwrap_or(0.0);
 
     fn pct(cur: f64, prev: f64) -> f64 { if prev == 0.0 { 0.0 } else { ((cur - prev) / prev * 100.0 * 100.0).round() / 100.0 } }
@@ -725,7 +725,7 @@ pub async fn run_report_schedule(pool: State<'_, DbPool>, token: String, schedul
             format!("Stock Report - {}\n\nSKU|Name|Warehouse|Qty|Min\n{}", now_str, lines.join("\n"))
         }
         "transactions" => {
-            let rows = sqlx::query("SELECT t.transaction_number, t.type, COALESCE(m.name,''), t.quantity, t.status, t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC LIMIT 500")
+            let rows = sqlx::query("SELECT t.transaction_number, t.type, COALESCE(m.name,''), t.quantity, t.status, t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE t.status NOT IN ('voided','reversed') ORDER BY t.created_at DESC LIMIT 500")
                 .fetch_all(&pool.pool).await?;
             let lines: Vec<String> = rows.iter().map(|row| format!("{}|{}|{}|{}|{}|{}", row.get::<String,_>(0), row.get::<String,_>(1), row.get::<String,_>(2), row.get::<f64,_>(3), row.get::<String,_>(4), row.get::<String,_>(5))).collect();
             format!("Transaction Report - {}\n\nNumber|Type|Material|Qty|Status|Date\n{}", now_str, lines.join("\n"))

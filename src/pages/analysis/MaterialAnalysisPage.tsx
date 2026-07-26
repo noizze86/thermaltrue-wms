@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { getTransactions, getAnalysisAll, getSupplierPrices, getSuppliers } from "../../api"
+import { getTransactions, getAnalysisAll, getSupplierPrices, getSuppliers, getMaterialSummary, getMaterialDetails } from "../../api"
 import { Input } from "../../components/ui/input"
 import { Button } from "../../components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -29,9 +29,11 @@ export default function MaterialAnalysisPage() {
   const { data: suppliers } = useQuery({ queryKey: ["suppliers"], queryFn: () => getSuppliers() })
   const { data: txs } = useQuery({
     queryKey: ["transactions", selectedMaterialId],
-    queryFn: () => getTransactions(undefined, undefined, selectedMaterialId),
+    queryFn: () => getTransactions(undefined, undefined, selectedMaterialId, undefined, undefined, undefined, undefined, "active"),
     enabled: !!selectedMaterialId,
   })
+  const { data: matSummary } = useQuery({ queryKey: ["matSummary"], queryFn: getMaterialSummary })
+  const { data: matDetails } = useQuery({ queryKey: ["matDetails"], queryFn: getMaterialDetails })
   // Purchase prices for price trend overlay
   const { data: supplierPrices } = useQuery({
     queryKey: ["supplierPricesMaterial", selectedMaterialId],
@@ -127,36 +129,87 @@ export default function MaterialAnalysisPage() {
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Material Analysis</h1>
 
-      <div className="grid gap-6 md:grid-cols-4">
+      <div className="grid gap-6 md:grid-cols-5">
         <Card className="border-red-200">
-          <CardHeader><CardTitle className="text-red-600 dark:text-red-400">Dead Stock (&gt;90 days)</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-red-600 dark:text-red-400 text-xs">Dead Stock</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-red-600 dark:text-red-400">{deadStock.length}</div>
-            <p className="text-sm text-muted-foreground">materials</p>
+            <div className="text-2xl font-bold text-red-600 dark:text-red-400">{matSummary?.dead_stock_count ?? deadStock.length}</div>
+            <p className="text-[10px] text-muted-foreground">no outbound &gt;90 days</p>
           </CardContent>
         </Card>
         <Card className="border-yellow-200">
-          <CardHeader><CardTitle className="text-yellow-600 dark:text-yellow-400">Slow Moving (30-90 days)</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-yellow-600 dark:text-yellow-400 text-xs">Slow Moving</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold text-yellow-600 dark:text-yellow-400">{slowMoving.length}</div>
-            <p className="text-sm text-muted-foreground">materials</p>
+            <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{matSummary?.slow_moving_count ?? slowMoving.length}</div>
+            <p className="text-[10px] text-muted-foreground">30-90 days idle</p>
           </CardContent>
         </Card>
         <Card className="border-gray-200 dark:border-gray-700">
-          <CardHeader><CardTitle className="text-gray-600 dark:text-gray-400">Total Materials</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-gray-600 dark:text-gray-400 text-xs">Total Materials</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">{filtered.length}</div>
-            <p className="text-sm text-muted-foreground">materials (filtered)</p>
+            <div className="text-2xl font-bold">{matSummary?.total_materials ?? filtered.length}</div>
+            <p className="text-[10px] text-muted-foreground">active</p>
           </CardContent>
         </Card>
         <Card>
-          <CardHeader><CardTitle className="text-sm">Avg Days Since Tx</CardTitle></CardHeader>
+          <CardHeader><CardTitle className="text-xs">Avg Stockout Risk</CardTitle></CardHeader>
           <CardContent>
-            <div className="text-3xl font-bold">{filtered.length > 0 ? Math.round(filtered.reduce((s, i) => s + i.days_since_last, 0) / filtered.length) : 0}</div>
-            <p className="text-sm text-muted-foreground">days avg</p>
+            <div className="flex items-center gap-2">
+              <div className="text-2xl font-bold">{matSummary ? `${Math.round(matSummary.avg_stockout_risk)}%` : "—"}</div>
+              {matSummary && matSummary.avg_stockout_risk > 50 && <span className="text-xs text-red-500 font-semibold">⚠ High</span>}
+            </div>
+            <p className="text-[10px] text-muted-foreground">{matSummary?.high_risk_count ?? 0} high risk</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader><CardTitle className="text-xs">Avg Turnover (ITR)</CardTitle></CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{matSummary ? matSummary.avg_turnover_ratio.toFixed(2) : "—"}</div>
+            <p className="text-[10px] text-muted-foreground">12mo / stock ratio</p>
           </CardContent>
         </Card>
       </div>
+
+      {/* High Risk Materials */}
+      {matDetails && matDetails.filter((d) => d.stockout_risk > 50).length > 0 && (
+        <Card className="border-orange-200">
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-sm">
+              <span className="text-orange-500">⚠</span> High Stockout Risk Materials
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="max-h-48 overflow-y-auto">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">SKU</TableHead>
+                  <TableHead className="text-xs">Name</TableHead>
+                  <TableHead className="text-xs text-right">Risk</TableHead>
+                  <TableHead className="text-xs text-right">Stock</TableHead>
+                  <TableHead className="text-xs text-right">Min</TableHead>
+                  <TableHead className="text-xs text-right">Cover</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {matDetails.filter((d) => d.stockout_risk > 50).slice(0, 10).map((d) => (
+                  <TableRow key={d.material_id}>
+                    <TableCell className="text-xs font-mono">{d.sku}</TableCell>
+                    <TableCell className="text-xs">{d.material_name}</TableCell>
+                    <TableCell className="text-xs text-right">
+                      <span className={`font-bold ${d.stockout_risk > 80 ? "text-red-600" : "text-orange-500"}`}>
+                        {d.stockout_risk}%
+                      </span>
+                    </TableCell>
+                    <TableCell className="text-xs text-right">{d.quantity}</TableCell>
+                    <TableCell className="text-xs text-right">{d.min_stock}</TableCell>
+                    <TableCell className="text-xs text-right">{d.days_cover > 999 ? "∞" : `${d.days_cover}d`}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader>
@@ -271,25 +324,33 @@ export default function MaterialAnalysisPage() {
                   <TableHead>SKU</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>Stock</TableHead>
-                  <TableHead>Days Since Transaction</TableHead>
+                  <TableHead>Days Since Tx</TableHead>
                   <TableHead>ITR</TableHead>
+                  <TableHead>Risk</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {sorted.map((item) => {
                   const itr = item.quantity > 0 ? item.consumption_12mo / item.quantity : 0
+                  const md = matDetails?.find((d) => d.material_id === item.material_id)
                   let badgeVariant: "success" | "warning" | "destructive" = "success"
                   let label = "Active"
                   if (item.days_since_last > 90) { badgeVariant = "destructive"; label = "Dead Stock" }
                   else if (item.days_since_last > 30) { badgeVariant = "warning"; label = "Slow Moving" }
+                  const risk = md?.stockout_risk ?? 0
                   return (
                     <TableRow key={item.material_id}>
                       <TableCell className="font-mono">{item.sku}</TableCell>
                       <TableCell className="font-medium">{item.material_name}</TableCell>
                       <TableCell>{item.quantity}</TableCell>
-                      <TableCell>{item.days_since_last > 999 ? "Never" : `${item.days_since_last} days`}</TableCell>
+                      <TableCell>{item.days_since_last > 999 ? "Never" : `${item.days_since_last}d`}</TableCell>
                       <TableCell>{itr.toFixed(2)}</TableCell>
+                      <TableCell>
+                        <span className={`text-xs font-semibold ${risk > 80 ? "text-red-600" : risk > 50 ? "text-orange-500" : "text-green-600"}`}>
+                          {risk}%
+                        </span>
+                      </TableCell>
                       <TableCell><Badge variant={badgeVariant}>{label}</Badge></TableCell>
                     </TableRow>
                   )

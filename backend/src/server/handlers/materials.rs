@@ -27,7 +27,7 @@ pub async fn list(
          m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, \
          c.name as category_name, u.name as unit_name, w.name as warehouse_name \
          FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id \
-         LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE 1=1"
+         LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true"
     );
     if let Some(ref s) = q.search { if !s.is_empty() {
         let pat = format!("%{}%", s);
@@ -68,7 +68,7 @@ pub async fn get_by_sku(
     let row = sqlx::query(
         "SELECT m.id, m.sku, m.name, m.quantity, m.price, c.name as category_name, u.name as unit_name, w.name as warehouse_name \
          FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id \
-         LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.sku = $1 AND m.is_active=true"
+         LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.sku = $1"
     )
     .bind(&q.sku)
     .fetch_optional(&pool.pool)
@@ -166,7 +166,9 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
-    sqlx::query("DELETE FROM materials WHERE id=$1").bind(&id).execute(&pool.pool).await
+    let qty: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1").bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"}))))?;
+    if qty > 0.0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Cannot delete material with remaining stock"})))); }
+    sqlx::query("UPDATE materials SET is_active=false, updated_at=NOW() WHERE id=$1").bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
@@ -178,7 +180,7 @@ pub async fn bulk_delete(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let ids: Vec<String> = body.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
-    for id in &ids { sqlx::query("DELETE FROM materials WHERE id=$1").bind(id).execute(&pool.pool).await.ok(); }
+    for id in &ids { sqlx::query("UPDATE materials SET is_active=false, updated_at=NOW() WHERE id=$1").bind(id).execute(&pool.pool).await.ok(); }
     Ok(Json(json!(format!("Deleted {} material(s)", ids.len()))))
 }
 
@@ -420,7 +422,7 @@ pub async fn get_stock_timeline(
     State(pool): State<Arc<DbPool>>,
     Path(material_id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT t.id, t.transaction_number, t.type, t.quantity, COALESCE(t.reference,''), COALESCE(t.notes,''), COALESCE(u.full_name,''), t.created_at FROM transactions t LEFT JOIN users u ON t.user_id = u.id WHERE t.material_id = $1 AND t.type NOT IN ('opname') ORDER BY t.created_at ASC")
+    let rows = sqlx::query("SELECT t.id, t.transaction_number, t.type, t.quantity, COALESCE(t.reference,''), COALESCE(t.notes,''), COALESCE(u.full_name,''), t.created_at FROM transactions t LEFT JOIN users u ON t.user_id = u.id WHERE t.material_id = $1 AND t.type NOT IN ('opname') AND t.status NOT IN ('voided','reversed') ORDER BY t.created_at ASC")
         .bind(&material_id).fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     let mut running = 0.0f64;

@@ -32,9 +32,11 @@ pub async fn get_company_profile(
 }
 
 pub async fn save_company_profile(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<SaveCompanyProfileBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let existing: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM company_profile")
         .fetch_one(&pool.pool).await.unwrap_or(false);
@@ -74,9 +76,11 @@ pub async fn get_notification_config(
 pub struct SaveNotificationConfigBody { pub config_key: String, pub config_value: String }
 
 pub async fn save_notification_config(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<SaveNotificationConfigBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let existing: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM notification_config WHERE config_key=$1")
         .bind(&body.config_key).fetch_one(&pool.pool).await.unwrap_or(false);
     if existing {
@@ -192,9 +196,11 @@ pub async fn get_app_config(
 pub struct SetAppConfigBody { pub key: String, pub value: String }
 
 pub async fn set_app_config(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<SetAppConfigBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("INSERT INTO app_config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value")
         .bind(&body.key).bind(&body.value)
         .execute(&pool.pool).await
@@ -335,9 +341,11 @@ pub async fn count_filtered_audit_logs(
 pub struct AddAuditLogBody { pub user_id: Option<String>, pub action: String, pub entity: String, pub entity_id: Option<String>, pub details: String }
 
 pub async fn add_audit_log(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<AddAuditLogBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(&id).bind(&body.user_id).bind(&body.action).bind(&body.entity).bind(&body.entity_id).bind(&body.details)
@@ -350,9 +358,11 @@ pub async fn add_audit_log(
 pub struct PurgeAuditLogsQuery { pub months: i64 }
 
 pub async fn purge_old_audit_logs(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<PurgeAuditLogsQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let result = sqlx::query("DELETE FROM audit_log WHERE created_at < NOW() - ($1 * interval '1 month')")
         .bind(params.months)
         .execute(&pool.pool).await
@@ -364,9 +374,11 @@ pub async fn purge_old_audit_logs(
 pub struct ExportAuditCsvQuery { pub action: Option<String>, pub entity: Option<String>, pub user_id: Option<String>, pub date_start: Option<String>, pub date_end: Option<String>, pub limit: Option<i64> }
 
 pub async fn export_audit_csv_filtered(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<ExportAuditCsvQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let limit_val = params.limit.unwrap_or(500);
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT a.id, a.user_id, COALESCE(u.username, 'System'), a.action, a.entity, a.entity_id, a.details, a.created_at FROM audit_log a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1"
@@ -404,9 +416,11 @@ pub async fn get_all_app_config(
 }
 
 pub async fn delete_app_config(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Path(key): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM app_config WHERE key=$1")
         .bind(&key).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -414,8 +428,11 @@ pub async fn delete_app_config(
 }
 
 pub async fn backup_database(
+    Extension(user_id): Extension<String>,
     State(_pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let pool = _pool.clone();
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let database_url = std::env::var("DATABASE_URL").map_err(|_| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"DATABASE_URL not set"}))))?;
     let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "backups".into());
     tokio::fs::create_dir_all(&backup_dir).await.map_err(|e| crate::server::server_error(e))?;
@@ -434,9 +451,11 @@ pub async fn backup_database(
 pub struct RestoreDatabaseBody { pub backup_path: String }
 
 pub async fn restore_database(
-    State(_pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
     Json(body): Json<RestoreDatabaseBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let database_url = std::env::var("DATABASE_URL").map_err(|_| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"DATABASE_URL not set"}))))?;
     let output = tokio::process::Command::new("psql")
         .arg("-d").arg(&database_url).arg("-f").arg(&body.backup_path)

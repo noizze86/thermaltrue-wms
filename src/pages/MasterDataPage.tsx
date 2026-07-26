@@ -1,4 +1,5 @@
 import { useState, useCallback } from "react"
+import { z } from "zod"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import * as api from "../api"
 import { resources } from "../dataProvider/resources"
@@ -17,6 +18,25 @@ import {
   ArrowRightLeft, Users, Shield, ClipboardList, PackageSearch, FileText,
   Plus, Search, Pencil, Trash2,
 } from "lucide-react"
+
+function buildSchema(columns: ResourceColumn[]) {
+  const shape: Record<string, z.ZodTypeAny> = {}
+  const optionalKeys = ["description", "notes", "parent_id", "icon", "color", "bin_location"]
+  for (const col of columns) {
+    if (col.type === "number") {
+      shape[col.key] = z.number().min(0, `${col.label} cannot be negative`)
+    } else if (col.type === "select") {
+      shape[col.key] = z.string().min(1, `${col.label} is required`)
+    } else if (col.key === "email" || col.key === "pic_email") {
+      shape[col.key] = z.string().email("Invalid email").or(z.literal(""))
+    } else if (optionalKeys.includes(col.key)) {
+      shape[col.key] = z.string().max(500).optional().or(z.literal(""))
+    } else {
+      shape[col.key] = z.string().min(1, `${col.label} is required`).max(500)
+    }
+  }
+  return z.object(shape)
+}
 
 const iconMap: Record<string, React.ComponentType<{ className?: string }>> = {
   Package, Tags, Ruler, Truck, Warehouse, Layers, LayoutGrid,
@@ -75,7 +95,7 @@ function getHandlers(key: string): CrudHandler | null {
       remove: (id) => api.deleteRack(id),
     }
     case "transactions": return {
-      list: (p) => api.getTransactions(p?.search, p?.type_filter, p?.material_id, p?.warehouse_id, p?.date_start, p?.date_end),
+      list: (p) => api.getTransactions(p?.search, p?.type_filter, p?.material_id, p?.warehouse_id, p?.date_start, p?.date_end, undefined, "active"),
       create: (d) => api.createTransaction(d as unknown as api.Transaction),
       update: () => Promise.reject(new Error("Update not supported for transactions")),
       remove: () => Promise.reject(new Error("Delete not supported for transactions")),
@@ -121,6 +141,7 @@ export default function MasterDataPage() {
   const [showForm, setShowForm] = useState(false)
   const [editItem, setEditItem] = useState<Record<string, unknown> | null>(null)
   const [formData, setFormData] = useState<Record<string, unknown>>({})
+  const [formErrors, setFormErrors] = useState<Record<string, string>>({})
 
   const selectedResource = resources.find((r) => r.key === selectedKey) || resources[0]
   const handlers = getHandlers(selectedKey)
@@ -153,6 +174,7 @@ export default function MasterDataPage() {
       initial[col.key] = col.type === "number" ? 0 : ""
     }
     setFormData(initial)
+    setFormErrors({})
     setEditItem(null)
     setShowForm(true)
   }, [selectedResource])
@@ -164,11 +186,21 @@ export default function MasterDataPage() {
     }
     form.id = item.id
     setFormData(form)
+    setFormErrors({})
     setEditItem(item)
     setShowForm(true)
   }, [selectedResource])
 
   const handleSubmit = () => {
+    const schema = buildSchema(selectedResource.columns)
+    const result = schema.safeParse(formData)
+    if (!result.success) {
+      const errs: Record<string, string> = {}
+      for (const issue of result.error.issues) errs[issue.path[0] as string] = issue.message
+      setFormErrors(errs)
+      return
+    }
+    setFormErrors({})
     if (editItem) {
       updateMut.mutate(formData)
     } else {
@@ -178,11 +210,13 @@ export default function MasterDataPage() {
 
   const renderFormField = (col: ResourceColumn) => {
     const value = formData[col.key] ?? (col.type === "number" ? 0 : "")
+    const error = formErrors[col.key]
     if (col.type === "select") {
       return (
         <Select
           value={String(value)}
-          onChange={(e) => setFormData({ ...formData, [col.key]: e.target.value })}
+          onChange={(e) => { setFormData({ ...formData, [col.key]: e.target.value }); setFormErrors((p) => ({ ...p, [col.key]: "" })) }}
+          className={error ? "border-destructive" : ""}
         >
           <option value="">Select {col.label}</option>
           {col.options?.map((opt) => (
@@ -195,7 +229,8 @@ export default function MasterDataPage() {
       <Input
         type={col.type === "number" ? "number" : col.type === "date" ? "date" : "text"}
         value={value as string | number}
-        onChange={(e) => setFormData({ ...formData, [col.key]: col.type === "number" ? Number(e.target.value) : e.target.value })}
+        onChange={(e) => { setFormData({ ...formData, [col.key]: col.type === "number" ? Number(e.target.value) : e.target.value }); setFormErrors((p) => ({ ...p, [col.key]: "" })) }}
+        className={error ? "border-destructive" : ""}
       />
     )
   }
@@ -321,6 +356,7 @@ export default function MasterDataPage() {
               <div key={col.key} className="space-y-1.5">
                 <Label>{col.label}</Label>
                 {renderFormField(col)}
+                {formErrors[col.key] && <p className="text-xs text-destructive">{formErrors[col.key]}</p>}
               </div>
             ))}
             <Button onClick={handleSubmit} className="w-full" disabled={createMut.isPending || updateMut.isPending}>

@@ -88,6 +88,8 @@ export default function SystemPage() {
   const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (!file.type.startsWith("image/")) { toast({ title: "Error", description: "Only image files are allowed", variant: "destructive" }); e.target.value = ""; return }
+    if (file.size > 2 * 1024 * 1024) { toast({ title: "Error", description: "Logo must be under 2 MB", variant: "destructive" }); e.target.value = ""; return }
     const reader = new FileReader()
     reader.onload = () => setProfileForm({ ...profileForm, logo: reader.result as string })
     reader.readAsDataURL(file)
@@ -169,7 +171,7 @@ export default function SystemPage() {
               {can("manage_settings") && (
                 <Button onClick={() => {
                   const errs: string[] = []
-                  if (profileForm.email && !profileForm.email.includes("@")) errs.push("Format email tidak valid (harus mengandung @)")
+                  if (profileForm.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(profileForm.email)) errs.push("Format email tidak valid")
                   if (profileForm.phone) {
                     const digits = profileForm.phone.replace(/\D/g, "")
                     if (digits.length < 10) errs.push("Nomor telepon minimal 10 digit")

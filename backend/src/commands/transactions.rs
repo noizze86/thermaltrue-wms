@@ -58,6 +58,7 @@ pub async fn get_transactions(
     date_start: Option<String>,
     date_end: Option<String>,
     limit: Option<i64>,
+    status_filter: Option<String>,
 ) -> Result<Vec<Transaction>, AppError> {
     let user_id = pool.verify_token(&token)?;
     let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await?;
@@ -101,6 +102,12 @@ pub async fn get_transactions(
     }
     if !warehouse_ids.is_empty() {
         builder.push(" AND warehouse_id = ANY(").push_bind(&warehouse_ids).push(")");
+    }
+    let sf = status_filter.as_deref().unwrap_or("");
+    if sf == "active" {
+        builder.push(" AND status NOT IN ('voided', 'reversed')");
+    } else if !sf.is_empty() && sf != "all" {
+        builder.push(" AND status = ").push_bind(sf);
     }
     builder.push(" ORDER BY created_at DESC");
     let limit_val = limit.unwrap_or(200);
@@ -582,6 +589,7 @@ pub async fn reverse_transaction(pool: State<'_, DbPool>, token: String, id: Str
     if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Reversed) {
         return Err(AppError::Validation("Transaction already reversed".into()));
     }
+    if cur_status != "approved" { return Err(AppError::Validation("Only approved transactions can be reversed".into())); }
 
     let items: Vec<(String, f64)> = sqlx::query(
         "SELECT material_id, quantity FROM transaction_items WHERE tx_id=$1",
@@ -748,6 +756,101 @@ pub async fn reverse_transactions_bulk(pool: State<'_, DbPool>, token: String, i
         Ok(format!("Successfully reversed {} transactions", reversed))
     } else {
         Ok(format!("Reversed {} transactions with {} errors:\n{}", reversed, errors.len(), errors.join("\n")))
+    }
+}
+
+#[tauri::command]
+pub async fn delete_transaction(pool: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
+    let user_id = pool.verify_token(&token)?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let mut db_tx = pool.pool.begin().await?;
+    let (cur_status, tx_type): (String, String) = sqlx::query("SELECT status, type FROM transactions WHERE id=$1")
+        .bind(&id).fetch_optional(&mut *db_tx).await?
+        .map(|row| (row.get(0), row.get(1)))
+        .ok_or_else(|| AppError::NotFound("Transaction not found".into()))?;
+    if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Voided) {
+        return Err(AppError::Validation("Transaction already voided".into()));
+    }
+    if cur_status != "approved" { return Err(AppError::Validation("Only approved transactions can be voided".into())); }
+    let items: Vec<(String, f64)> = sqlx::query("SELECT material_id, quantity FROM transaction_items WHERE tx_id=$1")
+        .bind(&id).fetch_all(&mut *db_tx).await?
+        .into_iter().map(|row| (row.get(0), row.get(1))).collect();
+    if items.is_empty() {
+        let (mid, qty): (String, f64) = sqlx::query("SELECT material_id, quantity FROM transactions WHERE id=$1")
+            .bind(&id).fetch_one(&mut *db_tx).await
+            .map(|row| (row.get(0), row.get(1)))?;
+        match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+            TxType::In => { sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await?; }
+            TxType::Out => { sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await?; }
+            _ => {}
+        }
+    } else {
+        for (mid, qty) in &items {
+            match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                TxType::In => { sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await?; }
+                TxType::Out => { sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await?; }
+                _ => {}
+            }
+        }
+    }
+    sqlx::query("UPDATE transactions SET status='voided' WHERE id=$1").bind(&id).execute(&mut *db_tx).await?;
+    audit(&pool.pool, &user_id, "delete", "transaction", &id, &format!("Voided {} transaction", tx_type)).await;
+    db_tx.commit().await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn delete_transactions_bulk(pool: State<'_, DbPool>, token: String, ids: Vec<String>) -> Result<String, AppError> {
+    let user_id = pool.verify_token(&token)?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let mut db_tx = pool.pool.begin().await?;
+    let mut voided = 0i64;
+    let mut errors = Vec::new();
+    for id in &ids {
+        let (cur_status, tx_type): (String, String) = match sqlx::query("SELECT status, type FROM transactions WHERE id=$1")
+            .bind(id).fetch_optional(&mut *db_tx).await
+        {
+            Ok(Some(row)) => (row.get(0), row.get(1)),
+            Ok(None) => { errors.push(format!("{}: not found", id)); continue; }
+            Err(e) => { errors.push(format!("{}: {}", id, e)); continue; }
+        };
+        if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Voided) { errors.push(format!("{}: already voided", id)); continue; }
+        let items: Vec<(String, f64)> = match sqlx::query("SELECT material_id, quantity FROM transaction_items WHERE tx_id=$1")
+            .bind(id).fetch_all(&mut *db_tx).await
+        {
+            Ok(rows) => rows.into_iter().map(|row| (row.get(0), row.get(1))).collect(),
+            Err(e) => { errors.push(format!("{}: {}", id, e)); continue; }
+        };
+        if items.is_empty() {
+            if let Ok(Some(row)) = sqlx::query("SELECT material_id, quantity FROM transactions WHERE id=$1")
+                .bind(id).fetch_optional(&mut *db_tx).await
+            {
+                let (mid, qty): (String, f64) = (row.get(0), row.get(1));
+                match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                    TxType::In => { let _ = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await; }
+                    TxType::Out => { let _ = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await; }
+                    _ => {}
+                }
+            }
+        } else {
+            for (mid, qty) in &items {
+                match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                    TxType::In => { let _ = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await; }
+                    TxType::Out => { let _ = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await; }
+                    _ => {}
+                }
+            }
+        }
+        if sqlx::query("UPDATE transactions SET status='voided' WHERE id=$1").bind(id).execute(&mut *db_tx).await.is_ok() {
+            audit(&pool.pool, &user_id, "delete", "transaction", id, &format!("Voided {} transaction", tx_type)).await;
+            voided += 1;
+        }
+    }
+    db_tx.commit().await?;
+    if errors.is_empty() {
+        Ok(format!("Successfully voided {} transactions", voided))
+    } else {
+        Ok(format!("Voided {} transactions with {} errors:\n{}", voided, errors.len(), errors.join("\n")))
     }
 }
 

@@ -2,6 +2,7 @@ use tauri::State;
 use crate::db_pool::DbPool;
 use crate::models::LabelTemplate;
 use crate::error::AppError;
+use crate::validate;
 use sqlx::Row;
 
 fn row_to_template(row: &sqlx::postgres::PgRow) -> LabelTemplate {
@@ -51,7 +52,8 @@ pub async fn get_label_template(pool: State<'_, DbPool>, token: String, id: Stri
 
 #[tauri::command]
 pub async fn save_label_template(pool: State<'_, DbPool>, token: String, template: LabelTemplate) -> Result<LabelTemplate, AppError> {
-    pool.verify_token(&token)?;
+    let user_id = pool.verify_token(&token)?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let id = if template.id.is_empty() {
         uuid::Uuid::new_v4().to_string()
     } else {
@@ -95,7 +97,8 @@ pub async fn save_label_template(pool: State<'_, DbPool>, token: String, templat
 
 #[tauri::command]
 pub async fn delete_label_template(pool: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
-    pool.verify_token(&token)?;
+    let user_id = pool.verify_token(&token)?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let protected = vec!["default", "company", "asset_standard", "branded", "rack_label", "full_card", "mini_thermal", "qr_only", "two_side"];
     if protected.contains(&id.as_str()) {
         return Err(AppError::Validation("Cannot delete system templates".into()));

@@ -3,6 +3,7 @@ use axum::{Json, extract::{State, Query, Path}, Extension};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
+use crate::validate;
 use sqlx::Row;
 
 #[derive(Deserialize)]
@@ -19,9 +20,13 @@ pub struct OpnameQuery { pub opname_id: String }
 pub struct TxQuery { pub tx_id: String }
 
 pub async fn export_csv(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<CsvQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let mut wtr = csv::Writer::from_writer(Vec::new());
     match q.report_type.as_str() {
         "materials" => {
@@ -31,7 +36,7 @@ pub async fn export_csv(
         }
         "transactions" => {
             wtr.write_record(["Number","Type","Material","Quantity","Date"]).map_err(|e| crate::server::server_error(e))?;
-            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE t.status NOT IN ('voided','reversed') ORDER BY t.created_at DESC").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<String,_>(4)]).map_err(|e| crate::server::server_error(e))?; }
         }
         "stock" => {
@@ -46,9 +51,13 @@ pub async fn export_csv(
 }
 
 pub async fn export_pdf(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<PdfQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let company: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
     let addr: String = sqlx::query_scalar("SELECT COALESCE(address,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let mat_data: Vec<(String,String,String,f64,f64,f64)>;
@@ -154,9 +163,13 @@ pub async fn approve_opname(
 }
 
 pub async fn export_opname_xlsx(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<OpnameQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let rows = sqlx::query("SELECT m.name,soi.system_qty,soi.physical_qty,soi.difference,soi.notes FROM stock_opname_items soi LEFT JOIN materials m ON soi.material_id=m.id WHERE soi.opname_id=$1 ORDER BY m.name")
         .bind(&q.opname_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let b64 = tokio::task::spawn_blocking(move || -> Result<String,String> {
@@ -190,8 +203,12 @@ pub async fn export_opname_xlsx(
 }
 
 pub async fn get_schedules(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let rows = sqlx::query("SELECT id,report_type,email_to,frequency,day_of_week,hour,is_active,created_at FROM report_schedules ORDER BY created_at")
         .fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let v = rows.iter().map(|r| json!({"id":r.get::<String,_>(0),"reportType":r.get::<String,_>(1),"emailTo":r.get::<String,_>(2),"frequency":r.get::<String,_>(3),"dayOfWeek":r.get::<i32,_>(4),"hour":r.get::<i32,_>(5),"isActive":r.get::<bool,_>(6),"createdAt":r.get::<String,_>(7)})).collect();
@@ -199,9 +216,13 @@ pub async fn get_schedules(
 }
 
 pub async fn save_schedule(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let id = body.get("id").and_then(|v| v.as_str()).unwrap_or(&uuid::Uuid::new_v4().to_string()).to_string();
     let rt = body.get("reportType").and_then(|v| v.as_str()).unwrap_or("");
     let em = body.get("emailTo").and_then(|v| v.as_str()).unwrap_or("");
@@ -216,9 +237,13 @@ pub async fn save_schedule(
 }
 
 pub async fn delete_schedule(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     sqlx::query("DELETE FROM report_schedules WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(()))
 }
@@ -241,7 +266,7 @@ pub async fn run_schedule(
             rows.iter().map(|r| format!("{}|{}|{}|{}|{}",r.get::<String,_>(0),r.get::<String,_>(1),r.get::<String,_>(2),r.get::<f64,_>(3),r.get::<f64,_>(4))).collect::<Vec<_>>().join("\n")
         }
         "transactions" => {
-            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.status,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id ORDER BY t.created_at DESC LIMIT 500").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.status,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE t.status NOT IN ('voided','reversed') ORDER BY t.created_at DESC LIMIT 500").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             rows.iter().map(|r| format!("{}|{}|{}|{}|{}|{}",r.get::<String,_>(0),r.get::<String,_>(1),r.get::<String,_>(2),r.get::<f64,_>(3),r.get::<String,_>(4),r.get::<String,_>(5))).collect::<Vec<_>>().join("\n")
         }
         _ => return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Unknown report type"})))),
@@ -254,16 +279,20 @@ pub async fn run_schedule(
 }
 
 pub async fn multi_warehouse_comparison(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let rows = sqlx::query(
         "SELECT w.id, w.name, w.code, w.location,
             (SELECT COUNT(*)::bigint FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true) as mat_count,
             (SELECT COALESCE(SUM(m.quantity*m.price),0) FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true) as stock_value,
             (SELECT COUNT(*)::bigint FROM racks r WHERE r.warehouse_id=w.id) as rack_count,
-            (SELECT COUNT(*)::bigint FROM transactions t WHERE t.warehouse_id=w.id AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as tx_30d,
-            (SELECT COALESCE(SUM(CASE WHEN t.type='in' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as inbound_30d,
-            (SELECT COALESCE(SUM(CASE WHEN t.type='out' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as outbound_30d,
+            (SELECT COUNT(*)::bigint FROM transactions t WHERE t.warehouse_id=w.id AND t.status NOT IN ('voided','reversed') AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as tx_30d,
+            (SELECT COALESCE(SUM(CASE WHEN t.type='in' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.status NOT IN ('voided','reversed') AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as inbound_30d,
+            (SELECT COALESCE(SUM(CASE WHEN t.type='out' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.status NOT IN ('voided','reversed') AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as outbound_30d,
             (SELECT COUNT(*)::bigint FROM stock_opname so WHERE so.warehouse_id=w.id AND so.status='completed' AND so.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '90 days','YYYY-MM-DD HH24:MI:SS')) as opname_90d
         FROM warehouses w ORDER BY w.name"
     ).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
@@ -272,9 +301,13 @@ pub async fn multi_warehouse_comparison(
 }
 
 pub async fn pivot_report(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let row_f = body.get("rowField").and_then(|v| v.as_str()).unwrap_or("category");
     let col_f = body.get("colField").and_then(|v| v.as_str()).unwrap_or("type");
     let val_f = body.get("valueField").and_then(|v| v.as_str()).unwrap_or("quantity");
@@ -313,9 +346,13 @@ pub async fn pivot_report(
 }
 
 pub async fn generate_receipt_pdf(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<TxQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let co: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
     let ca: String = sqlx::query_scalar("SELECT COALESCE(address,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let cp: String = sqlx::query_scalar("SELECT COALESCE(phone,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
@@ -352,9 +389,13 @@ pub async fn generate_receipt_pdf(
 }
 
 pub async fn generate_picking_list_pdf(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<TxQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let co: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
     let tx = sqlx::query("SELECT transaction_number,COALESCE(reference,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
     let tn: String = tx.get(0); let tr: String = tx.get(1); let td: String = tx.get(2);
@@ -379,9 +420,13 @@ pub async fn generate_picking_list_pdf(
 }
 
 pub async fn generate_do_pdf(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<TxQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let co: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
     let ca: String = sqlx::query_scalar("SELECT COALESCE(address,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let cp: String = sqlx::query_scalar("SELECT COALESCE(phone,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
@@ -424,9 +469,13 @@ pub async fn generate_do_pdf(
 pub struct CountSheetQuery { pub warehouse_id: String }
 
 pub async fn generate_count_sheet_pdf(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<CountSheetQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let company: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
     let wh: String = sqlx::query_scalar("SELECT name FROM warehouses WHERE id=$1").bind(&q.warehouse_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.unwrap_or("Unknown".into());
     let rows: Vec<(String,String,String,f64)> = sqlx::query("SELECT m.sku,m.name,COALESCE(r.rack_name,'-'),m.quantity FROM materials m LEFT JOIN racks r ON m.rack_id=r.id WHERE m.warehouse_id=$1 AND m.is_active=true ORDER BY m.name")

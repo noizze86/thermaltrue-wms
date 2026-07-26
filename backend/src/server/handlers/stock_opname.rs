@@ -103,6 +103,13 @@ pub async fn save_item(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if body.physical_qty < 0.0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Physical quantity cannot be negative"})))); }
+    let opname_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_opname WHERE id=$1)")
+        .bind(&body.opname_id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if !opname_exists { return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Stock opname not found"})))); }
+    let mat_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM materials WHERE id=$1)")
+        .bind(&body.material_id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if !mat_exists { return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"})))); }
     let existing: Option<String> = sqlx::query_scalar("SELECT id FROM stock_opname_items WHERE opname_id=$1 AND material_id=$2")
         .bind(&body.opname_id).bind(&body.material_id)
         .fetch_optional(&pool.pool).await

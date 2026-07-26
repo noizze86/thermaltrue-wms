@@ -31,6 +31,12 @@ pub async fn transfer_material(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1 AND is_active=true")
+        .bind(&body.material_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?
+        .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"}))))?;
+    if body.quantity <= 0.0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Quantity must be positive"})))); }
+    if body.from_warehouse_id == body.to_warehouse_id { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Source and destination warehouses must be different"})))); }
+    if stock < body.quantity { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Insufficient stock"})))); }
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM transactions WHERE type='transfer'")

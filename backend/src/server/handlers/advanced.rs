@@ -5,6 +5,7 @@ use serde_json::json;
 use crate::db_pool::DbPool;
 use crate::models::{Budget, AbcWeight, ForecastCache, LoginHistoryEntry};
 use crate::validate;
+use axum::Extension;
 use sqlx::Row;
 
 #[derive(Deserialize)]
@@ -36,8 +37,12 @@ pub struct GenerateQrZipBody { pub items: Vec<String> }
 // ── Budgets ──
 
 pub async fn get_budgets(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Vec<Budget>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let rows = sqlx::query("SELECT id, category_id, period, amount, created_at, updated_at FROM budgets ORDER BY period DESC")
         .fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -82,8 +87,12 @@ pub async fn delete_budget(
 // ── ABC Weights ──
 
 pub async fn get_abc_weights(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Vec<AbcWeight>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let rows = sqlx::query("SELECT key, value FROM abc_weights")
         .fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -92,9 +101,13 @@ pub async fn get_abc_weights(
 }
 
 pub async fn set_abc_weight(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<SetAbcWeightBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     sqlx::query("INSERT INTO abc_weights (key, value) VALUES ($1, $2) ON CONFLICT(key) DO UPDATE SET value=$2")
         .bind(&body.key).bind(body.value)
         .execute(&pool.pool).await
@@ -105,9 +118,13 @@ pub async fn set_abc_weight(
 // ── Forecast Cache ──
 
 pub async fn get_forecast_cache(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<ForecastCacheQuery>,
 ) -> Result<Json<Option<ForecastCache>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let material_id = params.material_id.unwrap_or_default();
     let model = params.model.unwrap_or_default();
     let horizon = params.horizon.unwrap_or(30);
@@ -127,9 +144,13 @@ pub async fn get_forecast_cache(
 }
 
 pub async fn set_forecast_cache(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<SetForecastCacheBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query(
@@ -142,9 +163,13 @@ pub async fn set_forecast_cache(
 }
 
 pub async fn delete_forecast_cache(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<DeleteForecastCacheQuery>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     sqlx::query("DELETE FROM forecast_cache WHERE material_id=$1 AND model=$2")
         .bind(&params.material_id).bind(&params.model)
         .execute(&pool.pool).await
@@ -155,9 +180,13 @@ pub async fn delete_forecast_cache(
 // ── Login History ──
 
 pub async fn get_login_history(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<LoginHistoryQuery>,
 ) -> Result<Json<Vec<LoginHistoryEntry>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_users").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let limit = params.limit.unwrap_or(50);
     let rows = sqlx::query("SELECT id, user_id, username, ip_address, status, created_at FROM login_history ORDER BY created_at DESC LIMIT $1")
         .bind(limit)
@@ -171,10 +200,14 @@ pub async fn get_login_history(
 }
 
 pub async fn get_user_login_history(
+    Extension(uid): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Path(user_id): Path<String>,
     Query(params): Query<LoginHistoryQuery>,
 ) -> Result<Json<Vec<LoginHistoryEntry>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &uid, "manage_users").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let limit = params.limit.unwrap_or(50);
     let rows = sqlx::query("SELECT id, user_id, username, ip_address, status, created_at FROM login_history WHERE user_id=$1 ORDER BY created_at DESC LIMIT $2")
         .bind(&user_id).bind(limit)
@@ -188,8 +221,12 @@ pub async fn get_user_login_history(
 }
 
 pub async fn clear_login_history(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_users").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     sqlx::query("DELETE FROM login_history")
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -199,9 +236,13 @@ pub async fn clear_login_history(
 // ── Batch QR ZIP ──
 
 pub async fn generate_qr_zip(
+    Extension(user_id): Extension<String>,
     State(_pool): State<Arc<DbPool>>,
     Json(body): Json<GenerateQrZipBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&_pool.pool, &user_id, "view_materials").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let result = tokio::task::spawn_blocking(move || {
         use qrcode::QrCode;
         use image::Luma;

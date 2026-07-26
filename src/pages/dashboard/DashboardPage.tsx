@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { getDashboardKpi, getTransactions, getMaterials, getMaterialsLowStock, getExpiringMaterials, getDbStats, countAuditLogsFiltered } from "../../api"
+import { getDashboardKpi, getTransactions, getMaterials, getMaterialsLowStock, getExpiringMaterials, getDbStats, countAuditLogsFiltered, getHealthIndex, getBiggestLosses, getCapacityPressure } from "../../api"
 import DashboardAlertCard from "../../components/DashboardAlertCard"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
@@ -10,7 +10,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from ".
 import { formatCurrency } from "../../lib/utils"
 import { toast } from "../../hooks/use-toast"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
-import { Plus, FileText, ArrowUpDown, ChevronUp, ChevronDown, Database, Skull, Package, Repeat, Warehouse, DollarSign, AlertTriangle, TrendingUp, Activity, Clock, Shield } from "lucide-react"
+import { Plus, FileText, ArrowUpDown, ChevronUp, ChevronDown, Database, Skull, Package, Repeat, Warehouse, DollarSign, AlertTriangle, TrendingUp, Activity, Clock, Shield, Gauge, AlertCircle, Layers } from "lucide-react"
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, CartesianGrid, XAxis, YAxis } from "recharts"
 import { useNavigate } from "react-router-dom"
 import { format, subDays } from "date-fns"
@@ -27,6 +27,9 @@ const ALL_WIDGETS: WidgetDef[] = [
   { key: "recent", title: "Recent Transactions", defaultOrder: 4 },
   { key: "health", title: "System Health", defaultOrder: 5 },
   { key: "expiring", title: "Expiring Materials", defaultOrder: 6 },
+  { key: "healthIndex", title: "Health Index", defaultOrder: 7 },
+  { key: "biggestLosses", title: "Biggest Losses", defaultOrder: 8 },
+  { key: "capacityPressure", title: "Capacity Pressure", defaultOrder: 9 },
 ]
 
 function loadWidgetOrder(): string[] {
@@ -51,7 +54,7 @@ export default function DashboardPage() {
   useEffect(() => { localStorage.setItem(DASHBOARD_STORAGE_KEY, JSON.stringify(dateRange)) }, [dateRange])
 
   const { data: kpi, isLoading, isError, error, refetch } = useQuery({ queryKey: ["dashboard"], queryFn: getDashboardKpi })
-  const { data: recentAll } = useQuery({ queryKey: ["transactions", "recent", dateRange], queryFn: () => getTransactions(undefined, undefined, undefined, undefined, dateRange.start, dateRange.end, 50) })
+  const { data: recentAll } = useQuery({ queryKey: ["transactions", "recent", dateRange], queryFn: () => getTransactions(undefined, undefined, undefined, undefined, dateRange.start, dateRange.end, 50, "active") })
   const { data: materials } = useQuery({ queryKey: ["materials"], queryFn: () => getMaterials() })
   const { data: lowStock } = useQuery({ queryKey: ["low_stock"], queryFn: getMaterialsLowStock, refetchInterval: 60000 })
   const { data: expiring } = useQuery({ queryKey: ["expiring", 30], queryFn: () => getExpiringMaterials(30), refetchInterval: 60000 })
@@ -61,6 +64,9 @@ export default function DashboardPage() {
     queryKey: ["audit_error_count", todayStr],
     queryFn: () => countAuditLogsFiltered("error", undefined, undefined, todayStr, todayStr),
   })
+  const { data: healthIndex } = useQuery({ queryKey: ["health_index"], queryFn: getHealthIndex, refetchInterval: 120000 })
+  const { data: biggestLosses } = useQuery({ queryKey: ["biggest_losses"], queryFn: getBiggestLosses, refetchInterval: 120000 })
+  const { data: capacityPressure } = useQuery({ queryKey: ["capacity_pressure"], queryFn: getCapacityPressure, refetchInterval: 120000 })
 
   // Real-time notification polling
   useEffect(() => {
@@ -314,6 +320,135 @@ export default function DashboardPage() {
                       </Badge>
                     </div>
                   ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )
+      case "healthIndex":
+        const hi = healthIndex
+        const hiColor = hi?.status === "good" ? "text-green-500" : hi?.status === "warning" ? "text-yellow-500" : "text-red-500"
+        const hiBg = hi?.status === "good" ? "from-green-500/10 to-green-600/5" : hi?.status === "warning" ? "from-yellow-500/10 to-yellow-600/5" : "from-red-500/10 to-red-600/5"
+        const trendIcon = hi?.trend_direction === "▲" ? "↑" : hi?.trend_direction === "▼" ? "↓" : "→"
+        const trendColor = hi?.trend_direction === "▲" ? "text-green-500" : hi?.trend_direction === "▼" ? "text-red-500" : "text-muted-foreground"
+        return (
+          <Card key="healthIndex" className="h-full">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2"><Gauge className={`h-4 w-4 ${hiColor}`} />Health Index</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!hi ? <p className="text-center text-muted-foreground py-8 text-xs">Loading...</p> : (
+                <div className="space-y-4">
+                  <div className={`rounded-xl bg-gradient-to-br ${hiBg} p-4 text-center relative`}>
+                    <p className={`text-4xl font-bold ${hiColor}`}>{hi.score}</p>
+                    <p className={`text-xs font-medium mt-1 ${hiColor}`}>{hi.status.toUpperCase()}</p>
+                    <span className={`absolute top-1 right-2 text-lg font-bold ${trendColor}`}>{trendIcon}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Yesterday: <strong>{hi.yesterday_score ?? "-"}</strong></span>
+                    <span>7d Avg: <strong>{hi.avg_7days_score ?? "-"}</strong></span>
+                  </div>
+                  <div className="space-y-1.5">
+                    {Object.entries(hi.components).map(([key, comp]) => (
+                      <div key={key} className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground truncate mr-2">{key.replace(/_/g, " ")}</span>
+                        <div className="flex items-center gap-2">
+                          <div className="w-20 h-1.5 bg-muted rounded-full overflow-hidden">
+                            <div className={`h-full rounded-full ${comp.score >= 80 ? "bg-green-500" : comp.score >= 50 ? "bg-yellow-500" : "bg-red-500"}`} style={{width: `${Math.min(comp.score, 100)}%`}} />
+                          </div>
+                          <span className="font-semibold w-8 text-right">{Math.round(comp.score)}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )
+      case "biggestLosses":
+        return (
+          <Card key="biggestLosses" className="h-full">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2"><AlertCircle className="h-4 w-4 text-red-500" />Biggest Losses</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!biggestLosses || biggestLosses.length === 0 ? (
+                <div className="text-center py-8">
+                  <Shield className="h-8 w-8 mx-auto text-green-500 mb-2" />
+                  <p className="text-xs text-muted-foreground">No losses detected</p>
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {biggestLosses.map((item) => (
+                    <div key={item.material_id} className="p-2 rounded-lg bg-muted/30 space-y-1">
+                      <div className="flex items-center justify-between">
+                        <p className="text-xs font-medium truncate max-w-[140px]">{item.sku} - {item.material_name}</p>
+                        <span className="text-xs font-bold text-red-600 dark:text-red-400">{formatCurrency(item.total_loss)}</span>
+                      </div>
+                      <div className="flex gap-2 text-[10px] text-muted-foreground">
+                        {item.dead_stock_loss > 0 && <span>Dead: {formatCurrency(item.dead_stock_loss)}</span>}
+                        {item.stockout_loss > 0 && <span>Stockout: {formatCurrency(item.stockout_loss)}</span>}
+                        {item.variance_loss > 0 && <span>Variance: {formatCurrency(item.variance_loss)}</span>}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )
+      case "capacityPressure":
+        const cp = capacityPressure
+        const cpColor = cp?.status === "critical" ? "text-red-500" : cp?.status === "warning" ? "text-yellow-500" : "text-green-500"
+        const cpBar = cp?.status === "critical" ? "bg-red-500" : cp?.status === "warning" ? "bg-yellow-500" : "bg-green-500"
+        const cpScore = cp?.capacity_pressure_score ?? 0
+        const cpScoreColor = cpScore >= 80 ? "text-red-500" : cpScore >= 50 ? "text-yellow-500" : "text-green-500"
+        return (
+          <Card key="capacityPressure" className="h-full">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm flex items-center gap-2"><Layers className={`h-4 w-4 ${cpColor}`} />Capacity Pressure</CardTitle>
+            </CardHeader>
+            <CardContent>
+              {!cp ? <p className="text-center text-muted-foreground py-8 text-xs">Loading...</p> : (
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex-1 space-y-1">
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Utilization</span>
+                        <span className={`font-semibold ${cpColor}`}>{cp.utilization_pct}%</span>
+                      </div>
+                      <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                        <div className={`h-full rounded-full ${cpBar} transition-all`} style={{width: `${Math.min(cp.utilization_pct, 100)}%`}} />
+                      </div>
+                    </div>
+                    <div className="text-center shrink-0">
+                      <p className={`text-2xl font-bold ${cpScoreColor}`}>{cpScore}</p>
+                      <p className="text-[10px] text-muted-foreground">Pressure</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg bg-muted/30 p-2">
+                      <p className="text-muted-foreground">Used</p>
+                      <p className="font-semibold">{Number(cp.used_capacity).toLocaleString()}</p>
+                    </div>
+                    <div className="rounded-lg bg-muted/30 p-2">
+                      <p className="text-muted-foreground">Available</p>
+                      <p className="font-semibold">{Number(cp.available_capacity).toLocaleString()}</p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div className="rounded-lg bg-muted/30 p-2 text-center">
+                      <p className="text-xs text-muted-foreground">Days to Full</p>
+                      <p className={`text-lg font-bold ${cp.days_to_full < 0 ? "text-green-500" : cp.days_to_full < 30 ? "text-red-500" : cp.days_to_full < 90 ? "text-yellow-500" : "text-green-500"}`}>
+                        {cp.days_to_full < 0 ? "∞" : Math.round(cp.days_to_full)} {cp.days_to_full >= 0 && "days"}
+                      </p>
+                    </div>
+                    <div className="rounded-lg bg-muted/30 p-2 text-center">
+                      <p className="text-xs text-muted-foreground">Predicted Full</p>
+                      <p className="text-sm font-semibold">{cp.predicted_full_date || "N/A"}</p>
+                    </div>
+                  </div>
                 </div>
               )}
             </CardContent>

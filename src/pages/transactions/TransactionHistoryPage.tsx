@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   getTransactions, getMaterials, getWarehouses, getUsers, getCategories,
   reverseTransaction, reverseTransactionsBulk, getTransactionItems, getTransactionAttachments, generateReportPdf,
-  generateReceiptPdf, generateDoPdf,
+  generateReceiptPdf, generateDoPdf, deleteTransaction, deleteTransactionsBulk,
 } from "../../api"
 import type { Transaction, TransactionItem, TransactionAttachment } from "../../api"
 import { Input } from "../../components/ui/input"
@@ -23,6 +23,7 @@ const statusColors: Record<string, "default" | "secondary" | "destructive" | "ou
   pending: "secondary",
   rejected: "destructive",
   reversed: "outline",
+  voided: "outline",
 }
 
 export default function TransactionHistoryPage() {
@@ -30,7 +31,7 @@ export default function TransactionHistoryPage() {
   const [search, setSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [typeFilter, setTypeFilter] = useState("all")
-  const [statusFilter, setStatusFilter] = useState("all")
+  const [statusFilter, setStatusFilter] = useState("active")
   const [warehouseFilter, setWarehouseFilter] = useState("")
   const [userFilter, setUserFilter] = useState("")
   const [categoryFilter, setCategoryFilter] = useState("")
@@ -59,6 +60,8 @@ export default function TransactionHistoryPage() {
       warehouseFilter || undefined,
       dateStart || undefined,
       dateEnd || undefined,
+      undefined,
+      statusFilter !== "all" ? statusFilter : undefined,
     ),
   })
   const { data: materials } = useQuery({ queryKey: ["materials"], queryFn: () => getMaterials() })
@@ -67,7 +70,8 @@ export default function TransactionHistoryPage() {
   const { data: categories } = useQuery({ queryKey: ["categories"], queryFn: () => getCategories() })
 
   const filtered = (transactions || []).filter((tx) => {
-    if (statusFilter !== "all" && tx.status !== statusFilter) return false
+    if (statusFilter === "active" && (tx.status === "voided" || tx.status === "reversed")) return false
+    if (statusFilter !== "all" && statusFilter !== "active" && tx.status !== statusFilter) return false
     if (userFilter && tx.user_id !== userFilter) return false
     if (categoryFilter) {
       const mat = materials?.find((m) => m.id === tx.material_id)
@@ -101,6 +105,27 @@ export default function TransactionHistoryPage() {
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   })
 
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => deleteTransaction(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["transactions"] })
+      queryClient.invalidateQueries({ queryKey: ["materials"] })
+      toast({ title: "Success", description: "Transaction voided successfully" })
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  })
+
+  const bulkDeleteMut = useMutation({
+    mutationFn: (ids: string[]) => deleteTransactionsBulk(ids),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["transactions"] })
+      queryClient.invalidateQueries({ queryKey: ["materials"] })
+      setSelectedTx(new Set())
+      toast({ title: "Bulk Voided", description: "Selected transactions voided" })
+    },
+    onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
+  })
+
   if (isLoading) return <LoadingState text="Loading transactions..." />
   if (isError) return <ErrorState message={error?.message || "Failed to load transactions"} onRetry={refetch} />
 
@@ -111,6 +136,16 @@ export default function TransactionHistoryPage() {
     }
     if (confirm(`Reverse transaction ${tx.transaction_number}? This will adjust stock.`)) {
       reverseMut.mutate(tx.id)
+    }
+  }
+
+  const handleDelete = (tx: Transaction) => {
+    if (tx.status === "voided") {
+      toast({ title: "Already Voided", variant: "destructive" })
+      return
+    }
+    if (confirm(`Void transaction ${tx.transaction_number}? Stock will be adjusted.`)) {
+      deleteMut.mutate(tx.id)
     }
   }
 
@@ -168,9 +203,14 @@ export default function TransactionHistoryPage() {
         <h1 className="text-3xl font-bold">Transaction History</h1>
         <div className="flex gap-2">
           {selectedTx.size > 0 && (
-            <Button variant="destructive" size="sm" onClick={() => { if (confirm(`Reverse ${selectedTx.size} transaction(s)?`)) bulkReverseMut.mutate(Array.from(selectedTx)) }} disabled={bulkReverseMut.isPending}>
-              <Trash2 className="h-4 w-4" /> Void ({selectedTx.size})
-            </Button>
+            <>
+              <Button variant="destructive" size="sm" onClick={() => { if (confirm(`Reverse ${selectedTx.size} transaction(s)?`)) bulkReverseMut.mutate(Array.from(selectedTx)) }} disabled={bulkReverseMut.isPending}>
+                <RotateCcw className="h-4 w-4" /> Reverse ({selectedTx.size})
+              </Button>
+              <Button variant="destructive" size="sm" onClick={() => { if (confirm(`Void ${selectedTx.size} transaction(s)? Stock will be adjusted.`)) bulkDeleteMut.mutate(Array.from(selectedTx)) }} disabled={bulkDeleteMut.isPending}>
+                <Trash2 className="h-4 w-4" /> Void ({selectedTx.size})
+              </Button>
+            </>
           )}
           <Button variant="outline" onClick={handleExportPdf}>
             <Download className="h-4 w-4" /> Export PDF
@@ -195,11 +235,13 @@ export default function TransactionHistoryPage() {
               <option value="opname">Opname</option>
             </Select>
             <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}>
+              <option value="active">Active</option>
               <option value="all">All Status</option>
               <option value="approved">Approved</option>
               <option value="pending">Pending</option>
               <option value="rejected">Rejected</option>
               <option value="reversed">Reversed</option>
+              <option value="voided">Voided</option>
             </Select>
             <Select value={warehouseFilter} onChange={(e) => setWarehouseFilter(e.target.value)}>
               <option value="">All Warehouses</option>
@@ -266,8 +308,11 @@ export default function TransactionHistoryPage() {
                       <TableCell>
                         <div className="flex gap-1">
                           <Button variant="ghost" size="icon" onClick={() => handleViewDetail(tx)} title="View Detail"><Eye className="h-4 w-4" /></Button>
-                          <Button variant="ghost" size="icon" onClick={() => handleReverse(tx)} title="Reverse" disabled={tx.status === "reversed"}>
+                          <Button variant="ghost" size="icon" onClick={() => handleReverse(tx)} title="Reverse" disabled={tx.status === "reversed" || tx.status === "voided"}>
                             <RotateCcw className="h-4 w-4" />
+                          </Button>
+                          <Button variant="ghost" size="icon" onClick={() => handleDelete(tx)} title="Void" disabled={tx.status === "voided"}>
+                            <Trash2 className="h-4 w-4" />
                           </Button>
                         </div>
                       </TableCell>

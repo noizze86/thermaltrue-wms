@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react"
+import { z } from "zod"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getMaterials, getWarehouses, getRacks, transferMaterial, transferMaterialsBulk, suggestPutaway, getTransferOrders, createTransferOrder, updateTransferOrderStatus, getTransferItems } from "../../api"
 import { useAuth } from "../../contexts/AuthContext"
@@ -14,6 +15,21 @@ import { ArrowLeftRight, Plus, Trash2, Lightbulb, Check, Send, RotateCcw, XCircl
 import { toast } from "../../hooks/use-toast"
 import { formatDate } from "../../lib/utils"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
+
+const transferSchema = z.object({
+  fromWh: z.string().min(1, "From warehouse is required"),
+  toWh: z.string().min(1, "To warehouse is required"),
+})
+
+const addItemSchema = z.object({
+  material_id: z.string().min(1, "Material is required"),
+  quantity: z.number().min(1, "Quantity must be at least 1"),
+})
+
+const orderItemSchema = z.object({
+  material_id: z.string().min(1, "Material is required"),
+  quantity: z.number().min(1, "Quantity must be at least 1"),
+})
 
 interface TransferItem {
   material_id: string
@@ -49,6 +65,8 @@ export default function TransferPage() {
   const [addRackId, setAddRackId] = useState("")
   const [showSuggestion, setShowSuggestion] = useState(false)
   const [suggestionMatId, setSuggestionMatId] = useState("")
+  const [errors, setErrors] = useState<Record<string, string>>({})
+  const [orderErrors, setOrderErrors] = useState<Record<string, string>>({})
 
   const [showQrScanner, setShowQrScanner] = useState(false)
   const qrReaderRef = useRef<HTMLDivElement>(null)
@@ -177,7 +195,14 @@ export default function TransferPage() {
   })
 
   const addItem = () => {
-    if (!addMatId || !addQty) return
+    const result = addItemSchema.safeParse({ material_id: addMatId, quantity: addQty })
+    if (!result.success) {
+      const errs: Record<string, string> = {}
+      for (const issue of result.error.issues) errs[issue.path[0] as string] = issue.message
+      setErrors(errs)
+      return
+    }
+    setErrors({})
     if (addQty > (filteredMaterials?.find((m) => m.id === addMatId)?.quantity || 0)) {
       toast({ title: "Error", description: "Quantity exceeds available stock", variant: "destructive" })
       return
@@ -191,7 +216,14 @@ export default function TransferPage() {
   }
 
   const addNewOrderItem = () => {
-    if (!newOrderMatId || !newOrderQty) return
+    const result = orderItemSchema.safeParse({ material_id: newOrderMatId, quantity: newOrderQty })
+    if (!result.success) {
+      const errs: Record<string, string> = {}
+      for (const issue of result.error.issues) errs[issue.path[0] as string] = issue.message
+      setOrderErrors(errs)
+      return
+    }
+    setOrderErrors({})
     setNewOrderItems([...newOrderItems, { material_id: newOrderMatId, quantity: newOrderQty }])
     setNewOrderMatId(""); setNewOrderQty(0)
   }
@@ -312,9 +344,18 @@ export default function TransferPage() {
                 </div>
                 <div className="space-y-2">
                   <Label>Quantity</Label>
-                  <Input type="number" value={addQty} onChange={(e) => setAddQty(Number(e.target.value))} min={1} />
+                  <Input type="number" value={addQty} onChange={(e) => { setAddQty(Number(e.target.value)); setErrors((p) => ({ ...p, quantity: "" })) }} min={1} className={errors.quantity ? "border-destructive" : ""} />
+                  {errors.quantity && <p className="text-xs text-destructive">{errors.quantity}</p>}
                 </div>
-                <Button onClick={() => singleMut.mutate()} className="w-full" disabled={!addMatId || !fromWh || !toWh || !addQty || singleMut.isPending}>
+                <Button onClick={() => {
+                  const result = transferSchema.safeParse({ fromWh, toWh })
+                  if (!result.success) {
+                    for (const issue of result.error.issues) toast({ title: "Validation Error", description: issue.message, variant: "destructive" })
+                    return
+                  }
+                  if (fromWh === toWh) { toast({ title: "Validation Error", description: "From and To warehouse must be different", variant: "destructive" }); return }
+                  singleMut.mutate()
+                }} className="w-full" disabled={!addMatId || !fromWh || !toWh || !addQty || singleMut.isPending}>
                   Transfer Single Item
                 </Button>
               </CardContent>
@@ -341,7 +382,8 @@ export default function TransferPage() {
                 </div>
                 <div className="space-y-2">
                   <Label>Quantity</Label>
-                  <Input type="number" value={addQty} onChange={(e) => setAddQty(Number(e.target.value))} min={1} />
+                  <Input type="number" value={addQty} onChange={(e) => { setAddQty(Number(e.target.value)); setErrors((p) => ({ ...p, quantity: "" })) }} min={1} className={errors.quantity ? "border-destructive" : ""} />
+                  {errors.quantity && <p className="text-xs text-destructive">{errors.quantity}</p>}
                 </div>
                 <Button onClick={addItem} className="w-full" disabled={!addMatId || !addQty}>
                   Add to Batch
@@ -566,13 +608,18 @@ export default function TransferPage() {
                     <option key={m.id} value={m.id}>{m.sku} - {m.name}</option>
                   ))}
                 </Select>
-                <Input type="number" className="w-20 h-9" placeholder="Qty" value={newOrderQty} onChange={(e) => setNewOrderQty(Number(e.target.value))} min={1} />
+                <Input type="number" className={`w-20 h-9 ${orderErrors.quantity ? "border-destructive" : ""}`} placeholder="Qty" value={newOrderQty} onChange={(e) => { setNewOrderQty(Number(e.target.value)); setOrderErrors((p) => ({ ...p, quantity: "" })) }} min={1} />
+                {orderErrors.quantity && <p className="text-xs text-destructive">{orderErrors.quantity}</p>}
                 <Button variant="outline" size="sm" onClick={addNewOrderItem}><Plus className="h-4 w-4" /></Button>
               </div>
             </div>
-            <Button onClick={() => createOrderMut.mutate()} className="w-full" disabled={!newOrderFrom || !newOrderTo || newOrderItems.length === 0 || createOrderMut.isPending}>
-              Create Transfer Order
-            </Button>
+                <Button onClick={() => {
+                  if (!newOrderFrom || !newOrderTo) { toast({ title: "Validation Error", description: "From and To warehouse are required", variant: "destructive" }); return }
+                  if (newOrderFrom === newOrderTo) { toast({ title: "Validation Error", description: "From and To warehouse must be different", variant: "destructive" }); return }
+                  createOrderMut.mutate()
+                }} className="w-full" disabled={!newOrderFrom || !newOrderTo || newOrderItems.length === 0 || createOrderMut.isPending}>
+                  Create Transfer Order
+                </Button>
           </div>
         </DialogContent>
       </Dialog>

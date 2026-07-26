@@ -62,6 +62,9 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE supplier_id=$1 AND is_active=true")
+        .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if used > 0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Supplier is used by {} active material(s)", used)})))); }
     sqlx::query("DELETE FROM supplier_ratings WHERE supplier_id=$1").bind(&id).execute(&pool.pool).await.ok();
     sqlx::query("DELETE FROM supplier_prices WHERE supplier_id=$1").bind(&id).execute(&pool.pool).await.ok();
     sqlx::query("DELETE FROM suppliers WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;

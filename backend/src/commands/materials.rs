@@ -132,6 +132,8 @@ pub async fn update_material(pool: State<'_, DbPool>, token: String, input: Upda
 pub async fn delete_material(pool: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
     let user_id = pool.verify_token(&token)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let qty: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1").bind(&id).fetch_optional(&pool.pool).await?.ok_or(AppError::NotFound("Material not found".into()))?;
+    if qty > 0.0 { return Err(AppError::Validation("Cannot delete material with remaining stock".into())); }
     sqlx::query("UPDATE materials SET is_active=false WHERE id=$1").bind(&id).execute(&pool.pool).await?;
     crate::commands::audit_log(&pool.pool, &user_id, "delete", "material", &id, "Material soft-deleted (is_active=false)").await;
     Ok(())

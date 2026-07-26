@@ -105,7 +105,10 @@ impl DbPool {
     }
 
     pub fn cleanup_expired_sessions(&self) {
-        let mut attempts = self.login_attempts.lock().unwrap();
+        let mut attempts = match self.login_attempts.lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        };
         let cutoff = std::time::Instant::now() - std::time::Duration::from_secs(3600);
         attempts.retain(|_, (_, time)| *time > cutoff);
     }

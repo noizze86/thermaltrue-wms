@@ -88,6 +88,9 @@ pub async fn update_warehouse(pool: State<'_, DbPool>, token: String, wh: Wareho
 pub async fn delete_warehouse(pool: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
     let user_id = pool.verify_token(&token)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE warehouse_id=$1 AND is_active=true")
+        .bind(&id).fetch_one(&pool.pool).await?;
+    if used > 0 { return Err(AppError::Validation(format!("Warehouse has {} active material(s)", used))); }
     let mut tx = pool.pool.begin().await.map_err(|e| AppError::Db(format!("begin tx: {}", e)))?;
     sqlx::query("DELETE FROM zones WHERE warehouse_id=$1").bind(&id).execute(&mut *tx).await?;
     sqlx::query("DELETE FROM racks WHERE warehouse_id=$1").bind(&id).execute(&mut *tx).await?;
@@ -413,6 +416,13 @@ pub async fn get_stock_opname_items(pool: State<'_, DbPool>, token: String, opna
 pub async fn save_stock_opname_item(pool: State<'_, DbPool>, token: String, item: StockOpnameItem) -> Result<(), AppError> {
     let user_id = pool.verify_token(&token)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
+    if item.physical_qty < 0.0 { return Err(AppError::Validation("Physical quantity cannot be negative".into())); }
+    let _opname_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_opname WHERE id=$1)")
+        .bind(&item.opname_id).fetch_one(&pool.pool).await?;
+    if !_opname_exists { return Err(AppError::NotFound("Stock opname not found".into())); }
+    let _mat_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM materials WHERE id=$1)")
+        .bind(&item.material_id).fetch_one(&pool.pool).await?;
+    if !_mat_exists { return Err(AppError::NotFound("Material not found".into())); }
     let existing: Option<String> = sqlx::query_scalar("SELECT id FROM stock_opname_items WHERE opname_id=$1 AND material_id=$2")
         .bind(&item.opname_id)
         .bind(&item.material_id)
@@ -436,6 +446,12 @@ pub async fn save_stock_opname_item(pool: State<'_, DbPool>, token: String, item
 pub async fn transfer_material(pool: State<'_, DbPool>, token: String, material_id: String, from_warehouse_id: String, to_warehouse_id: String, rack_id: Option<String>, quantity: f64, _user_id: Option<String>) -> Result<(), AppError> {
     let user_id = pool.verify_token(&token)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
+    if quantity <= 0.0 { return Err(AppError::Validation("Quantity must be positive".into())); }
+    if from_warehouse_id == to_warehouse_id { return Err(AppError::Validation("Source and destination warehouses must be different".into())); }
+    let stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1 AND is_active=true")
+        .bind(&material_id).fetch_optional(&pool.pool).await?
+        .ok_or_else(|| AppError::NotFound("Material not found".into()))?;
+    if stock < quantity { return Err(AppError::Validation(format!("Insufficient stock: available {}, requested {}", stock, quantity))); }
     let mut tx = pool.pool.begin().await?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let id = uuid::Uuid::new_v4().to_string();

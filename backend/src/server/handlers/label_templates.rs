@@ -1,7 +1,8 @@
 use std::sync::Arc;
-use axum::{Json, extract::{State, Path}};
+use axum::{Json, extract::{State, Path}, Extension};
 use serde_json::json;
 use crate::db_pool::DbPool;
+use crate::validate;
 use crate::models::LabelTemplate;
 use sqlx::Row;
 
@@ -37,8 +38,12 @@ fn row_to_template(row: &sqlx::postgres::PgRow) -> LabelTemplate {
 }
 
 pub async fn list(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Vec<LabelTemplate>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_materials").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let rows = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates ORDER BY name")
         .fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -46,9 +51,13 @@ pub async fn list(
 }
 
 pub async fn get_one(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<LabelTemplate>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_materials").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let row = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates WHERE id=$1")
         .bind(&id).fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -56,9 +65,13 @@ pub async fn get_one(
 }
 
 pub async fn create(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(template): Json<LabelTemplate>,
 ) -> Result<Json<LabelTemplate>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let id = if template.id.is_empty() { uuid::Uuid::new_v4().to_string() } else { template.id.clone() };
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query(
@@ -99,9 +112,13 @@ pub async fn create(
 }
 
 pub async fn update(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(template): Json<LabelTemplate>,
 ) -> Result<Json<LabelTemplate>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let now = chrono::Utc::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query(
         r#"UPDATE label_templates SET
@@ -134,9 +151,13 @@ pub async fn update(
 }
 
 pub async fn delete(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let protected = vec!["default", "company", "asset_standard", "branded", "rack_label", "full_card", "mini_thermal", "qr_only", "two_side"];
     if protected.contains(&id.as_str()) {
         return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Cannot delete system templates"}))));

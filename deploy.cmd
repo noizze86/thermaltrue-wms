@@ -1,0 +1,9 @@
+@echo off
+echo Stopping service...
+net stop ThermaltrueServer
+echo Copying server.exe...
+copy /y "C:\test wms\thermaltrue\target\release\server.exe" "C:\Program Files\Thermaltrue\server.exe"
+echo Starting service...
+net start ThermaltrueServer
+echo DONE
+pause

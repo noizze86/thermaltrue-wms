@@ -10,7 +10,8 @@ use sqlx::Row;
 // --- Users ---
 #[tauri::command]
 pub async fn get_users(db: State<'_, DbPool>, token: String) -> Result<Vec<User>, AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_users").await? { return Err(AppError::Auth("Permission denied".into())); }
     let rows = sqlx::query(
         "SELECT id, username, password_hash, full_name, email, role, is_active, photo, last_login_at, last_login_ip, password_changed_at, created_at, updated_at FROM users ORDER BY username"
     )
@@ -74,7 +75,10 @@ pub async fn update_user_photo(db: State<'_, DbPool>, token: String, id: String,
 
 #[tauri::command]
 pub async fn change_password(db: State<'_, DbPool>, token: String, id: String, new_password: String) -> Result<(), AppError> {
-    db.verify_token(&token)?;
+    let current_user = db.verify_token(&token)?;
+    if current_user != id && !validate::check_user_permission(&db.pool, &current_user, "manage_users").await? {
+        return Err(AppError::Auth("Permission denied".into()));
+    }
     let hash = bcrypt::hash(&new_password, 12).map_err(|e| AppError::Internal(e.to_string()))?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query("UPDATE users SET password_hash=$1, password_changed_at=$2 WHERE id=$3")
@@ -97,10 +101,13 @@ pub async fn delete_user(db: State<'_, DbPool>, token: String, id: String) -> Re
 }
 
 #[tauri::command]
-pub async fn get_user_activity(db: State<'_, DbPool>, token: String, user_id: String) -> Result<Vec<serde_json::Value>, AppError> {
-    db.verify_token(&token)?;
+pub async fn get_user_activity(db: State<'_, DbPool>, token: String, target_user_id: String) -> Result<Vec<serde_json::Value>, AppError> {
+    let current_user = db.verify_token(&token)?;
+    if current_user != target_user_id && !validate::check_user_permission(&db.pool, &current_user, "manage_users").await? {
+        return Err(AppError::Auth("Permission denied".into()));
+    }
     let rows = sqlx::query("SELECT id, activity, details, ip_address, created_at FROM user_activity_log WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100")
-        .bind(&user_id)
+        .bind(&target_user_id)
         .fetch_all(&db.pool)
         .await?;
     let list = rows.iter().map(|row| {
@@ -200,6 +207,9 @@ pub async fn update_category(db: State<'_, DbPool>, token: String, id: String, n
 pub async fn delete_category(db: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
     let user_id = db.verify_token(&token)?;
     if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE category_id=$1 AND is_active=true")
+        .bind(&id).fetch_one(&db.pool).await?;
+    if used > 0 { return Err(AppError::Validation(format!("Category is used by {} active material(s)", used))); }
     sqlx::query("UPDATE categories SET parent_id=NULL WHERE parent_id=$1")
         .bind(&id)
         .execute(&db.pool)
@@ -255,6 +265,9 @@ pub async fn update_unit(db: State<'_, DbPool>, token: String, id: String, name:
 pub async fn delete_unit(db: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
     let user_id = db.verify_token(&token)?;
     if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE unit_id=$1 AND is_active=true")
+        .bind(&id).fetch_one(&db.pool).await?;
+    if used > 0 { return Err(AppError::Validation(format!("Unit is used by {} active material(s)", used))); }
     sqlx::query("DELETE FROM unit_conversions WHERE from_unit_id=$1 OR to_unit_id=$1")
         .bind(&id)
         .execute(&db.pool)
@@ -391,6 +404,9 @@ pub async fn update_supplier(db: State<'_, DbPool>, token: String, supplier: Sup
 pub async fn delete_supplier(db: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
     let user_id = db.verify_token(&token)?;
     if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE supplier_id=$1 AND is_active=true")
+        .bind(&id).fetch_one(&db.pool).await?;
+    if used > 0 { return Err(AppError::Validation(format!("Supplier is used by {} active material(s)", used))); }
     sqlx::query("DELETE FROM supplier_ratings WHERE supplier_id=$1")
         .bind(&id)
         .execute(&db.pool)
@@ -470,7 +486,8 @@ pub async fn create_supplier_price(db: State<'_, DbPool>, token: String, supplie
 // --- Audit Log ---
 #[tauri::command]
 pub async fn get_audit_logs(db: State<'_, DbPool>, token: String) -> Result<Vec<AuditLog>, AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let rows = sqlx::query("SELECT id, user_id, action, entity, entity_id, details, created_at FROM audit_log ORDER BY created_at DESC LIMIT 200")
         .fetch_all(&db.pool)
         .await?;
@@ -490,7 +507,8 @@ pub async fn get_audit_logs_filtered(
     action: Option<String>, entity: Option<String>, user_id: Option<String>,
     date_start: Option<String>, date_end: Option<String>, limit: Option<i64>,
 ) -> Result<Vec<AuditLog>, AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let limit_val = limit.unwrap_or(200);
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT id, user_id, action, entity, entity_id, details, created_at FROM audit_log WHERE 1=1"
@@ -536,7 +554,8 @@ pub async fn count_audit_logs_filtered(
     action: Option<String>, entity: Option<String>, user_id: Option<String>,
     date_start: Option<String>, date_end: Option<String>,
 ) -> Result<i64, AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let mut builder = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM audit_log WHERE 1=1");
     if let Some(ref a) = action { builder.push(" AND action = ").push_bind(a.as_str()); }
     if let Some(ref e) = entity { builder.push(" AND entity = ").push_bind(e.as_str()); }
@@ -549,7 +568,8 @@ pub async fn count_audit_logs_filtered(
 
 #[tauri::command]
 pub async fn add_audit_log(db: State<'_, DbPool>, token: String, user_id: Option<String>, action: String, entity: String, entity_id: Option<String>, details: String) -> Result<(), AppError> {
-    db.verify_token(&token)?;
+    let current_user = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &current_user, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let id = uuid::Uuid::new_v4().to_string();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(&id).bind(&user_id).bind(&action).bind(&entity).bind(&entity_id).bind(&details)
@@ -560,7 +580,8 @@ pub async fn add_audit_log(db: State<'_, DbPool>, token: String, user_id: Option
 
 #[tauri::command]
 pub async fn purge_old_audit_logs(db: State<'_, DbPool>, token: String, months: i64) -> Result<i64, AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let result = sqlx::query("DELETE FROM audit_log WHERE created_at < NOW() - ($1 * interval '1 month')")
         .bind(months)
         .execute(&db.pool)
@@ -574,7 +595,8 @@ pub async fn export_audit_csv_filtered(
     action: Option<String>, entity: Option<String>, user_id: Option<String>,
     date_start: Option<String>, date_end: Option<String>, limit: Option<i64>,
 ) -> Result<String, AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let limit_val = limit.unwrap_or(500);
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT a.id, a.user_id, COALESCE(u.username, 'System'), a.action, a.entity, a.entity_id, a.details, a.created_at FROM audit_log a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1"
@@ -643,7 +665,8 @@ pub async fn get_company_profile(db: State<'_, DbPool>, token: String) -> Result
 
 #[tauri::command]
 pub async fn save_company_profile(db: State<'_, DbPool>, token: String, company_name: String, address: String, phone: String, email: String, logo: String, npwp: String) -> Result<(), AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let existing: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM company_profile")
         .fetch_one(&db.pool)
@@ -677,7 +700,8 @@ pub async fn get_app_config(db: State<'_, DbPool>, token: String, key: String) -
 
 #[tauri::command]
 pub async fn set_app_config(db: State<'_, DbPool>, token: String, key: String, value: String) -> Result<(), AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     sqlx::query("INSERT INTO app_config (key, value) VALUES ($1, $2) ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value")
         .bind(&key).bind(&value)
         .execute(&db.pool)
@@ -699,7 +723,8 @@ pub async fn get_all_app_config(db: State<'_, DbPool>, token: String) -> Result<
 
 #[tauri::command]
 pub async fn delete_app_config(db: State<'_, DbPool>, token: String, key: String) -> Result<(), AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     sqlx::query("DELETE FROM app_config WHERE key=$1")
         .bind(&key)
         .execute(&db.pool)
@@ -722,7 +747,8 @@ pub async fn get_notification_config(db: State<'_, DbPool>, token: String) -> Re
 
 #[tauri::command]
 pub async fn set_notification_config(db: State<'_, DbPool>, token: String, config_key: String, config_value: String) -> Result<(), AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let existing: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM notification_config WHERE config_key=$1")
         .bind(&config_key)
         .fetch_one(&db.pool)
@@ -746,7 +772,8 @@ pub async fn set_notification_config(db: State<'_, DbPool>, token: String, confi
 // --- Backup & Restore ---
 #[tauri::command]
 pub async fn backup_database(db: State<'_, DbPool>, token: String, app_handle: AppHandle) -> Result<String, AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let database_url = std::env::var("DATABASE_URL")
         .map_err(|_| AppError::Internal("DATABASE_URL environment variable not set".into()))?;
     let app_dir = app_handle.path().app_data_dir().map_err(|e| AppError::Internal(e.to_string()))?;
@@ -768,7 +795,8 @@ pub async fn backup_database(db: State<'_, DbPool>, token: String, app_handle: A
 
 #[tauri::command]
 pub async fn restore_database(db: State<'_, DbPool>, token: String, backup_path: String, _app_handle: AppHandle) -> Result<String, AppError> {
-    db.verify_token(&token)?;
+    let user_id = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let database_url = std::env::var("DATABASE_URL")
         .map_err(|_| AppError::Internal("DATABASE_URL environment variable not set".into()))?;
     let output = tokio::process::Command::new("psql")

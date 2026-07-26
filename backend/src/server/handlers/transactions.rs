@@ -10,7 +10,8 @@ use sqlx::Row;
 fn gen_id() -> String { uuid::Uuid::new_v4().to_string() }
 
 #[derive(Deserialize)]
-pub struct ListParams { pub search: Option<String>, pub type_filter: Option<String>, pub material_id: Option<String>, pub warehouse_id: Option<String>, pub date_start: Option<String>, pub date_end: Option<String>, pub limit: Option<i64> }
+#[serde(rename_all = "camelCase")]
+pub struct ListParams { pub search: Option<String>, pub type_filter: Option<String>, pub material_id: Option<String>, pub warehouse_id: Option<String>, pub date_start: Option<String>, pub date_end: Option<String>, pub limit: Option<i64>, pub status_filter: Option<String> }
 
 pub async fn list(
     State(pool): State<Arc<DbPool>>,
@@ -34,6 +35,13 @@ pub async fn list(
     if let Some(ref dv) = de_val { builder.push(" AND created_at <= ").push_bind(dv.clone()); }
     if !warehouse_ids.is_empty() {
         builder.push(" AND warehouse_id = ANY(").push_bind(&warehouse_ids).push(")");
+    }
+
+    let sf = params.status_filter.as_deref().unwrap_or("");
+    if sf == "active" {
+        builder.push(" AND status NOT IN ('voided', 'reversed')");
+    } else if !sf.is_empty() && sf != "all" {
+        builder.push(" AND status = ").push_bind(sf);
     }
 
     builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(params.limit.unwrap_or(200));
@@ -81,13 +89,21 @@ pub async fn create(
         else { let total_qty: f64 = items.iter().map(|i| i.quantity).sum(); (items[0].material_id.clone(), total_qty, 0.0) };
 
     if !mat_id.is_empty() {
-        let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM materials WHERE id=$1 AND is_active=true)")
+        let exists = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM materials WHERE id=$1)")
             .bind(&mat_id)
             .fetch_one(&mut *db_tx)
             .await
             .map_err(|e| crate::server::server_error(e))?;
         if !exists {
-            return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error": format!("Material with ID '{}' not found or inactive", mat_id)}))));
+            return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error": format!("Material with ID '{}' not found", mat_id)}))));
+        }
+        let active = sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM materials WHERE id=$1 AND is_active=true)")
+            .bind(&mat_id)
+            .fetch_one(&mut *db_tx)
+            .await
+            .map_err(|e| crate::server::server_error(e))?;
+        if !active {
+            return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Material '{}' is inactive", mat_id)}))));
         }
     }
 
@@ -212,6 +228,7 @@ pub async fn reverse(
     if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Reversed) {
         return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Transaction already reversed"}))));
     }
+    if cur_status != "approved" { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Only approved transactions can be reversed"})))); }
 
     let items: Vec<(String, f64)> = sqlx::query("SELECT material_id, quantity FROM transaction_items WHERE tx_id=$1")
         .bind(&id).fetch_all(&mut *db_tx).await
@@ -322,7 +339,139 @@ pub async fn reverse_bulk(
         reversed += 1;
     }
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!({"reversed": reversed, "errors": errors})))
+    Ok(Json(json!({"message": "Bulk reversed", "count": reversed})))
+}
+
+pub async fn delete(
+    State(pool): State<Arc<DbPool>>,
+    Path(id): Path<String>,
+    Extension(user_id): Extension<String>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    fn debug_err(e: impl std::fmt::Display) -> (axum::http::StatusCode, Json<serde_json::Value>) {
+        let msg = format!("{}", e);
+        log::error!("delete: {}", msg);
+        (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": msg})))
+    }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let mut db_tx = pool.pool.begin().await.map_err(debug_err)?;
+    let (cur_status, tx_type): (String, String) = sqlx::query("SELECT status, type FROM transactions WHERE id=$1")
+        .bind(&id).fetch_optional(&mut *db_tx).await
+        .map_err(debug_err)?
+        .map(|row| (row.get(0), row.get(1)))
+        .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error": "Transaction not found"}))))?;
+
+    if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Voided) {
+        return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Transaction already voided"}))));
+    }
+    if cur_status != "approved" { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Only approved transactions can be voided"})))); }
+
+    let items: Vec<(String, f64)> = sqlx::query("SELECT material_id, quantity FROM transaction_items WHERE tx_id=$1")
+        .bind(&id).fetch_all(&mut *db_tx).await
+        .map_err(debug_err)?
+        .into_iter().map(|row| (row.get(0), row.get(1))).collect();
+
+    if items.is_empty() {
+        let row = sqlx::query("SELECT material_id, quantity FROM transactions WHERE id=$1")
+            .bind(&id).fetch_one(&mut *db_tx).await
+            .map_err(debug_err)?;
+        let (mid, qty): (String, f64) = (row.get(0), row.get(1));
+        match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+            TxType::In => {
+                sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
+                    .bind(qty).bind(&mid).execute(&mut *db_tx).await.map_err(debug_err)?;
+            }
+            TxType::Out => {
+                sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                    .bind(qty).bind(&mid).execute(&mut *db_tx).await.map_err(debug_err)?;
+            }
+            _ => {}
+        }
+    } else {
+        for (mid, qty) in &items {
+            match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                TxType::In => {
+                    sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2")
+                        .bind(qty).bind(mid).execute(&mut *db_tx).await.map_err(debug_err)?;
+                }
+                TxType::Out => {
+                    sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2")
+                        .bind(qty).bind(mid).execute(&mut *db_tx).await.map_err(debug_err)?;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    sqlx::query("UPDATE transactions SET status='voided' WHERE id=$1")
+        .bind(&id).execute(&mut *db_tx).await
+        .map_err(debug_err)?;
+
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let audit_id = gen_id();
+    sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+        .bind(&audit_id).bind(&user_id).bind("delete").bind("transaction").bind(&id).bind(&format!("Voided {} transaction", tx_type)).bind(&now)
+        .execute(&mut *db_tx).await.map_err(debug_err)?;
+
+    db_tx.commit().await.map_err(debug_err)?;
+    Ok(Json(json!({"message": "Transaction voided", "id": id})))
+}
+
+pub async fn delete_bulk(
+    State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
+    Json(body): Json<serde_json::Value>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let ids: Vec<String> = body.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
+    let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
+    let mut voided = 0i64;
+    let mut errors = Vec::new();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    for id in &ids {
+        let (cur_status, tx_type): (String, String) = match sqlx::query("SELECT status, type FROM transactions WHERE id=$1")
+            .bind(id).fetch_optional(&mut *db_tx).await
+        {
+            Ok(Some(row)) => (row.get(0), row.get(1)),
+            Ok(None) => { errors.push(format!("{}: not found", id)); continue; }
+            Err(e) => { errors.push(format!("{}: {}", id, e)); continue; }
+        };
+        if cur_status.parse::<TxStatus>().ok() == Some(TxStatus::Voided) { errors.push(format!("{}: already voided", id)); continue; }
+        let items: Vec<(String, f64)> = match sqlx::query("SELECT material_id, quantity FROM transaction_items WHERE tx_id=$1")
+            .bind(id).fetch_all(&mut *db_tx).await
+        {
+            Ok(rows) => rows.into_iter().map(|row| (row.get(0), row.get(1))).collect(),
+            Err(e) => { errors.push(format!("{}: {}", id, e)); continue; }
+        };
+        if items.is_empty() {
+            if let Ok(Some(row)) = sqlx::query("SELECT material_id, quantity FROM transactions WHERE id=$1")
+                .bind(id).fetch_optional(&mut *db_tx).await
+            {
+                let (mid, qty): (String, f64) = (row.get(0), row.get(1));
+                match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                    TxType::In => { let _ = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await; }
+                    TxType::Out => { let _ = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await; }
+                    _ => {}
+                }
+            }
+        } else {
+            for (mid, qty) in &items {
+                match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
+                    TxType::In => { let _ = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await; }
+                    TxType::Out => { let _ = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await; }
+                    _ => {}
+                }
+            }
+        }
+        if sqlx::query("UPDATE transactions SET status='voided' WHERE id=$1").bind(id).execute(&mut *db_tx).await.is_ok() {
+            let audit_id = gen_id();
+            let _ = sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+                .bind(&audit_id).bind(&user_id).bind("delete").bind("transaction").bind(id).bind(&format!("Voided {} transaction", tx_type)).bind(&now)
+                .execute(&mut *db_tx).await;
+            voided += 1;
+        }
+    }
+    db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(json!({"message": format!("{voided} transaction(s) voided"), "errors": errors})))
 }
 
 pub async fn get_items(
@@ -638,9 +787,11 @@ pub async fn get_quality_inspections(
     let mut sql = String::from(
         "SELECT qi.id, qi.tx_id, qi.material_id, qi.status, qi.notes, qi.inspected_by, COALESCE(m.name, ''), qi.created_at FROM quality_inspections qi LEFT JOIN materials m ON m.id = qi.material_id WHERE 1=1"
     );
-    if let Some(ref t) = q.tx_id { if !t.is_empty() { sql.push_str(" AND qi.tx_id = '"); sql.push_str(t); sql.push('\''); } }
+    if let Some(ref t) = q.tx_id { if !t.is_empty() { sql.push_str(" AND qi.tx_id = $1"); } }
     sql.push_str(" ORDER BY qi.created_at DESC");
-    let rows = sqlx::query(&sql).fetch_all(&pool.pool).await
+    let mut qb = sqlx::query(&sql);
+    if let Some(ref t) = q.tx_id { if !t.is_empty() { qb = qb.bind(t); } }
+    let rows = qb.fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?
         .iter().map(|row| json!({
             "id": row.get::<String,_>(0),

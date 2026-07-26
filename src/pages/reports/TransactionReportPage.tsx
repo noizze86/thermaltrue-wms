@@ -18,7 +18,7 @@ const COLORS = ["#3b82f6", "#22c55e", "#ef4444", "#a855f7"]
 
 export default function TransactionReportPage() {
   const [typeFilter, setTypeFilter] = useState("all")
-  const [statusFilter, setStatusFilter] = useState("all")
+  const [statusFilter, setStatusFilter] = useState("active")
   const [warehouseFilter, setWarehouseFilter] = useState("")
   const [dateStart, setDateStart] = useState("")
   const [dateEnd, setDateEnd] = useState("")
@@ -31,7 +31,7 @@ export default function TransactionReportPage() {
 
   const { data: transactions, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["transactions", "report", typeFilter, statusFilter, warehouseFilter, dateStart, dateEnd],
-    queryFn: () => getTransactions(undefined, typeFilter !== "all" ? typeFilter : undefined, statusFilter !== "all" ? statusFilter : undefined, warehouseFilter || undefined, dateStart || undefined, dateEnd || undefined),
+    queryFn: () => getTransactions(undefined, typeFilter !== "all" ? typeFilter : undefined, undefined, warehouseFilter || undefined, dateStart || undefined, dateEnd || undefined, undefined, statusFilter !== "all" ? statusFilter : undefined),
   })
   const { data: warehouses } = useQuery({ queryKey: ["warehouses"], queryFn: () => getWarehouses() })
   const { data: txTypes } = useQuery({ queryKey: ["tx_type_summary"], queryFn: getTxTypeSummary })

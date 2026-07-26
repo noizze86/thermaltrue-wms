@@ -94,7 +94,12 @@ export default function UnitsPage() {
   })
 
   const createConvMut = useMutation({
-    mutationFn: () => createUnitConversion(convForm.from_unit_id, convForm.to_unit_id, convForm.factor),
+    mutationFn: () => {
+      if (convForm.factor <= 0) {
+        throw new Error("Conversion factor must be greater than 0")
+      }
+      return createUnitConversion(convForm.from_unit_id, convForm.to_unit_id, convForm.factor)
+    },
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["unit_conversions"] }); setShowConvForm(false); setConvForm({ from_unit_id: "", to_unit_id: "", factor: 1 }) },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   })

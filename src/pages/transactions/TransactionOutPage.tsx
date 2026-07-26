@@ -20,7 +20,8 @@ import { formatDate } from "../../lib/utils"
 import { toast } from "../../hooks/use-toast"
 import { z } from "zod"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
-import { ArrowUpFromLine, Scan, CheckCircle, XCircle, Clock, Printer, Trash2, FileText, PackageSearch } from "lucide-react"
+import { ArrowUpFromLine, CheckCircle, XCircle, Clock, Printer, Trash2, FileText, PackageSearch } from "lucide-react"
+import SkuAutocomplete from "../../components/SkuAutocomplete"
 
 interface CartItem {
   material_id: string
@@ -44,14 +45,12 @@ export default function TransactionOutPage() {
   const [notes, setNotes] = useState("")
   const [destination, setDestination] = useState("")
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({})
-  const [skuInput, setSkuInput] = useState("")
   const [detailTx, setDetailTx] = useState<Transaction | null>(null)
   const printRef = useRef<HTMLDivElement>(null)
 
   // Multi-item cart
   const [cart, setCart] = useState<CartItem[]>([])
   const [cartMaterialId, setCartMaterialId] = useState("")
-  const [cartSkuInput, setCartSkuInput] = useState("")
   const [cartQty, setCartQty] = useState(0)
 
   // FIFO/FEFO
@@ -64,7 +63,7 @@ export default function TransactionOutPage() {
   const [showSoDialog, setShowSoDialog] = useState(false)
 
   const { data: materials, isLoading: materialsLoading, isError: materialsError, error: materialsErrorObj, refetch: refetchMaterials } = useQuery({ queryKey: ["materials"], queryFn: () => getMaterials() })
-  const { data: recentTx, isLoading: recentTxLoading, isError: recentTxError, error: recentTxErrorObj, refetch: refetchRecentTx } = useQuery({ queryKey: ["transactions", "out"], queryFn: () => getTransactions(undefined, "out", undefined, undefined, undefined, undefined, 20) })
+  const { data: recentTx, isLoading: recentTxLoading, isError: recentTxError, error: recentTxErrorObj, refetch: refetchRecentTx } = useQuery({ queryKey: ["transactions", "out", "active"], queryFn: () => getTransactions(undefined, "out", undefined, undefined, undefined, undefined, 20, "active") })
   const { data: pendingTx } = useQuery({ queryKey: ["transactions", "pending"], queryFn: getPendingTransactions })
   const { data: salesOrders } = useQuery({
     queryKey: ["salesOrders", "open"],
@@ -73,26 +72,25 @@ export default function TransactionOutPage() {
   })
 
   const selectedMaterial = materials?.find((m) => m.id === materialId)
-  const handleSkuLookup = async () => {
-    if (!skuInput.trim()) return
+
+  const handleSkuLookup = async (sku: string) => {
+    if (!sku) return
     try {
-      const match = await getMaterialBySku(skuInput.trim())
+      const match = await getMaterialBySku(sku)
       setMaterialId(match.id)
-      setSkuInput("")
       setErrors({})
     } catch (e: any) {
-      toast({ title: "Not Found", description: e?.message || `No material with SKU "${skuInput}"`, variant: "destructive" })
+      toast({ title: "Not Found", description: e?.message || `No material with SKU "${sku}"`, variant: "destructive" })
     }
   }
 
-  const handleCartSkuLookup = async () => {
-    if (!cartSkuInput.trim()) return
+  const handleCartSkuLookup = async (sku: string) => {
+    if (!sku) return
     try {
-      const match = await getMaterialBySku(cartSkuInput.trim())
+      const match = await getMaterialBySku(sku)
       setCartMaterialId(match.id)
-      setCartSkuInput("")
     } catch (e: any) {
-      toast({ title: "Not Found", description: e?.message || `No material with SKU "${cartSkuInput}"`, variant: "destructive" })
+      toast({ title: "Not Found", description: e?.message || `No material with SKU "${sku}"`, variant: "destructive" })
     }
   }
 
@@ -195,7 +193,7 @@ export default function TransactionOutPage() {
   }
 
   const resetForm = () => {
-    setMaterialId(""); setQuantity(0); setReference(""); setNotes(""); setDestination(""); setSkuInput(""); setErrors({})
+    setMaterialId(""); setQuantity(0); setReference(""); setNotes(""); setDestination(""); setErrors({})
   }
 
   const txMut = useMutation({
@@ -303,11 +301,7 @@ export default function TransactionOutPage() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>Quick SKU Lookup</Label>
-                  <div className="flex gap-2">
-                    <Input placeholder="Scan or type SKU..." value={skuInput} onChange={(e) => setSkuInput(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") handleSkuLookup() }} />
-                    <Button variant="outline" onClick={handleSkuLookup}><Scan className="h-4 w-4" /></Button>
-                  </div>
+                  <SkuAutocomplete materials={materials || []} onSelect={(id) => { setMaterialId(id); setErrors({}) }} onLookup={handleSkuLookup} />
                 </div>
                 <div className="space-y-2">
                   <Label>Material</Label>
@@ -355,11 +349,7 @@ export default function TransactionOutPage() {
               <CardContent className="space-y-4">
                 <div className="space-y-2">
                   <Label>Quick SKU Lookup</Label>
-                  <div className="flex gap-2">
-                    <Input placeholder="Scan or type SKU..." value={cartSkuInput} onChange={(e) => setCartSkuInput(e.target.value)}
-                      onKeyDown={(e) => { if (e.key === "Enter") handleCartSkuLookup() }} />
-                    <Button variant="outline" onClick={handleCartSkuLookup}><Scan className="h-4 w-4" /></Button>
-                  </div>
+                  <SkuAutocomplete materials={materials || []} onSelect={(id) => setCartMaterialId(id)} onLookup={handleCartSkuLookup} />
                 </div>
                 <div className="space-y-2">
                   <Label>Material</Label>

@@ -1,4 +1,5 @@
 import { useState } from "react"
+import { z } from "zod"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getStockOpnames, createStockOpname, updateStockOpnameStatus, getStockOpnameItems, saveStockOpnameItem, getWarehouses, getMaterials, getRacks, generateReportPdf, getCycleSchedules, createCycleSchedule, deleteCycleSchedule, getOpnameConfig, setOpnameConfig, autoGenerateCycleOpname, generateCountSheetPdf } from "../../api"
 import { useAuth } from "../../contexts/AuthContext"
@@ -15,6 +16,8 @@ import { Select } from "../../components/ui/select"
 import { Plus, ClipboardCheck, Download, Filter, CheckCircle2, Calendar, Clock, Eye, EyeOff, FileSpreadsheet, Zap } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 
+const physicalQtySchema = z.number().min(0, "Physical quantity cannot be negative")
+
 export default function StockOpnamePage() {
   const { user, can } = useAuth()
   const queryClient = useQueryClient()
@@ -23,6 +26,7 @@ export default function StockOpnamePage() {
   const [whId, setWhId] = useState("")
   const [notes, setNotes] = useState("")
   const [physicalQtys, setPhysicalQtys] = useState<Record<string, number>>({})
+  const [qtyErrors, setQtyErrors] = useState<Record<string, string>>({})
   const [rackFilter, setRackFilter] = useState("")
   const [showReconcile, setShowReconcile] = useState(false)
 
@@ -56,6 +60,10 @@ export default function StockOpnamePage() {
     mutationFn: async () => {
       if (!selectedOpname) return
       for (const [materialId, physicalQty] of Object.entries(physicalQtys)) {
+        const parsed = physicalQtySchema.safeParse(physicalQty)
+        if (!parsed.success) {
+          throw new Error(`Material ${materialId}: ${parsed.error.issues[0].message}`)
+        }
         const item = opnameItems?.find((i) => i.material_id === materialId)
         await saveStockOpnameItem({
           id: item?.id || "", opname_id: selectedOpname, material_id: materialId,
@@ -109,13 +117,14 @@ export default function StockOpnamePage() {
 
   const handleCountSheetPdf = async () => {
     try {
-      const wh = selectedOpnameData?.warehouse_id
-      if (!wh) return toast({ title: "Error", description: "No warehouse selected", variant: "destructive" })
-      const bytes = await generateCountSheetPdf(wh)
+      const data = selectedOpnameData
+      if (!data?.warehouse_id) { toast({ title: "Error", description: "No warehouse selected", variant: "destructive" }); return }
+      const whId = data.warehouse_id
+      const bytes = await generateCountSheetPdf(whId)
       const blob = new Blob([new Uint8Array(bytes)], { type: "application/pdf" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
-      a.href = url; a.download = `count_sheet_${selectedOpnameData?.opname_number || wh}.pdf`; a.click()
+      a.href = url; a.download = `count_sheet_${selectedOpnameData?.opname_number || whId}.pdf`; a.click()
       URL.revokeObjectURL(url)
       toast({ title: "Exported", description: "Count sheet downloaded" })
     } catch (e: unknown) {
@@ -126,6 +135,7 @@ export default function StockOpnamePage() {
   const startOpname = (opnameId: string) => {
     setSelectedOpname(opnameId)
     setPhysicalQtys({})
+    setQtyErrors({})
     updateStockOpnameStatus(opnameId, "in_progress").catch(() => {})
   }
 
@@ -360,12 +370,20 @@ export default function StockOpnamePage() {
                           <TableCell className="text-xs">{rack?.rack_name || "-"}</TableCell>
                           {!blindMode && <TableCell>{item.system_qty}</TableCell>}
                           <TableCell>
-                            <Input
-                              type="number"
-                              className="w-20 h-8"
-                              value={pQty}
-                              onChange={(e) => setPhysicalQtys((prev) => ({ ...prev, [item.material_id]: Number(e.target.value) }))}
-                            />
+                              <div>
+                                <Input
+                                  type="number"
+                                  className={`w-20 h-8 ${qtyErrors[item.material_id] ? "border-destructive" : ""}`}
+                                  value={pQty}
+                                  onChange={(e) => {
+                                    const val = Number(e.target.value)
+                                    setPhysicalQtys((prev) => ({ ...prev, [item.material_id]: val }))
+                                    const parsed = physicalQtySchema.safeParse(val)
+                                    setQtyErrors((prev) => ({ ...prev, [item.material_id]: parsed.success ? "" : parsed.error.issues[0].message }))
+                                  }}
+                                />
+                                {qtyErrors[item.material_id] && <p className="text-xs text-destructive mt-0.5">{qtyErrors[item.material_id]}</p>}
+                              </div>
                           </TableCell>
                           <TableCell className={isSignificantDiff ? "text-red-600 font-bold" : diff !== 0 ? "text-yellow-600 font-bold" : ""}>
                             {!blindMode ? (diff > 0 ? "+" : "") + diff.toFixed(0) : "-"}

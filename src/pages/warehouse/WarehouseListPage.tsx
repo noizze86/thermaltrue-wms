@@ -141,6 +141,8 @@ export default function WarehouseListPage() {
   const handleLayoutImage = (e: React.ChangeEvent<HTMLInputElement>, wh: Warehouse) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (!file.type.startsWith("image/")) { toast({ title: "Error", description: "Only image files are allowed", variant: "destructive" }); e.target.value = ""; return }
+    if (file.size > 5 * 1024 * 1024) { toast({ title: "Error", description: "Layout image must be under 5 MB", variant: "destructive" }); e.target.value = ""; return }
     const reader = new FileReader()
     reader.onload = () => {
       const dataUrl = reader.result as string

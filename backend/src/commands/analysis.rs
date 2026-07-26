@@ -9,7 +9,7 @@ pub async fn get_dashboard_kpi(pool: State<'_, DbPool>, token: String) -> Result
     pool.verify_token(&token)?;
     let total_materials: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE is_active=true")
         .fetch_one(&pool.pool).await?;
-    let total_transactions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions")
+    let total_transactions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE status NOT IN ('voided','reversed')")
         .fetch_one(&pool.pool).await?;
     let low_stock_items: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE quantity <= min_stock AND min_stock > 0 AND is_active=true")
         .fetch_one(&pool.pool).await?;
@@ -19,7 +19,7 @@ pub async fn get_dashboard_kpi(pool: State<'_, DbPool>, token: String) -> Result
         .fetch_one(&pool.pool).await?;
 
     let rows = sqlx::query(
-        "SELECT id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, price, reference, notes, user_id, status, approved_by, po_number, invoice_no, destination, created_at, updated_at FROM transactions ORDER BY created_at DESC LIMIT 10"
+        "SELECT id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, price, reference, notes, user_id, status, approved_by, po_number, invoice_no, destination, created_at, updated_at FROM transactions WHERE status NOT IN ('voided', 'reversed') ORDER BY created_at DESC LIMIT 10"
     )
     .fetch_all(&pool.pool)
     .await?;

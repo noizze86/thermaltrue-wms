@@ -85,7 +85,6 @@ const schema = z.object({
 
 export default function StockPage() {
   const [search, setSearch] = useState("")
-  const [debouncedSearch, setDebouncedSearch] = useState("")
   const [categoryFilter, setCategoryFilter] = useState("")
   const [warehouseFilter, setWarehouseFilter] = useState("")
   const [qrFilter, setQrFilter] = useState("")
@@ -115,24 +114,35 @@ export default function StockPage() {
   const { can } = useAuth()
   const queryClient = useQueryClient()
 
-  useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(search), 300)
-    return () => clearTimeout(t)
-  }, [search])
-
   const filterMaterials = (m: Material[]) => {
-    if (!qrFilter) return m
-    const q = qrFilter.toLowerCase()
-    return m.filter((x) =>
-      x.id.toLowerCase().includes(q) ||
-      x.sku.toLowerCase().includes(q) ||
-      x.name.toLowerCase().includes(q)
-    )
+    let result = m
+    if (search) {
+      const s = search.toLowerCase()
+      result = result.filter((x) =>
+        x.name.toLowerCase().includes(s) ||
+        x.sku.toLowerCase().includes(s)
+      )
+    }
+    if (categoryFilter) {
+      result = result.filter((x) => x.category_id === categoryFilter)
+    }
+    if (warehouseFilter) {
+      result = result.filter((x) => x.warehouse_id === warehouseFilter)
+    }
+    if (qrFilter) {
+      const q = qrFilter.toLowerCase()
+      result = result.filter((x) =>
+        x.id.toLowerCase().includes(q) ||
+        x.sku.toLowerCase().includes(q) ||
+        x.name.toLowerCase().includes(q)
+      )
+    }
+    return result
   }
 
   const { data: materials, isLoading, isError, error, refetch } = useQuery({
-    queryKey: ["materials", debouncedSearch, categoryFilter, warehouseFilter],
-    queryFn: () => getMaterials(debouncedSearch || undefined, categoryFilter || undefined, warehouseFilter || undefined),
+    queryKey: ["materials"],
+    queryFn: () => getMaterials(),
   })
   const { data: categories } = useQuery({ queryKey: ["categories"], queryFn: () => getCategories() })
   const { data: units } = useQuery({ queryKey: ["units"], queryFn: () => getUnits() })
@@ -141,7 +151,7 @@ export default function StockPage() {
   const { data: racks } = useQuery({ queryKey: ["racks"], queryFn: () => getRacks() })
   const { data: riwayat } = useQuery({
     queryKey: ["transactions", "riwayat", riwayatMaterial?.id],
-    queryFn: () => getTransactions(undefined, undefined, riwayatMaterial!.id),
+    queryFn: () => getTransactions(undefined, undefined, riwayatMaterial!.id, undefined, undefined, undefined, undefined, "active"),
     enabled: !!riwayatMaterial,
   })
   const { data: batches } = useQuery({
@@ -156,7 +166,7 @@ export default function StockPage() {
   })
   const { data: timelineTx } = useQuery({
     queryKey: ["transactions", "timeline", batchForm.material_id],
-    queryFn: () => getTransactions(undefined, undefined, batchForm.material_id),
+    queryFn: () => getTransactions(undefined, undefined, batchForm.material_id, undefined, undefined, undefined, undefined, "active"),
     enabled: activeTab === "timeline" && !!batchForm.material_id,
   })
   const { data: valuation } = useQuery({
@@ -305,6 +315,7 @@ export default function StockPage() {
   const handleImportCsv = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (file.size > 2 * 1024 * 1024) { toast({ title: "Error", description: "CSV file must be under 2 MB", variant: "destructive" }); e.target.value = ""; return }
     const reader = new FileReader()
     reader.onload = (ev) => {
       const text = ev.target?.result as string
@@ -345,6 +356,8 @@ export default function StockPage() {
   const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (!file.type.startsWith("image/")) { toast({ title: "Error", description: "Only image files are allowed", variant: "destructive" }); e.target.value = ""; return }
+    if (file.size > 5 * 1024 * 1024) { toast({ title: "Error", description: "Image must be under 5 MB", variant: "destructive" }); e.target.value = ""; return }
     const reader = new FileReader()
     reader.onload = (ev) => {
       const dataUrl = ev.target?.result as string
@@ -356,6 +369,10 @@ export default function StockPage() {
 
   const handleBatchImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || [])
+    for (const f of files) {
+      if (!f.type.startsWith("image/")) { toast({ title: "Error", description: `"${f.name}" is not an image`, variant: "destructive" }); e.target.value = ""; return }
+      if (f.size > 5 * 1024 * 1024) { toast({ title: "Error", description: `"${f.name}" must be under 5 MB`, variant: "destructive" }); e.target.value = ""; return }
+    }
     setImageFiles(files)
     const previews: string[] = []
     files.forEach((f) => {

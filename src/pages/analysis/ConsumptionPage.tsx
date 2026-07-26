@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { getAnalysisAll, getWarehouses } from "../../api"
+import { getAnalysisAll, getWarehouses, getConsumptionSummary, getConsumptionDetails, getConsumptionSeasonal } from "../../api"
 import { Input } from "../../components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
@@ -27,6 +27,9 @@ export default function ConsumptionPage() {
     queryKey: ["analysis", warehouseId],
     queryFn: () => getAnalysisAll(warehouseId || undefined),
   })
+  const { data: consSummary } = useQuery({ queryKey: ["consSummary"], queryFn: getConsumptionSummary })
+  const { data: consDetails } = useQuery({ queryKey: ["consDetails", warehouseId], queryFn: () => getConsumptionDetails(warehouseId || undefined) })
+  const { data: consSeasonal } = useQuery({ queryKey: ["consSeasonal"], queryFn: getConsumptionSeasonal })
   const { data: warehouses } = useQuery({ queryKey: ["warehouses"], queryFn: () => getWarehouses() })
 
   const filtered = (items || []).filter((i) => {
@@ -103,28 +106,30 @@ export default function ConsumptionPage() {
             <CardTitle className="text-sm font-medium">3-Month Usage</CardTitle>
             <TrendingDown className="h-5 w-5 text-blue-600" />
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold">{totalCons3mo.toFixed(0)}</div></CardContent>
+          <CardContent><div className="text-2xl font-bold">{consSummary ? consSummary.total_consumption_3mo.toFixed(0) : totalCons3mo.toFixed(0)}</div></CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">6-Month Usage</CardTitle>
             <TrendingUp className="h-5 w-5 text-green-600" />
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold">{totalCons6mo.toFixed(0)}</div></CardContent>
+          <CardContent><div className="text-2xl font-bold">{consSummary ? consSummary.total_consumption_6mo.toFixed(0) : totalCons6mo.toFixed(0)}</div></CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">12-Month Usage</CardTitle>
             <BarChart3 className="h-5 w-5 text-purple-600" />
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold">{totalCons12mo.toFixed(0)}</div></CardContent>
+          <CardContent><div className="text-2xl font-bold">{consSummary ? consSummary.total_consumption_12mo.toFixed(0) : totalCons12mo.toFixed(0)}</div></CardContent>
         </Card>
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium">Avg Lead Time</CardTitle>
             <TrendingUp className="h-5 w-5 text-orange-600" />
           </CardHeader>
-          <CardContent><div className="text-2xl font-bold">{avgLeadTime.toFixed(1)} days</div></CardContent>
+          <CardContent>
+            <div className="text-2xl font-bold">{(consSummary ? consSummary.avg_lead_time_days : avgLeadTime).toFixed(1)} days</div>
+          </CardContent>
         </Card>
       </div>
 
@@ -133,26 +138,26 @@ export default function ConsumptionPage() {
           <CardTitle>Seasonal Consumption Pattern</CardTitle>
         </CardHeader>
         <CardContent>
-          {seasonalData.length === 0 ? (
+          {(consSeasonal || seasonalData).length === 0 ? (
             <p className="text-center text-muted-foreground py-8">No consumption data available</p>
           ) : (
             <>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={seasonalData}>
+                <BarChart data={consSeasonal || seasonalData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" fontSize={10} />
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="avg" fill="#3b82f6" name="Avg Monthly Consumption" />
+                  <Bar dataKey="index" fill="#3b82f6" name="Seasonal Index" />
                 </BarChart>
               </ResponsiveContainer>
               <div className="mt-2 text-sm text-muted-foreground">
-                {highSeason.length > 0 && (
-                  <span className="mr-4">High season: <span className="text-green-600 font-medium">{highSeason.map(d => d.name).join(", ")}</span></span>
+                {(consSeasonal || seasonalData).filter((d) => d.season === "High").length > 0 && (
+                  <span className="mr-4">High season: <span className="text-green-600 font-medium">{(consSeasonal || seasonalData).filter((d) => d.season === "High").map(d => d.name).join(", ")}</span></span>
                 )}
-                {lowSeason.length > 0 && (
-                  <span>Low season: <span className="text-red-600 font-medium">{lowSeason.map(d => d.name).join(", ")}</span></span>
+                {(consSeasonal || seasonalData).filter((d) => d.season === "Low").length > 0 && (
+                  <span>Low season: <span className="text-red-600 font-medium">{(consSeasonal || seasonalData).filter((d) => d.season === "Low").map(d => d.name).join(", ")}</span></span>
                 )}
               </div>
             </>
@@ -164,7 +169,7 @@ export default function ConsumptionPage() {
       <Card>
         <CardHeader><CardTitle>Seasonal Index Table</CardTitle></CardHeader>
         <CardContent>
-          {seasonalData.length === 0 ? (
+          {(consSeasonal || seasonalData).length === 0 ? (
             <p className="text-center text-muted-foreground py-4">No data</p>
           ) : (
             <div className="overflow-x-auto">
@@ -172,16 +177,14 @@ export default function ConsumptionPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Month</TableHead>
-                    <TableHead>Avg Consumption</TableHead>
                     <TableHead>Index</TableHead>
                     <TableHead>Season</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {seasonalData.map((d) => (
+                  {(consSeasonal || seasonalData).map((d) => (
                     <TableRow key={d.name}>
                       <TableCell className="font-medium">{d.name}</TableCell>
-                      <TableCell>{d.avg}</TableCell>
                       <TableCell>
                         <span className={d.index > 1.1 ? "text-green-600 font-bold" : d.index < 0.9 ? "text-red-600" : ""}>
                           {d.index.toFixed(2)}
@@ -197,7 +200,7 @@ export default function ConsumptionPage() {
                 </TableBody>
               </Table>
               <p className="text-xs text-muted-foreground mt-2">
-                Index &gt; 1.1 = High season (increase safety stock), Index &lt; 0.9 = Low season, 0.9-1.1 = Normal
+                Index &gt; 1.1 = High season, Index &lt; 0.9 = Low season
               </p>
             </div>
           )}
@@ -216,30 +219,38 @@ export default function ConsumptionPage() {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Material</TableHead>
-                    <TableHead>σ (StdDev)</TableHead>
+                    <TableHead>σ</TableHead>
                     <TableHead>Lead Time</TableHead>
                     <TableHead>Base SS</TableHead>
-                    <TableHead>Seasonal Index</TableHead>
-                    <TableHead>Recommended SS</TableHead>
+                    <TableHead>S. Index</TableHead>
+                    <TableHead>Rec. SS</TableHead>
                     <TableHead>ROP</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {enriched.slice(0, 20).map((item) => (
-                    <TableRow key={item.material_id}>
-                      <TableCell className="font-medium">{item.material_name}</TableCell>
-                      <TableCell>{item.sigma.toFixed(2)}</TableCell>
-                      <TableCell>{item.lead_time_days.toFixed(1)}d</TableCell>
-                      <TableCell>{item.safetyStock.toFixed(1)}</TableCell>
-                      <TableCell>
-                        <span className={item.seasonalIndex > 1.1 ? "text-green-600 font-bold" : item.seasonalIndex < 0.9 ? "text-red-600" : ""}>
-                          {item.seasonalIndex.toFixed(2)}
-                        </span>
-                      </TableCell>
-                      <TableCell className="font-bold">{item.seasonalSafetyStock}</TableCell>
-                      <TableCell>{item.rop.toFixed(1)}</TableCell>
-                    </TableRow>
-                  ))}
+                  {(consDetails || enriched).slice(0, 20).map((item: any) => {
+                    const sd = item.std_dev ?? item.sigma
+                    const lt = item.lead_time_days ?? 0
+                    const ss = item.safety_stock ?? item.safetyStock
+                    const si = item.seasonal_index ?? item.seasonalIndex ?? 1
+                    const rp = item.reorder_point ?? item.rop
+                    const rss = item.seasonal_safety_stock ?? item.seasonalSafetyStock ?? ss
+                    return (
+                      <TableRow key={item.material_id}>
+                        <TableCell className="font-medium">{item.material_name}</TableCell>
+                        <TableCell>{sd?.toFixed(2) ?? "—"}</TableCell>
+                        <TableCell>{lt.toFixed(1)}d</TableCell>
+                        <TableCell>{ss?.toFixed(1) ?? "—"}</TableCell>
+                        <TableCell>
+                          <span className={si > 1.1 ? "text-green-600 font-bold" : si < 0.9 ? "text-red-600" : ""}>
+                            {si.toFixed(2)}
+                          </span>
+                        </TableCell>
+                        <TableCell className="font-bold">{Math.round(rss)}</TableCell>
+                        <TableCell>{rp?.toFixed(1) ?? "—"}</TableCell>
+                      </TableRow>
+                    )
+                  })}
                 </TableBody>
               </Table>
             </div>
@@ -330,31 +341,37 @@ export default function ConsumptionPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead>Material</TableHead>
-                  <TableHead>SKU</TableHead>
-                  <TableHead>Stock</TableHead>
-                  <TableHead>Cons (3mo)</TableHead>
-                  <TableHead>Cons (6mo)</TableHead>
-                  <TableHead>Cons (12mo)</TableHead>
-                  <TableHead>Safety Stock</TableHead>
-                  <TableHead>ROP</TableHead>
-                  <TableHead>Lead Time</TableHead>
+                    <TableHead>Material</TableHead>
+                    <TableHead>SKU</TableHead>
+                    <TableHead>Stock</TableHead>
+                    <TableHead>Trend</TableHead>
+                    <TableHead>Cons (3mo)</TableHead>
+                    <TableHead>Cons (6mo)</TableHead>
+                    <TableHead>Safety Stock</TableHead>
+                    <TableHead>ROP</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {enriched.map((item) => (
-                  <TableRow key={item.material_id}>
-                    <TableCell className="font-medium">{item.material_name}</TableCell>
-                    <TableCell className="font-mono">{item.sku}</TableCell>
-                    <TableCell>{item.quantity}</TableCell>
-                    <TableCell>{item.consumption_3mo.toFixed(0)}</TableCell>
-                    <TableCell>{item.consumption_6mo.toFixed(0)}</TableCell>
-                    <TableCell>{item.consumption_12mo.toFixed(0)}</TableCell>
-                    <TableCell>{item.safetyStock.toFixed(1)}</TableCell>
-                    <TableCell>{item.rop.toFixed(1)}</TableCell>
-                    <TableCell>{item.lead_time_days.toFixed(1)}</TableCell>
-                  </TableRow>
-                ))}
+                  {(consDetails || enriched).map((item: any) => {
+                    const cd = item.consumption_3mo ?? item.consumption_3mo
+                    const c6 = item.consumption_6mo ?? 0
+                    const c12 = item.consumption_12mo ?? 0
+                    const ss = item.safety_stock ?? item.safetyStock ?? 0
+                    const rp = item.reorder_point ?? item.rop ?? 0
+                    const trend = item.consumption_trend ?? (c6 > cd ? "▲" : c6 < cd ? "▼" : "→")
+                    return (
+                      <TableRow key={item.material_id}>
+                        <TableCell className="font-medium">{item.material_name}</TableCell>
+                        <TableCell className="font-mono">{item.sku}</TableCell>
+                        <TableCell>{item.current_qty ?? item.quantity}</TableCell>
+                        <TableCell className={`text-lg font-bold ${trend === "▲" ? "text-green-600" : trend === "▼" ? "text-red-600" : "text-muted-foreground"}`}>{trend}</TableCell>
+                        <TableCell>{cd.toFixed(0)}</TableCell>
+                        <TableCell>{c6.toFixed(0)}</TableCell>
+                        <TableCell>{ss.toFixed(1)}</TableCell>
+                        <TableCell>{rp.toFixed(1)}</TableCell>
+                      </TableRow>
+                    )
+                  })}
               </TableBody>
             </Table>
           )}

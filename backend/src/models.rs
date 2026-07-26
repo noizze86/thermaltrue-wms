@@ -52,6 +52,7 @@ pub enum TxStatus {
     Reversed,
     Draft,
     Completed,
+    Voided,
 }
 
 impl TxStatus {
@@ -63,6 +64,7 @@ impl TxStatus {
             TxStatus::Reversed => "reversed",
             TxStatus::Draft => "draft",
             TxStatus::Completed => "completed",
+            TxStatus::Voided => "voided",
         }
     }
 }
@@ -83,6 +85,7 @@ impl std::str::FromStr for TxStatus {
             "reversed" => Ok(TxStatus::Reversed),
             "draft" => Ok(TxStatus::Draft),
             "completed" => Ok(TxStatus::Completed),
+            "voided" => Ok(TxStatus::Voided),
             _ => Err(format!("Invalid TxStatus: {}", s)),
         }
     }
@@ -503,6 +506,26 @@ pub struct ReportSchedule {
     pub hour: i64,
     pub is_active: bool,
     pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct AnalysisRecommendation {
+    pub id: String,
+    pub menu_source: String,
+    pub recommendation_type: String,
+    pub title: String,
+    pub description: String,
+    pub severity: String,
+    pub status: String,
+    pub affected_sku: Option<String>,
+    pub impacted_cost: Option<f64>,
+    pub estimated_impact: Option<String>,
+    pub root_cause: Option<String>,
+    pub solution: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+    pub acknowledged_by: Option<String>,
+    pub acknowledged_at: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

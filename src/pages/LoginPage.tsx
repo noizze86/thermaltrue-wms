@@ -1,5 +1,6 @@
 import { useState } from "react"
 import { useNavigate } from "react-router-dom"
+import { z } from "zod"
 import { useAuth } from "../contexts/AuthContext"
 import { login, changePassword } from "../api"
 import { Button } from "../components/ui/button"
@@ -19,12 +20,30 @@ export default function LoginPage() {
   const [userForExpiry, setUserForExpiry] = useState<{ id: string; token: string } | null>(null)
   const [newPassword, setNewPassword] = useState("")
   const [changingPassword, setChangingPassword] = useState(false)
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const { login: setAuth } = useAuth()
+
+  const loginSchema = z.object({
+    username: z.string().min(3, "Username minimal 3 karakter"),
+    password: z.string().min(8, "Password minimal 8 karakter"),
+  })
+
+  const passwordSchema = z.object({
+    newPassword: z.string().min(8, "Password minimal 8 karakter"),
+  })
   const navigate = useNavigate()
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setError("")
+    setFieldErrors({})
+    const result = loginSchema.safeParse({ username, password })
+    if (!result.success) {
+      const errs: Record<string, string> = {}
+      for (const issue of result.error.issues) errs[issue.path[0] as string] = issue.message
+      setFieldErrors(errs)
+      return
+    }
     setLoading(true)
     try {
       const res = await login(username, password)
@@ -43,7 +62,11 @@ export default function LoginPage() {
   }
 
   const handleForceChangePassword = async () => {
-    if (newPassword.length < 8) { toast({ title: "Error", description: "Password must be at least 8 characters", variant: "destructive" }); return }
+    const result = passwordSchema.safeParse({ newPassword })
+    if (!result.success) {
+      for (const issue of result.error.issues) toast({ title: "Error", description: issue.message, variant: "destructive" })
+      return
+    }
     if (!userForExpiry) return
     setChangingPassword(true)
     try {
@@ -72,11 +95,13 @@ export default function LoginPage() {
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="username">Username</Label>
-              <Input id="username" value={username} onChange={(e) => setUsername(e.target.value)} required />
+              <Input id="username" value={username} onChange={(e) => { setUsername(e.target.value); setFieldErrors((p) => ({ ...p, username: "" })) }} required className={fieldErrors.username ? "border-destructive" : ""} />
+              {fieldErrors.username && <p className="text-xs text-destructive">{fieldErrors.username}</p>}
             </div>
             <div className="space-y-2">
               <Label htmlFor="password">Password</Label>
-              <Input id="password" type="password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              <Input id="password" type="password" value={password} onChange={(e) => { setPassword(e.target.value); setFieldErrors((p) => ({ ...p, password: "" })) }} required className={fieldErrors.password ? "border-destructive" : ""} />
+              {fieldErrors.password && <p className="text-xs text-destructive">{fieldErrors.password}</p>}
             </div>
             {error && <p className="text-sm text-destructive">{error}</p>}
             <Button type="submit" className="w-full" disabled={loading}>

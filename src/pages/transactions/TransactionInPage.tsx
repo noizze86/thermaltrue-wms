@@ -22,7 +22,8 @@ import { formatDate } from "../../lib/utils"
 import { toast } from "../../hooks/use-toast"
 import { z } from "zod"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
-import { ArrowDownToLine, Scan, CheckCircle, XCircle, Clock, Printer, Plus, Trash2, FileText } from "lucide-react"
+import { ArrowDownToLine, CheckCircle, XCircle, Clock, Printer, Plus, Trash2, FileText } from "lucide-react"
+import SkuAutocomplete from "../../components/SkuAutocomplete"
 
 interface CartItem {
   materialId: string
@@ -57,7 +58,6 @@ export default function TransactionInPage() {
   const [poNumber, setPoNumber] = useState("")
   const [invoiceNo, setInvoiceNo] = useState("")
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({})
-  const [skuInput, setSkuInput] = useState("")
   const [detailTx, setDetailTx] = useState<Transaction | null>(null)
   const printRef = useRef<HTMLDivElement>(null)
 
@@ -66,7 +66,6 @@ export default function TransactionInPage() {
   const [cartItems, setCartItems] = useState<CartItem[]>([])
   const [selectedPoId, setSelectedPoId] = useState<string | null>(null)
   const [showPoDialog, setShowPoDialog] = useState(false)
-  const [addSkuInput, setAddSkuInput] = useState("")
   const [addMaterialId, setAddMaterialId] = useState("")
   const [addBatchId, setAddBatchId] = useState("")
   const [addBatchNo, setAddBatchNo] = useState("")
@@ -82,7 +81,7 @@ export default function TransactionInPage() {
   // Queries
   const { data: materials, isLoading: materialsLoading, isError: materialsError, error: materialsErrorObj, refetch: refetchMaterials } = useQuery({ queryKey: ["materials"], queryFn: () => getMaterials() })
   const { data: warehouses, isLoading: warehousesLoading } = useQuery({ queryKey: ["warehouses"], queryFn: () => getWarehouses() })
-  const { data: recentTx, isLoading: recentTxLoading, isError: recentTxError, error: recentTxErrorObj, refetch: refetchRecentTx } = useQuery({ queryKey: ["transactions", "in"], queryFn: () => getTransactions(undefined, "in", undefined, undefined, undefined, undefined, 20) })
+  const { data: recentTx, isLoading: recentTxLoading, isError: recentTxError, error: recentTxErrorObj, refetch: refetchRecentTx } = useQuery({ queryKey: ["transactions", "in", "active"], queryFn: () => getTransactions(undefined, "in", undefined, undefined, undefined, undefined, 20, "active") })
   const { data: pendingTx } = useQuery({ queryKey: ["transactions", "pending"], queryFn: getPendingTransactions })
   const { data: poList } = useQuery({ queryKey: ["purchaseOrders", "open"], queryFn: () => getPurchaseOrders(undefined, "open,partial"), enabled: showPoDialog })
   const { data: batches } = useQuery({ queryKey: ["batches", addMaterialId], queryFn: () => getMaterialBatches(addMaterialId), enabled: !!addMaterialId })
@@ -94,16 +93,24 @@ export default function TransactionInPage() {
     }
   }, [tab])
 
-  // Single-item handlers
-  const handleSkuLookup = async () => {
-    if (!skuInput.trim()) return
+  const handleSkuLookup = async (sku: string) => {
+    if (!sku) return
     try {
-      const match = await getMaterialBySku(skuInput.trim())
+      const match = await getMaterialBySku(sku)
       setMaterialId(match.id)
-      setSkuInput("")
       setErrors({})
     } catch (e: any) {
-      toast({ title: "Not Found", description: e?.message || `No material with SKU "${skuInput}"`, variant: "destructive" })
+      toast({ title: "Not Found", description: e?.message || `No material with SKU "${sku}"`, variant: "destructive" })
+    }
+  }
+
+  const handleAddSkuLookup = async (sku: string) => {
+    if (!sku) return
+    try {
+      const match = await getMaterialBySku(sku)
+      setAddMaterialId(match.id)
+    } catch (e: any) {
+      toast({ title: "Not Found", description: e?.message || `No material with SKU "${sku}"`, variant: "destructive" })
     }
   }
 
@@ -122,20 +129,10 @@ export default function TransactionInPage() {
   }
 
   const resetForm = () => {
-    setMaterialId(""); setQuantity(0); setPrice(0); setReference(""); setNotes(""); setPoNumber(""); setInvoiceNo(""); setSkuInput(""); setErrors({})
+    setMaterialId(""); setQuantity(0); setPrice(0); setReference(""); setNotes(""); setPoNumber(""); setInvoiceNo(""); setErrors({})
   }
 
   // Multi-item handlers
-  const handleAddSkuLookup = async () => {
-    if (!addSkuInput.trim()) return
-    try {
-      const match = await getMaterialBySku(addSkuInput.trim())
-      setAddMaterialId(match.id)
-      setAddSkuInput("")
-    } catch (e: any) {
-      toast({ title: "Not Found", description: e?.message || `No material with SKU "${addSkuInput}"`, variant: "destructive" })
-    }
-  }
 
   const handleAddToCart = () => {
     if (!addMaterialId || addQty <= 0) {
@@ -155,7 +152,7 @@ export default function TransactionInPage() {
         price: addPrice,
       },
     ])
-    setAddMaterialId(""); setAddSkuInput(""); setAddBatchId(""); setAddBatchNo(""); setAddQty(0); setAddPrice(0)
+    setAddMaterialId(""); setAddBatchId(""); setAddBatchNo(""); setAddQty(0); setAddPrice(0)
   }
 
   const handleRemoveCartItem = (index: number) => {
@@ -188,6 +185,7 @@ export default function TransactionInPage() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (file.size > 10 * 1024 * 1024) { toast({ title: "Error", description: "Attachment must be under 10 MB", variant: "destructive" }); e.target.value = ""; return }
     const reader = new FileReader()
     reader.onload = () => {
       setAttachmentFile({ name: file.name, data: reader.result as string })
@@ -329,11 +327,7 @@ export default function TransactionInPage() {
             <CardContent className="space-y-4">
               <div className="space-y-2">
                 <Label>Quick SKU Lookup</Label>
-                <div className="flex gap-2">
-                  <Input placeholder="Scan or type SKU..." value={skuInput} onChange={(e) => setSkuInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") handleSkuLookup() }} />
-                  <Button variant="outline" onClick={handleSkuLookup}><Scan className="h-4 w-4" /></Button>
-                </div>
+                <SkuAutocomplete materials={materials || []} onSelect={(id) => { setMaterialId(id); setErrors({}) }} onLookup={handleSkuLookup} />
               </div>
               <div className="space-y-2">
                 <Label>Material</Label>
@@ -422,11 +416,7 @@ export default function TransactionInPage() {
               {/* Add item form */}
               <div className="border rounded-lg p-3 space-y-3">
                 <p className="text-sm font-medium">Add Item</p>
-                <div className="flex gap-2">
-                  <Input placeholder="SKU lookup..." value={addSkuInput} onChange={(e) => setAddSkuInput(e.target.value)}
-                    onKeyDown={(e) => { if (e.key === "Enter") handleAddSkuLookup() }} />
-                  <Button variant="outline" size="icon" onClick={handleAddSkuLookup}><Scan className="h-4 w-4" /></Button>
-                </div>
+                <SkuAutocomplete materials={materials || []} onSelect={(id) => setAddMaterialId(id)} onLookup={handleAddSkuLookup} />
                 <Select value={addMaterialId} onChange={(e) => setAddMaterialId(e.target.value)}>
                   <option value="">Select material...</option>
                   {materials?.map((m) => <option key={m.id} value={m.id}>{m.sku} - {m.name}</option>)}

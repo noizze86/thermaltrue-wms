@@ -129,6 +129,8 @@ export default function UsersPage() {
   const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0]
     if (!file) return
+    if (!file.type.startsWith("image/")) { toast({ title: "Error", description: "Only image files are allowed", variant: "destructive" }); e.target.value = ""; return }
+    if (file.size > 2 * 1024 * 1024) { toast({ title: "Error", description: "Photo must be under 2 MB", variant: "destructive" }); e.target.value = ""; return }
     const reader = new FileReader()
     reader.onload = () => setPhotoUpload(reader.result as string)
     reader.readAsDataURL(file)

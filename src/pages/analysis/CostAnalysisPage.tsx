@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { getAnalysisAll, getMaterials, getCategories, getTransactions, getSupplierPrices, getSuppliers, getCategoryValueSummary, exportReportCsv, getBudgets, saveBudget, deleteBudget } from "../../api"
+import { getAnalysisAll, getMaterials, getCategories, getTransactions, getSupplierPrices, getSuppliers, getCategoryValueSummary, exportReportCsv, getBudgets, saveBudget, deleteBudget, getCostSummary, getCarryingCost, getCostToServe, getEfficiencyPenalty } from "../../api"
 import { Input } from "../../components/ui/input"
 import { Select } from "../../components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -10,7 +10,7 @@ import { Badge } from "../../components/ui/badge"
 import { formatCurrency } from "../../lib/utils"
 import { toast } from "../../hooks/use-toast"
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts"
-import { Search, FileDown, DollarSign, TrendingUp, Package, Percent, Save, Trash2, BarChart3 } from "lucide-react"
+import { Search, FileDown, DollarSign, TrendingUp, Package, Percent, Save, Trash2, BarChart3, Activity } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 
 const COLORS = ["#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308", "#06b6d4", "#f97316"]
@@ -33,10 +33,14 @@ export default function CostAnalysisPage() {
   const { data: suppliers } = useQuery({ queryKey: ["suppliers"], queryFn: () => getSuppliers() })
   const { data: catValues } = useQuery({ queryKey: ["catValueSummary"], queryFn: getCategoryValueSummary })
   const { data: budgets } = useQuery({ queryKey: ["budgets"], queryFn: getBudgets })
+  const { data: costSummary } = useQuery({ queryKey: ["costSummary"], queryFn: getCostSummary })
+  const { data: carryingCost } = useQuery({ queryKey: ["carryingCost"], queryFn: getCarryingCost })
+  const { data: costToServe } = useQuery({ queryKey: ["costToServe"], queryFn: getCostToServe })
+  const { data: efficiency } = useQuery({ queryKey: ["efficiency"], queryFn: getEfficiencyPenalty })
 
   const { data: purchaseTxs } = useQuery({
     queryKey: ["purchaseTx", selectedMaterialId],
-    queryFn: () => getTransactions(undefined, "in", selectedMaterialId || undefined),
+    queryFn: () => getTransactions(undefined, "in", selectedMaterialId || undefined, undefined, undefined, undefined, undefined, "active"),
     enabled: !!selectedMaterialId,
   })
 
@@ -188,6 +192,46 @@ export default function CostAnalysisPage() {
           <CardContent>
             <div className="text-3xl font-bold">{formatCurrency(avgValue)}</div>
             <p className="text-sm text-muted-foreground">average per item</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Cost Summary */}
+      <div className="grid gap-4 md:grid-cols-4">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-xs">Carrying Cost Rate</CardTitle>
+            <Percent className="h-4 w-4 text-amber-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-bold">{costSummary ? `${costSummary.carrying_cost_rate}%` : "—"}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-xs">Est. Annual Carrying Cost</CardTitle>
+            <DollarSign className="h-4 w-4 text-red-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-bold text-red-600">{costSummary ? formatCurrency(costSummary.estimated_annual_carrying_cost) : "—"}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-xs">Avg Purchase Price (90d)</CardTitle>
+            <TrendingUp className="h-4 w-4 text-blue-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-bold">{costSummary ? formatCurrency(costSummary.avg_purchase_price_90d) : "—"}</div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-xs">Transactions (30d)</CardTitle>
+            <Activity className="h-4 w-4 text-purple-500" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-lg font-bold">{costSummary ? costSummary.transactions_30d.toLocaleString() : "—"}</div>
           </CardContent>
         </Card>
       </div>
@@ -360,6 +404,132 @@ export default function CostAnalysisPage() {
           )}
         </div>
       )}
+
+      {/* Fase 6 — Carrying Cost & True Unit Cost */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2"><DollarSign className="h-4 w-4 text-emerald-500" /> Carrying Cost & True Unit Cost</CardTitle>
+            {carryingCost && <span className="text-xs text-muted-foreground">Rate: {carryingCost.carrying_cost_rate}%</span>}
+          </div>
+        </CardHeader>
+        <CardContent className="max-h-80 overflow-y-auto">
+          {!carryingCost ? <p className="text-center text-muted-foreground py-4 text-xs">Loading...</p> : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Material</TableHead>
+                  <TableHead className="text-xs text-right">Value</TableHead>
+                  <TableHead className="text-xs text-right">Carrying</TableHead>
+                  <TableHead className="text-xs text-right">Shrinkage</TableHead>
+                  <TableHead className="text-xs text-right">True Unit Cost</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {carryingCost.items.slice(0, 20).map((item) => (
+                  <TableRow key={item.material_id}>
+                    <TableCell className="text-xs font-medium truncate max-w-[120px]">{item.sku} - {item.material_name}</TableCell>
+                    <TableCell className="text-xs text-right">{formatCurrency(item.inventory_value)}</TableCell>
+                    <TableCell className="text-xs text-right">{formatCurrency(item.carrying_cost)}</TableCell>
+                    <TableCell className="text-xs text-right">{formatCurrency(item.shrinkage_cost)}</TableCell>
+                    <TableCell className="text-xs text-right font-semibold">{formatCurrency(item.true_unit_cost)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Fase 6 — Cost-to-Serve */}
+      <Card>
+        <CardHeader>
+          <div className="flex items-center justify-between">
+            <CardTitle className="flex items-center gap-2"><TrendingUp className="h-4 w-4 text-blue-500" /> Cost-to-Serve (90 days)</CardTitle>
+            {costToServe && (
+              <div className="flex gap-3 text-xs">
+                <span>Analyzed: <strong>{costToServe.total_orders_analyzed}</strong></span>
+                <span>Profitable: <strong className="text-green-600">{costToServe.profitable_count}</strong></span>
+                <span>Unprofitable: <strong className="text-red-600">{costToServe.unprofitable_count}</strong></span>
+                <span>Rate: <strong>{costToServe.profitability_rate}%</strong></span>
+              </div>
+            )}
+          </div>
+        </CardHeader>
+        <CardContent className="max-h-72 overflow-y-auto">
+          {!costToServe ? <p className="text-center text-muted-foreground py-4 text-xs">Loading...</p> : costToServe.items.length === 0 ? (
+            <p className="text-center text-muted-foreground py-4 text-xs">No approved transactions found</p>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead className="text-xs">Tx#</TableHead>
+                  <TableHead className="text-xs">Material</TableHead>
+                  <TableHead className="text-xs text-right">Pick</TableHead>
+                  <TableHead className="text-xs text-right">Pack</TableHead>
+                  <TableHead className="text-xs text-right">Admin</TableHead>
+                  <TableHead className="text-xs text-right">Total</TableHead>
+                  <TableHead className="text-xs text-right">Margin</TableHead>
+                  <TableHead className="text-xs text-center">Status</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {costToServe.items.slice(0, 30).map((item) => (
+                  <TableRow key={item.transaction_id}>
+                    <TableCell className="text-xs font-mono">{item.transaction_number}</TableCell>
+                    <TableCell className="text-xs truncate max-w-[100px]">{item.sku}</TableCell>
+                    <TableCell className="text-xs text-right">{formatCurrency(item.picking_cost)}</TableCell>
+                    <TableCell className="text-xs text-right">{formatCurrency(item.packing_cost)}</TableCell>
+                    <TableCell className="text-xs text-right">{formatCurrency(item.admin_cost)}</TableCell>
+                    <TableCell className="text-xs text-right font-semibold">{formatCurrency(item.total_cost)}</TableCell>
+                    <TableCell className={`text-xs text-right ${item.is_profitable ? "text-green-600" : "text-red-600"}`}>
+                      {formatCurrency(item.order_margin)}
+                    </TableCell>
+                    <TableCell className="text-xs text-center">
+                      <Badge variant={item.is_profitable ? "default" : "destructive"} className="text-[10px]">
+                        {item.is_profitable ? "OK" : "LOSS"}
+                      </Badge>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Fase 6 — Efficiency Penalty */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2"><Percent className="h-4 w-4 text-purple-500" /> Efficiency Penalty (30 days)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!efficiency ? <p className="text-center text-muted-foreground py-4 text-xs">Loading...</p> : (
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {efficiency.details.map((d) => (
+                  <div key={d.transaction_type} className="rounded-lg bg-muted/30 p-3 text-center">
+                    <p className="text-xs text-muted-foreground uppercase">{d.transaction_type}</p>
+                    <p className="text-lg font-bold">{d.count}</p>
+                    <div className="flex justify-between text-[10px] text-muted-foreground mt-1">
+                      <span>Actual: {d.avg_actual_minutes}m</span>
+                      <span>Std: {d.standard_minutes}m</span>
+                    </div>
+                    {d.variance_minutes > 0 && (
+                      <p className="text-[10px] text-red-500 font-semibold mt-0.5">+{d.variance_minutes}m penalty</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+              <div className="rounded-lg bg-red-50 dark:bg-red-950 p-3 text-center">
+                <p className="text-xs text-muted-foreground">Total Efficiency Penalty (30 days)</p>
+                <p className="text-2xl font-bold text-red-600 dark:text-red-400">{formatCurrency(efficiency.total_efficiency_penalty)}</p>
+                <p className="text-[10px] text-muted-foreground">@ Rp {efficiency.hourly_labor_rate.toLocaleString()}/hour</p>
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <div className="grid gap-6 md:grid-cols-2">
         <Card>

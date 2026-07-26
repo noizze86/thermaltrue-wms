@@ -51,6 +51,10 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/dashboard/kpi", get(handlers::dashboard::kpi))
         .route("/api/dashboard/analysis", get(handlers::dashboard::analysis_all))
         .route("/api/dashboard/abc", get(handlers::dashboard::abc_analysis))
+        .route("/api/dashboard/health-index", get(handlers::dashboard::health_index))
+        .route("/api/dashboard/biggest-losses", get(handlers::dashboard::biggest_losses))
+        .route("/api/dashboard/capacity-pressure", get(handlers::dashboard::capacity_pressure))
+        .route("/api/dashboard/metrics-latest", get(handlers::dashboard::metrics_latest))
         .route("/api/reports/mom-kpis", get(handlers::dashboard::mom_kpis))
         .route("/api/reports/aging", get(handlers::dashboard::aging_report))
         .route("/api/reports/stock-movement", get(handlers::dashboard::stock_movement))
@@ -63,6 +67,20 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/opname-variance/:id", get(handlers::dashboard::opname_variance))
         .route("/api/dashboard/demand-forecast", get(handlers::dashboard::demand_forecast))
         .route("/api/dashboard/reorder-suggestions", get(handlers::dashboard::reorder_suggestions))
+        // Material Analysis
+        .route("/api/material-analysis/summary", get(handlers::material_analysis::material_summary))
+        .route("/api/material-analysis/details", get(handlers::material_analysis::material_details))
+        // ABC Analysis
+        .route("/api/abc-analysis/classify", post(handlers::abc::abc_classify))
+        .route("/api/abc-analysis/summary", get(handlers::abc::abc_summary))
+        // Forecast Analysis
+        .route("/api/forecast-analysis/generate", post(handlers::forecast::forecast_generate))
+        .route("/api/forecast-analysis/summary", get(handlers::forecast::forecast_summary))
+        .route("/api/forecast-analysis/details", get(handlers::forecast::forecast_details))
+        // Consumption Analysis
+        .route("/api/consumption-analysis/summary", get(handlers::consumption::consumption_summary))
+        .route("/api/consumption-analysis/details", get(handlers::consumption::consumption_details))
+        .route("/api/consumption-analysis/seasonal", get(handlers::consumption::consumption_seasonal))
         // Throughput & Picker
         .route("/api/warehouse/throughput", get(handlers::transfers::get_throughput_metrics))
         .route("/api/warehouse/picker-activity", get(handlers::transfers::get_picker_activity))
@@ -147,6 +165,8 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/transactions/:id/reject", post(handlers::transactions::reject))
         .route("/api/transactions/:id/reverse", post(handlers::transactions::reverse))
         .route("/api/transactions/reverse-bulk", post(handlers::transactions::reverse_bulk))
+        .route("/api/transactions/:id/delete", post(handlers::transactions::delete))
+        .route("/api/transactions/delete-bulk", post(handlers::transactions::delete_bulk))
         .route("/api/transactions/:txId/items", get(handlers::transactions::get_items))
         .route("/api/transactions/:txId/attachments", get(handlers::transactions::get_transaction_attachments))
         .route("/api/transactions/attachments", post(handlers::transactions::create_transaction_attachment))
@@ -166,6 +186,11 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/quality-inspections", post(handlers::transactions::create_quality_inspection))
         // FIFO/FEFO
         .route("/api/fifo-fefo-suggestion", get(handlers::transactions::fifo_fefo_suggestion))
+        // Cost Analysis
+        .route("/api/cost/summary", get(handlers::cost_analysis::cost_summary))
+        .route("/api/cost/carrying-cost", get(handlers::cost_analysis::carrying_cost))
+        .route("/api/cost/cost-to-serve", get(handlers::cost_analysis::cost_to_serve))
+        .route("/api/cost/efficiency-penalty", get(handlers::cost_analysis::efficiency_penalty))
         // Advanced
         .route("/api/budgets", get(handlers::advanced::get_budgets))
         .route("/api/budgets", post(handlers::advanced::save_budget))
@@ -262,16 +287,16 @@ pub fn create_router(pool: DbPool) -> Router {
 async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
-    headers.insert("X-Content-Type-Options", "nosniff".parse().expect("hardcoded 'nosniff' is valid"));
-    headers.insert("X-Frame-Options", "DENY".parse().expect("hardcoded 'DENY' is valid"));
-    headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().expect("hardcoded referrer-policy is valid"));
-    headers.insert("X-XSS-Protection", "0".parse().expect("hardcoded '0' is valid"));
+    headers.insert("X-Content-Type-Options", "nosniff".parse().unwrap());
+    headers.insert("X-Frame-Options", "DENY".parse().unwrap());
+    headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().unwrap());
+    headers.insert("X-XSS-Protection", "0".parse().unwrap());
     let csp = if cfg!(debug_assertions) {
         "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://localhost:*;"
     } else {
         "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';"
     };
-    headers.insert("Content-Security-Policy", csp.parse().expect("hardcoded CSP is valid"));
+    headers.insert("Content-Security-Policy", csp.parse().unwrap());
     response
 }
 

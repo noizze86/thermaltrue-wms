@@ -400,6 +400,8 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             commands::get_transaction_items,
             commands::reverse_transaction,
             commands::reverse_transactions_bulk,
+            commands::delete_transaction,
+            commands::delete_transactions_bulk,
             commands::get_purchase_orders,
             commands::create_purchase_order,
             commands::update_purchase_order_status,
