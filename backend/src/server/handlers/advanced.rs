@@ -5,7 +5,6 @@ use serde_json::json;
 use crate::db_pool::DbPool;
 use crate::models::{Budget, AbcWeight, ForecastCache, LoginHistoryEntry};
 use crate::validate;
-use axum::Extension;
 use sqlx::Row;
 
 #[derive(Deserialize)]

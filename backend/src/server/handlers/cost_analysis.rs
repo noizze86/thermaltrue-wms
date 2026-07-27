@@ -56,10 +56,10 @@ pub async fn carrying_cost(
         .fetch_one(&pool.pool).await.unwrap_or(20.0) / 100.0;
 
     let rows = sqlx::query(
-        "SELECT m.id, m.name, m.sku, m.quantity, m.price, \
-         COALESCE((SELECT SUM(ABS(soi.difference)) FROM stock_opname_items soi WHERE soi.material_id=m.id),0) as variance_qty, \
-         COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t."type"='out' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as monthly_out \
-         FROM materials m WHERE m.is_active=true ORDER BY (m.quantity * m.price) DESC"
+         r#"SELECT m.id, m.name, m.sku, m.quantity, m.price,
+          COALESCE((SELECT SUM(ABS(soi.difference)) FROM stock_opname_items soi WHERE soi.material_id=m.id),0) as variance_qty,
+          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t."type"='out' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as monthly_out
+          FROM materials m WHERE m.is_active=true ORDER BY (m.quantity * m.price) DESC"#
     ).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
@@ -88,7 +88,7 @@ pub async fn carrying_cost(
         let shrinkage_loss = variance_qty * price;
         let storage_alloc = if total_inv_value > 0.0 { (inv_value / total_inv_value) * storage_cost_monthly } else { 0.0 };
         let total_carrying = carrying + shrinkage_loss + storage_alloc;
-        let true_unit = if monthly_out > 0.0 { (price + total_carrying / monthly_out.max(1.0)) } else { price };
+        let true_unit = if monthly_out > 0.0 { price + total_carrying / monthly_out.max(1.0) } else { price };
 
         let period = chrono::Local::now().format("%Y-%m").to_string();
         persist_cost_metrics(
@@ -122,12 +122,12 @@ pub async fn cost_to_serve(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let rows = sqlx::query(
-        "SELECT t.id, t.transaction_number, t."type", t.quantity, t.price, \
-         m.name as material_name, m.sku, m.id as material_id, \
-         EXTRACT(EPOCH FROM (t.updated_at::timestamp - t.created_at::timestamp)) / 60 as processing_minutes \
-         FROM transactions t JOIN materials m ON t.material_id=m.id \
-         WHERE t.status='approved' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days' \
-         ORDER BY t.created_at DESC LIMIT 100"
+        r#"SELECT t.id, t.transaction_number, t."type", t.quantity, t.price,
+         m.name as material_name, m.sku, m.id as material_id,
+         (EXTRACT(EPOCH FROM (NULLIF(t.updated_at, '')::timestamp - t.created_at::timestamp)) / 60)::double precision as processing_minutes
+         FROM transactions t JOIN materials m ON t.material_id=m.id
+         WHERE t.status='approved' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'
+         ORDER BY t.created_at DESC LIMIT 100"#
     ).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
@@ -201,10 +201,10 @@ pub async fn efficiency_penalty(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let rows = sqlx::query(
-        "SELECT t."type", COUNT(*) as tx_count, \
-         COALESCE(AVG(EXTRACT(EPOCH FROM (t.updated_at::timestamp - t.created_at::timestamp)) / 60), 1) as avg_minutes \
-         FROM transactions t WHERE t.status='approved' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days' \
-         GROUP BY t."type""
+        r#"SELECT t."type", COUNT(*) as tx_count,
+         COALESCE((AVG(EXTRACT(EPOCH FROM (NULLIF(t.updated_at, '')::timestamp - t.created_at::timestamp)) / 60))::double precision, 1) as avg_minutes
+         FROM transactions t WHERE t.status='approved' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days'
+         GROUP BY t."type""#
     ).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
@@ -268,6 +268,30 @@ pub async fn cost_summary(
         "SELECT COALESCE(AVG(price),0) FROM transactions WHERE type='in' AND status='approved' AND created_at::timestamp >= NOW() - INTERVAL '90 days'"
     ).fetch_one(&pool.pool).await.unwrap_or(0.0);
 
+    let avg_value = if material_count > 0 { (total_inv / material_count as f64) * 100.0 / 100.0 } else { 0.0 };
+
+    // Persist summary to cost_metrics with material_id="__summary__"
+    let period = chrono::Local::now().format("%Y-%m").to_string();
+    persist_cost_metrics(
+        &pool.pool, "__summary__", "", "monthly", &format!("{}-01", period), &period,
+        avg_purchase, 0.0, 0.0, 0.0,
+        carrying_rate, estimated_carrying, carrying_rate,
+        total_inv, total_qty, avg_value, 100.0,
+        None, None, None, None, None
+    ).await;
+
+    // Trend tracking
+    let yesterday = (chrono::Local::now() - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
+    let last_week = (chrono::Local::now() - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
+    let yesterday_cost: f64 = sqlx::query_scalar(
+        "SELECT COALESCE(total_cost,0) FROM cost_metrics WHERE material_id='__summary__' AND period_start=$1 ORDER BY updated_at DESC LIMIT 1"
+    ).bind(&yesterday).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let avg_7_cost: f64 = sqlx::query_scalar(
+        "SELECT COALESCE(AVG(total_cost),0) FROM cost_metrics WHERE material_id='__summary__' AND period_start>=$1"
+    ).bind(&last_week).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let cost_trend = if (total_inv * 100.0).round() > (yesterday_cost * 100.0).round() { "▲" }
+        else if (total_inv * 100.0).round() < (yesterday_cost * 100.0).round() { "▼" } else { "→" };
+
     Ok(Json(json!({
         "total_inventory_value": (total_inv * 100.0).round() / 100.0,
         "total_quantity": total_qty,
@@ -276,6 +300,9 @@ pub async fn cost_summary(
         "carrying_cost_rate": carrying_rate,
         "estimated_annual_carrying_cost": (estimated_carrying * 100.0).round() / 100.0,
         "avg_purchase_price_90d": (avg_purchase * 100.0).round() / 100.0,
-        "avg_value_per_material": if material_count > 0 { ((total_inv / material_count as f64) * 100.0).round() / 100.0 } else { 0.0 },
+        "avg_value_per_material": (avg_value * 100.0).round() / 100.0,
+        "cost_trend": cost_trend,
+        "yesterday_total_cost": (yesterday_cost * 100.0).round() / 100.0,
+        "avg_7days_total_cost": (avg_7_cost * 100.0).round() / 100.0,
     })))
 }

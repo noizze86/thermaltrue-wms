@@ -53,14 +53,17 @@ pub async fn analysis_all(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
-    let rows = sqlx::query(
-        "SELECT m.id, m.name, m.sku, m.quantity,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo,
-            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo,
-            COALESCE((SELECT t.quantity FROM transactions t WHERE t.material_id=m.id AND t.type='out' ORDER BY t.created_at DESC LIMIT 1),0) as turnover,
-            (SELECT MAX(created_at) FROM transactions WHERE material_id=m.id) as last_transaction,
-            (SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id) as lead_time_days
+let rows = sqlx::query(
+        "SELECT m.id, m.name, m.sku, m.quantity, \
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo, \
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo, \
+            COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo, \
+            COALESCE((SELECT t.quantity FROM transactions t WHERE t.material_id=m.id AND t.type='out' ORDER BY t.created_at DESC LIMIT 1),0) as turnover, \
+            (SELECT MAX(created_at) FROM transactions WHERE material_id=m.id) as last_transaction, \
+            (SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id) as lead_time_days, \
+            COALESCE((SELECT forecast_1mo FROM forecast_metrics WHERE material_id=m.id AND period=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD') AND forecast_model='best' LIMIT 1), \
+                (SELECT COALESCE(SUM(quantity)/3.0 * 1.1, 0) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days')) as forecast_qty, \
+            (SELECT abc_class FROM abc_classification WHERE material_id=m.id AND period=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD') ORDER BY updated_at DESC LIMIT 1) as abc_class \
          FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
     ).bind(wh_filter).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
@@ -71,6 +74,8 @@ pub async fn analysis_all(
                 (chrono::Local::now().naive_local() - dt).num_days()
             })
         }).unwrap_or(999);
+        let forecast_qty: f64 = row.get("forecast_qty");
+        let abc_class: Option<String> = row.get("abc_class");
         json!({"material_id": row.get::<String,_>("id"), "material_name": row.get::<String,_>("name"),
             "sku": row.get::<String,_>("sku"), "quantity": row.get::<f64,_>("quantity"),
             "consumption_3mo": row.get::<f64,_>("consumption_3mo"),
@@ -78,7 +83,7 @@ pub async fn analysis_all(
             "consumption_12mo": row.get::<f64,_>("consumption_12mo"),
             "turnover": row.get::<f64,_>("turnover"),
             "last_transaction": last_tx, "days_since_last": days_since,
-            "lead_time_days": row.get::<i64,_>("lead_time_days"), "forecast_qty": 0.0, "abc_class": null})
+            "lead_time_days": row.get::<i64,_>("lead_time_days"), "forecast_qty": (forecast_qty * 100.0).round() / 100.0, "abc_class": abc_class})
     }).collect::<Vec<_>>())))
 }
 
@@ -148,59 +153,56 @@ async fn persist_dashboard_metrics(
     .execute(pool).await.ok();
 }
 
-pub async fn health_index(
-    Extension(user_id): Extension<String>,
-    State(pool): State<Arc<DbPool>>,
-) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
-        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
-    }
-    let accuracy: f64 = sqlx::query_scalar(
+async fn compute_and_persist_all(
+    pool: &sqlx::PgPool, warehouse_id: &str,
+) -> Result<(serde_json::Value, Vec<serde_json::Value>, serde_json::Value), String> {
+    let wh = warehouse_id;
+    let wh_cond = if wh.is_empty() { "TRUE".to_string() } else { format!("AND m.warehouse_id = '{}'", wh.replace('\'', "''")) };
+    let wh_cond_tx = |table: &str| -> String {
+        if wh.is_empty() { String::new() } else { format!(" AND {}.warehouse_id = '{}'", table, wh.replace('\'', "''")) }
+    };
+
+    let accuracy: f64 = sqlx::query_scalar(&format!(
         "SELECT COALESCE((SELECT COUNT(*)::float FROM stock_opname_items WHERE difference=0) / NULLIF((SELECT COUNT(*)::float FROM stock_opname_items),0) * 100, 100.0)"
-    ).fetch_one(&pool.pool).await.unwrap_or(100.0);
-    let tx_24h: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE created_at::timestamp >= NOW() - INTERVAL '24 hours' AND status NOT IN ('voided','reversed')")
-        .fetch_one(&pool.pool).await.unwrap_or(0);
-    let active_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(&pool.pool).await.unwrap_or(1);
+    )).fetch_one(pool).await.unwrap_or(100.0);
+    let tx_24h: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM transactions WHERE created_at::timestamp >= NOW() - INTERVAL '24 hours' AND status NOT IN ('voided','reversed'){}", wh_cond_tx("transactions")))
+        .fetch_one(pool).await.unwrap_or(0);
+    let active_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(pool).await.unwrap_or(1);
     let daily_target = (active_users as f64 * 5.0).max(10.0);
     let productivity = ((tx_24h as f64 / daily_target) * 100.0).min(100.0);
-    let approved: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status='approved' AND created_at::timestamp >= NOW() - INTERVAL '30 days'")
-        .fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let total_30d: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at::timestamp >= NOW() - INTERVAL '30 days'")
-        .fetch_one(&pool.pool).await.unwrap_or(1.0);
+    let approved: f64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::float FROM transactions WHERE status='approved' AND created_at::timestamp >= NOW() - INTERVAL '30 days'{}", wh_cond_tx("transactions")))
+        .fetch_one(pool).await.unwrap_or(0.0);
+    let total_30d: f64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at::timestamp >= NOW() - INTERVAL '30 days'{}", wh_cond_tx("transactions")))
+        .fetch_one(pool).await.unwrap_or(1.0);
     let on_time = if total_30d > 0.0 { (approved / total_30d * 100.0).min(100.0) } else { 100.0 };
+
     let total_capacity: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(max_capacity),0)::float FROM racks")
-        .fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let used_storage: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity),0)::float FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.unwrap_or(0.0);
+        .fetch_one(pool).await.unwrap_or(0.0);
+    let used_storage: f64 = sqlx::query_scalar(&format!("SELECT COALESCE(SUM(quantity),0)::float FROM materials WHERE is_active=true {}", wh_cond))
+        .fetch_one(pool).await.unwrap_or(0.0);
     let space_util = if total_capacity > 0.0 { (used_storage / total_capacity * 100.0).min(100.0) } else { 50.0 };
-    let total_active: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.unwrap_or(1.0);
-    let above_min: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE quantity > min_stock AND is_active=true")
-        .fetch_one(&pool.pool).await.unwrap_or(0.0);
+
+    let total_active: f64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::float FROM materials WHERE is_active=true {}", wh_cond))
+        .fetch_one(pool).await.unwrap_or(1.0);
+    let above_min: f64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::float FROM materials WHERE quantity > min_stock AND is_active=true {}", wh_cond))
+        .fetch_one(pool).await.unwrap_or(0.0);
     let availability = if total_active > 0.0 { (above_min / total_active * 100.0).min(100.0) } else { 100.0 };
-    let score = ((accuracy * 0.25 + productivity * 0.20 + on_time * 0.20 + space_util * 0.15 + availability * 0.20) * 100.0).round() / 100.0;
-    let status = if score >= 80.0 { "good" } else if score >= 50.0 { "warning" } else { "critical" };
+
+    let health = ((accuracy * 0.25 + productivity * 0.20 + on_time * 0.20 + space_util * 0.15 + availability * 0.20) * 100.0).round() / 100.0;
+    let status = if health >= 80.0 { "good" } else if health >= 50.0 { "warning" } else { "critical" };
 
     let now = chrono::Local::now();
     let yesterday = (now - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
     let last_week = (now - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
     let yesterday_hi: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(health_index,0) FROM dashboard_metrics WHERE warehouse_id='' AND metric_date=$1 ORDER BY metric_hour DESC LIMIT 1"
-    ).bind(&yesterday).fetch_one(&pool.pool).await.unwrap_or(0.0);
+        "SELECT COALESCE(health_index,0) FROM dashboard_metrics WHERE warehouse_id=$1 AND metric_date=$2 ORDER BY metric_hour DESC LIMIT 1"
+    ).bind(wh).bind(&yesterday).fetch_one(pool).await.unwrap_or(0.0);
     let avg_7: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(AVG(health_index),0) FROM dashboard_metrics WHERE warehouse_id='' AND metric_date>=$1"
-    ).bind(&last_week).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let trend = if (score * 100.0).round() > (yesterday_hi * 100.0).round() { "▲" } else if (score * 100.0).round() < (yesterday_hi * 100.0).round() { "▼" } else { "→" };
+        "SELECT COALESCE(AVG(health_index),0) FROM dashboard_metrics WHERE warehouse_id=$1 AND metric_date>=$2"
+    ).bind(wh).bind(&last_week).fetch_one(pool).await.unwrap_or(0.0);
+    let trend = if (health * 100.0).round() > (yesterday_hi * 100.0).round() { "▲" } else if (health * 100.0).round() < (yesterday_hi * 100.0).round() { "▼" } else { "→" };
 
-    let empty_losses = [String::new(), String::new(), String::new(), String::new(), String::new()];
-    let empty_top = serde_json::Value::Array(Vec::new());
-    persist_dashboard_metrics(
-        &pool.pool, "", score, accuracy, productivity, on_time, space_util, availability,
-        0, "", &empty_top, &empty_losses,
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, "normal"
-    ).await;
-
-    Ok(Json(json!({"score": score, "status": status, "trend_direction": trend,
+    let health_result = json!({"score": health, "status": status, "trend_direction": trend,
         "yesterday_score": (yesterday_hi * 100.0).round() / 100.0,
         "avg_7days_score": (avg_7 * 100.0).round() / 100.0,
         "components": {
@@ -209,25 +211,16 @@ pub async fn health_index(
             "on_time_rate": {"score": (on_time * 100.0).round() / 100.0, "weight": 0.20},
             "space_utilization": {"score": (space_util * 100.0).round() / 100.0, "weight": 0.15},
             "stock_availability": {"score": (availability * 100.0).round() / 100.0, "weight": 0.20}
-        }})))
-}
+        }});
 
-pub async fn biggest_losses(
-    Extension(user_id): Extension<String>,
-    State(pool): State<Arc<DbPool>>,
-) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
-        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
-    }
-    let rows = sqlx::query(
+    let loss_rows = sqlx::query(&format!(
         "SELECT m.id, m.name, m.sku, m.quantity, m.price, m.min_stock, \
          COALESCE((SELECT SUM(ABS(soi.difference)) FROM stock_opname_items soi WHERE soi.material_id=m.id),0) as variance_qty, \
          CASE WHEN (SELECT COUNT(*) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days') = 0 THEN 1 ELSE 0 END as is_dead \
-         FROM materials m WHERE m.is_active=true"
-    ).fetch_all(&pool.pool).await
-     .map_err(|e| crate::server::server_error(e))?;
+         FROM materials m WHERE m.is_active=true {}"
+        , wh_cond)).fetch_all(pool).await.map_err(|e| e.to_string())?;
     let mut losses: Vec<serde_json::Value> = Vec::new();
-    for row in &rows {
+    for row in &loss_rows {
         let qty: f64 = row.get("quantity");
         let price: f64 = row.get("price");
         let min_stock: f64 = row.get("min_stock");
@@ -247,41 +240,20 @@ pub async fn biggest_losses(
     }
     losses.sort_by(|a, b| b["total_loss"].as_f64().unwrap_or(0.0).partial_cmp(&a["total_loss"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
     losses.truncate(5);
-
     let top_losses_value = serde_json::Value::Array(losses.clone());
-    let mut items = [String::new(), String::new(), String::new(), String::new(), String::new()];
+    let mut loss_items = [String::new(), String::new(), String::new(), String::new(), String::new()];
     for (i, l) in losses.iter().enumerate().take(5) {
-        items[i] = serde_json::to_string(l).unwrap_or_default();
+        loss_items[i] = serde_json::to_string(l).unwrap_or_default();
     }
-    persist_dashboard_metrics(
-        &pool.pool, "", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        0, "", &top_losses_value, &items,
-        0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, "normal"
-    ).await;
 
-    Ok(Json(json!(losses)))
-}
-
-pub async fn capacity_pressure(
-    Extension(user_id): Extension<String>,
-    State(pool): State<Arc<DbPool>>,
-) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
-        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
-    }
-    let total_capacity: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(max_capacity),0)::float FROM racks")
-        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
-    let used_storage: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity),0)::float FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
-    let in_out = sqlx::query(
+    let in_out = sqlx::query(&format!(
         "SELECT COALESCE(AVG(daily_in),0) as avg_in, COALESCE(AVG(daily_out),0) as avg_out \
          FROM (SELECT DATE(created_at) as d, \
              SUM(CASE WHEN type='in' THEN quantity ELSE 0 END) as daily_in, \
              SUM(CASE WHEN type='out' THEN quantity ELSE 0 END) as daily_out \
-         FROM transactions WHERE created_at::timestamp >= NOW() - INTERVAL '30 days' AND status NOT IN ('voided','reversed') \
+         FROM transactions WHERE created_at::timestamp >= NOW() - INTERVAL '30 days' AND status NOT IN ('voided','reversed'){} \
          GROUP BY DATE(created_at)) sub"
-    ).fetch_one(&pool.pool).await
-     .map_err(|e| crate::server::server_error(e))?;
+        , wh_cond_tx("transactions"))).fetch_one(pool).await.map_err(|e| e.to_string())?;
     let avg_in: f64 = in_out.get("avg_in");
     let avg_out: f64 = in_out.get("avg_out");
     let net_flow = avg_in - avg_out;
@@ -300,22 +272,82 @@ pub async fn capacity_pressure(
         (chrono::Local::now() + chrono::Duration::days(days_to_full as i64)).format("%Y-%m-%d").to_string()
     } else { String::new() };
 
-    let empty: [String; 5] = Default::default();
-    let empty_top = serde_json::Value::Array(Vec::new());
     persist_dashboard_metrics(
-        &pool.pool, "", 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-        capacity_score, &predicted_full, &empty_top, &empty,
+        pool, wh, health, accuracy, productivity, on_time, space_util, availability,
+        capacity_score, &predicted_full, &top_losses_value, &loss_items,
         total_capacity, used_storage, available_capacity, utilization_pct,
         avg_in, avg_out, days_to_full, cap_status
     ).await;
 
-    Ok(Json(json!({"total_capacity": total_capacity, "used_capacity": used_storage,
+    let capacity_result = json!({"total_capacity": total_capacity, "used_capacity": used_storage,
         "available_capacity": available_capacity, "utilization_pct": utilization_pct,
         "avg_daily_inbound": (avg_in * 100.0).round() / 100.0,
         "avg_daily_outbound": (avg_out * 100.0).round() / 100.0,
         "days_to_full": days_to_full, "status": cap_status,
         "capacity_pressure_score": capacity_score,
-        "predicted_full_date": predicted_full})))
+        "predicted_full_date": predicted_full});
+
+    Ok((health_result, losses, capacity_result))
+}
+
+pub async fn health_index(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Query(q): Query<AnalysisQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
+    let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let (health_result, _, _) = compute_and_persist_all(&pool.pool, wh).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(health_result))
+}
+
+pub async fn biggest_losses(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Query(q): Query<AnalysisQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
+    let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let (_, losses, _) = compute_and_persist_all(&pool.pool, wh).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(json!(losses)))
+}
+
+pub async fn capacity_pressure(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Query(q): Query<AnalysisQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
+    let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let (_, _, capacity_result) = compute_and_persist_all(&pool.pool, wh).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(capacity_result))
+}
+
+pub async fn compute_all(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Query(q): Query<AnalysisQuery>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
+    let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let (health_result, losses, capacity_result) = compute_and_persist_all(&pool.pool, wh).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(json!({
+        "health_index": health_result,
+        "biggest_losses": losses,
+        "capacity_pressure": capacity_result,
+    })))
 }
 
 pub async fn metrics_latest(
@@ -404,7 +436,7 @@ pub async fn abc_analysis(
             let consumption: f64 = row.get("consumption_12mo");
             let frequency: i64 = row.get("pick_frequency");
             let qty: f64 = row.get("quantity");
-            let min_stock: f64 = row.get("min_stock");
+            let _min_stock: f64 = row.get("min_stock");
             let lead_time: i64 = row.get("lead_time_days");
             let last_tx: Option<String> = row.get("last_transaction");
             let days_since = last_tx.as_ref().and_then(|d| {
@@ -422,7 +454,7 @@ pub async fn abc_analysis(
                 "pick_frequency": frequency, "score": (score * 1000.0).round() / 1000.0,
                 "criticality_score": criticality, "last_transaction": last_tx,
                 "days_since_last": days_since, "lead_time_days": lead_time as f64,
-                "consumption_3mo": 0.0, "consumption_6mo": 0.0, "turnover": 0.0, "forecast_qty": 0.0, "abc_class": null})
+                "consumption_3mo": 0.0, "consumption_6mo": 0.0, "turnover": 0.0, "forecast_qty": consumption / 12.0 * 3.0, "abc_class": null})
         }).collect();
 
         scored.sort_by(|a, b| b["score"].as_f64().unwrap_or(0.0).partial_cmp(&a["score"].as_f64().unwrap_or(0.0)).unwrap_or(std::cmp::Ordering::Equal));
@@ -459,7 +491,7 @@ pub async fn abc_analysis(
                 "sku": row.get::<String,_>("sku"), "quantity": row.get::<f64,_>("quantity"),
                 "consumption_12mo": val, "turnover": val, "last_transaction": row.get::<Option<String>,_>("last_transaction"),
                 "days_since_last": 0, "lead_time_days": 0, "consumption_3mo": 0.0, "consumption_6mo": 0.0,
-                "forecast_qty": 0.0, "abc_class": if cumulative <= 80.0 { Some("A") } else if cumulative <= 95.0 { Some("B") } else { Some("C") }});
+                "forecast_qty": val / 12.0 * 3.0, "abc_class": if cumulative <= 80.0 { Some("A") } else if cumulative <= 95.0 { Some("B") } else { Some("C") }});
             if cumulative <= 80.0 { class_a.push(item); }
             else if cumulative <= 95.0 { class_b.push(item); }
             else { class_c.push(item); }
@@ -670,6 +702,8 @@ pub async fn demand_forecast(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
+    let period = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let rows = sqlx::query(
         "SELECT m.id, m.name, m.sku, m.quantity, m.min_stock, m.max_stock,
             COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo,
@@ -677,19 +711,38 @@ pub async fn demand_forecast(
          FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
     ).bind(wh_filter).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(json!(rows.iter().map(|row| {
+    let mut items: Vec<serde_json::Value> = Vec::new();
+    for row in &rows {
+        let id: String = row.get("id");
         let c3: f64 = row.get("consumption_3mo");
         let c1: f64 = row.get("consumption_1mo");
         let monthly_avg = if c3 > 0.0 { c3 / 3.0 } else { c1.max(1.0) };
         let seasonal_factor = if c1 > 0.0 && monthly_avg > 0.0 { c1 / monthly_avg } else { 1.0 };
         let forecast_next = (monthly_avg * seasonal_factor * 1.1).round();
-        json!({"material_id": row.get::<String,_>("id"), "material_name": row.get::<String,_>("name"),
+
+        // Persist to forecast_metrics
+        let fid = uuid::Uuid::new_v4().to_string();
+        sqlx::query(
+            "INSERT INTO forecast_metrics (id, material_id, warehouse_id, period, forecast_model, \
+             forecast_1mo, forecast_3mo, forecast_6mo, created_at, updated_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) \
+             ON CONFLICT (material_id, warehouse_id, period, forecast_model) DO UPDATE SET \
+             forecast_1mo=EXCLUDED.forecast_1mo, forecast_3mo=EXCLUDED.forecast_3mo, \
+             forecast_6mo=EXCLUDED.forecast_6mo, updated_at=EXCLUDED.updated_at"
+        )
+        .bind(&fid).bind(&id).bind(wh_filter).bind(&period).bind("demand")
+        .bind(forecast_next).bind(forecast_next * 3.0).bind(forecast_next * 6.0)
+        .bind(&now_str).bind(&now_str)
+        .execute(&pool.pool).await.ok();
+
+        items.push(json!({"material_id": id, "material_name": row.get::<String,_>("name"),
             "sku": row.get::<String,_>("sku"), "current_qty": row.get::<f64,_>("quantity"),
             "min_stock": row.get::<f64,_>("min_stock"), "max_stock": row.get::<f64,_>("max_stock"),
             "consumption_3mo": c3, "consumption_1mo": c1,
             "monthly_avg_demand": (monthly_avg * 100.0).round() / 100.0,
-            "forecast_next_month": forecast_next as i64})
-    }).collect::<Vec<_>>())))
+            "forecast_next_month": forecast_next as i64}));
+    }
+    Ok(Json(json!(items)))
 }
 
 pub async fn reorder_suggestions(

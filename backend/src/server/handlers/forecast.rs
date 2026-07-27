@@ -47,7 +47,7 @@ fn holt(data: &[f64], alpha: f64, beta: f64) -> f64 {
 
 fn best_forecast(data: &[f64]) -> f64 {
     if data.len() < 3 { return data.last().copied().unwrap_or(0.0) }
-    let predictions: Vec<(f64, f64)> = (3..data.len()).map(|i| {
+    let predictions: Vec<(f64, f64, f64, f64, f64, f64, f64)> = (3..data.len()).map(|i| {
         let slice = &data[0..i];
         let f_sma3 = sma(slice, 3);
         let f_ses = ses(slice, 0.3);
@@ -63,7 +63,7 @@ fn best_forecast(data: &[f64]) -> f64 {
     let total_ses: f64 = predictions.iter().map(|x| x.5).sum();
     let total_holt: f64 = predictions.iter().map(|x| x.6).sum();
 
-    let cnt = predictions.len() as f64;
+    let _cnt = predictions.len() as f64;
     let best = if total_sma3 <= total_ses && total_sma3 <= total_holt { "sma3" }
         else if total_ses <= total_holt { "ses" } else { "holt" };
 
@@ -152,6 +152,31 @@ pub async fn forecast_generate(
     ).bind(wh).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
+    let monthly_rows = sqlx::query(
+        "SELECT material_id, \
+         EXTRACT(YEAR FROM created_at::timestamp)::int as y, \
+         EXTRACT(MONTH FROM created_at::timestamp)::int as m, \
+         COALESCE(SUM(quantity),0) as qty \
+         FROM transactions WHERE type='out' AND status NOT IN ('voided','reversed') \
+         AND created_at::timestamp >= NOW() - INTERVAL '12 months' \
+         AND ($1 = '' OR warehouse_id = $1) \
+         GROUP BY material_id, y, m ORDER BY material_id, y, m"
+    ).bind(wh).fetch_all(&pool.pool).await
+     .map_err(|e| crate::server::server_error(e))?;
+
+    let mut monthly_map: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
+    for mr in &monthly_rows {
+        let mid: String = mr.get("material_id");
+        let qty: f64 = mr.get("qty");
+        monthly_map.entry(mid.clone()).or_insert_with(|| vec![0.0_f64; 12]);
+        if let Some(vals) = monthly_map.get_mut(&mid) {
+            let month_idx: i32 = mr.get("m");
+            if month_idx >= 1 && month_idx <= 12 {
+                vals[(month_idx - 1) as usize] += qty;
+            }
+        }
+    }
+
     let mut generated: Vec<serde_json::Value> = Vec::new();
     for row in &rows {
         let id: String = row.get("id");
@@ -164,38 +189,24 @@ pub async fn forecast_generate(
         let c6: f64 = row.get("c6");
         let c12: f64 = row.get("c12");
 
-        // Build monthly history from consumption data
-        let mut monthly: Vec<f64> = Vec::new();
-        let avg3 = if c3 > 0.0 { c3 / 3.0 } else { 0.0 };
-        let avg6 = if c6 > 0.0 { c6 / 6.0 } else { 0.0 };
-        let avg12 = if c12 > 0.0 { c12 / 12.0 } else { 0.0 };
-
-        // Simulate 12 months from c12 minus c6, c6 minus c3, and c3
-        if c12 > 0.0 {
+        // Build monthly history from real transaction data
+        let monthly_slice = monthly_map.get(&id).map(|v| v.as_slice()).unwrap_or(&[]);
+        let data: Vec<f64> = if monthly_slice.len() >= 6 {
+            monthly_slice.to_vec()
+        } else if c12 > 0.0 {
             let early6 = (c12 - c6).max(0.0) / 6.0;
             let mid3 = (c6 - c3).max(0.0) / 3.0;
             let late3 = c3 / 3.0;
-            for _ in 0..6 { monthly.push(early6.max(1.0)); }
-            for _ in 0..3 { monthly.push(mid3.max(1.0)); }
-            for _ in 0..3 { monthly.push(late3.max(1.0)); }
-        } else if c6 > 0.0 {
-            let early3 = (c6 - c3).max(0.0) / 3.0;
-            let late3 = c3 / 3.0;
-            for _ in 0..3 { monthly.push(early3.max(1.0)); }
-            for _ in 0..3 { monthly.push(late3.max(1.0)); }
-        } else if c3 > 0.0 {
-            for _ in 0..3 { monthly.push((c3 / 3.0).max(1.0)); }
+            let mut fallback = Vec::new();
+            for _ in 0..6 { fallback.push(early6.max(1.0)); }
+            for _ in 0..3 { fallback.push(mid3.max(1.0)); }
+            for _ in 0..3 { fallback.push(late3.max(1.0)); }
+            fallback
         } else {
-            monthly.push(1.0);
-        }
+            vec![1.0; 6]
+        };
 
-        // Fill to at least 6 data points for forecasting
-        while monthly.len() < 6 {
-            monthly.push(monthly.last().copied().unwrap_or(1.0));
-        }
-        let data = &monthly;
-
-        let f1 = best_forecast(data);
+        let f1 = best_forecast(&data);
         let f3 = f1 * 3.0;
         let f6 = f1 * 6.0;
 
@@ -231,7 +242,7 @@ pub async fn forecast_generate(
             si.iter().map(|v| (v / seasonal_avg * 100.0).round() / 100.0).collect()
         } else { si };
 
-        let trend_label = compute_trend(data);
+        let trend_label = compute_trend(&data);
         let is_seasonal = seasonal_norm.iter().any(|v| (*v - 1.0).abs() > 0.2);
 
         let need_reorder = f1 > qty;
@@ -284,7 +295,7 @@ pub async fn forecast_summary(
     }
     let period = chrono::Local::now().format("%Y-%m-%d").to_string();
 
-    let row = sqlx::query(
+    let row = match sqlx::query(
         "SELECT COUNT(*) as total, \
          COUNT(*) FILTER (WHERE forecast_1mo > 0) as forecasted, \
          COUNT(*) FILTER (WHERE trend='▲') as trend_up, \
@@ -292,13 +303,15 @@ pub async fn forecast_summary(
          COUNT(*) FILTER (WHERE is_seasonal=TRUE) as seasonal_cnt, \
          COALESCE(AVG(mape),0) as avg_mape \
          FROM forecast_metrics WHERE period=$1 AND forecast_model='best'"
-    ).bind(&period).fetch_one(&pool.pool).await.unwrap_or_else(|_| {
-        // Return empty row if table doesn't exist yet
-        sqlx::query(
-            "SELECT 0::bigint as total, 0::bigint as forecasted, 0::bigint as trend_up, \
-             0::bigint as trend_down, 0::bigint as seasonal_cnt, 0::double precision as avg_mape"
-        ).fetch_one(&pool.pool).await.unwrap()
-    });
+    ).bind(&period).fetch_one(&pool.pool).await {
+        Ok(r) => r,
+        Err(_) => {
+            sqlx::query(
+                "SELECT 0::bigint as total, 0::bigint as forecasted, 0::bigint as trend_up, \
+                 0::bigint as trend_down, 0::bigint as seasonal_cnt, 0::double precision as avg_mape"
+            ).fetch_one(&pool.pool).await.unwrap()
+        }
+    };
 
     Ok(Json(json!({
         "total_materials": row.get::<i64,_>("total"),

@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react"
+import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getMaterialBySku } from "../../api"
 import {
@@ -45,6 +46,7 @@ const singleSchema = z.object({
 
 export default function TransactionInPage() {
   const { user, can } = useAuth()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<"single" | "multi">("single")
 
@@ -200,7 +202,7 @@ export default function TransactionInPage() {
       quantity, price, reference, notes, user_id: user?.id || null,
       rack_id: null, id: "", transaction_number: "", status: "",
       approved_by: null, po_number: poNumber, invoice_no: invoiceNo,
-      created_at: "", updated_at: null, destination: "",
+      created_at: "", updated_at: null, destination: null,
     }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["transactions"] })
@@ -222,7 +224,7 @@ export default function TransactionInPage() {
           notes, user_id: user?.id || null, rack_id: null,
           id: "", transaction_number: "", status: "",
           approved_by: null, po_number: poNumber, invoice_no: "",
-          created_at: "", updated_at: null, destination: "",
+          created_at: "", updated_at: null, destination: null,
         })
         ids.push(result.id)
       }
@@ -562,7 +564,7 @@ export default function TransactionInPage() {
                   </TableHeader>
                   <TableBody>
                     {recentTx?.map((tx) => (
-                      <TableRow key={tx.id} className="cursor-pointer" onClick={() => setDetailTx(tx)}>
+                      <TableRow key={tx.id} className="cursor-pointer" onClick={() => navigate('/transactions/' + tx.id)}>
                         <TableCell className="font-mono text-xs">{tx.transaction_number}</TableCell>
                         <TableCell>{materials?.find((m) => m.id === tx.material_id)?.name || "-"}</TableCell>
                         <TableCell><Badge variant="success">+{tx.quantity}</Badge></TableCell>

@@ -13,15 +13,10 @@ import { toast } from "../../hooks/use-toast"
 import { Treemap, PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from "recharts"
 import { Search, Layers, PieChart as PieIcon, Sliders, RefreshCw } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
-import type { AbcClassifiedItem, AbcClassifyResult, AbcSummaryResult } from "../../api"
+import type { AbcClassifiedItem } from "../../api"
 
 const PIE_COLORS = ["#ef4444", "#eab308", "#22c55e"]
 const XYZ_COLORS: Record<string, string> = { X: "#22c55e", Y: "#eab308", Z: "#ef4444" }
-const ACTION_CARDS = {
-  A: { title: "Class A — Tight Control", desc: "Tight control, frequent review, accurate records", color: "red" },
-  B: { title: "Class B — Moderate Control", desc: "Moderate control, periodic review", color: "yellow" },
-  C: { title: "Class C — Simplified", desc: "Simplified procurement, annual review", color: "green" },
-}
 
 function xyzLabel(xyz: string): string {
   if (xyz === "X") return "X — Stable (CV<0.5)"

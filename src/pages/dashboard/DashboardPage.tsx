@@ -33,8 +33,12 @@ const ALL_WIDGETS: WidgetDef[] = [
 ]
 
 function loadWidgetOrder(): string[] {
-  try { return JSON.parse(localStorage.getItem("dash_widgets") || "null") || ALL_WIDGETS.map((w) => w.key) }
-  catch { return ALL_WIDGETS.map((w) => w.key) }
+  const defaultKeys = ALL_WIDGETS.map((w) => w.key)
+  try {
+    const saved = JSON.parse(localStorage.getItem("dash_widgets") || "null")
+    if (!saved) return defaultKeys
+    return defaultKeys.filter((k) => !saved.includes(k)).concat(saved)
+  } catch { return defaultKeys }
 }
 
 function saveWidgetOrder(keys: string[]) { localStorage.setItem("dash_widgets", JSON.stringify(keys)) }
@@ -64,9 +68,9 @@ export default function DashboardPage() {
     queryKey: ["audit_error_count", todayStr],
     queryFn: () => countAuditLogsFiltered("error", undefined, undefined, todayStr, todayStr),
   })
-  const { data: healthIndex } = useQuery({ queryKey: ["health_index"], queryFn: getHealthIndex, refetchInterval: 120000 })
-  const { data: biggestLosses } = useQuery({ queryKey: ["biggest_losses"], queryFn: getBiggestLosses, refetchInterval: 120000 })
-  const { data: capacityPressure } = useQuery({ queryKey: ["capacity_pressure"], queryFn: getCapacityPressure, refetchInterval: 120000 })
+  const { data: healthIndex } = useQuery({ queryKey: ["health_index"], queryFn: () => getHealthIndex(), refetchInterval: 120000 })
+  const { data: biggestLosses } = useQuery({ queryKey: ["biggest_losses"], queryFn: () => getBiggestLosses(), refetchInterval: 120000 })
+  const { data: capacityPressure } = useQuery({ queryKey: ["capacity_pressure"], queryFn: () => getCapacityPressure(), refetchInterval: 120000 })
 
   // Real-time notification polling
   useEffect(() => {

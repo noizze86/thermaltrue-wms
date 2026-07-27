@@ -27,9 +27,9 @@ export default function ConsumptionPage() {
     queryKey: ["analysis", warehouseId],
     queryFn: () => getAnalysisAll(warehouseId || undefined),
   })
-  const { data: consSummary } = useQuery({ queryKey: ["consSummary"], queryFn: getConsumptionSummary })
+  const { data: consSummary } = useQuery({ queryKey: ["consSummary"], queryFn: () => getConsumptionSummary() })
   const { data: consDetails } = useQuery({ queryKey: ["consDetails", warehouseId], queryFn: () => getConsumptionDetails(warehouseId || undefined) })
-  const { data: consSeasonal } = useQuery({ queryKey: ["consSeasonal"], queryFn: getConsumptionSeasonal })
+  const { data: consSeasonal } = useQuery({ queryKey: ["consSeasonal"], queryFn: () => getConsumptionSeasonal() })
   const { data: warehouses } = useQuery({ queryKey: ["warehouses"], queryFn: () => getWarehouses() })
 
   const filtered = (items || []).filter((i) => {
@@ -89,9 +89,6 @@ export default function ConsumptionPage() {
   const totalCons12mo = filtered.reduce((s, i) => s + i.consumption_12mo, 0)
   const avgLeadTime = filtered.length > 0 ? filtered.reduce((s, i) => s + i.lead_time_days, 0) / filtered.length : 0
 
-  const avgMonthly = seasonalData.reduce((s, d) => s + d.avg, 0) / (seasonalData.length || 1)
-  const highSeason = seasonalData.filter((d) => d.avg > avgMonthly * 1.1)
-  const lowSeason = seasonalData.filter((d) => d.avg < avgMonthly * 0.9)
   if (isLoading) return <LoadingState text="Loading consumption data..." />
   if (isError) return <ErrorState message={error?.message || "Failed to load consumption data"} onRetry={refetch} />
 
@@ -355,7 +352,6 @@ export default function ConsumptionPage() {
                   {(consDetails || enriched).map((item: any) => {
                     const cd = item.consumption_3mo ?? item.consumption_3mo
                     const c6 = item.consumption_6mo ?? 0
-                    const c12 = item.consumption_12mo ?? 0
                     const ss = item.safety_stock ?? item.safetyStock ?? 0
                     const rp = item.reorder_point ?? item.rop ?? 0
                     const trend = item.consumption_trend ?? (c6 > cd ? "▲" : c6 < cd ? "▼" : "→")

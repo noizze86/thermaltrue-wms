@@ -507,8 +507,8 @@ pub async fn get_audit_logs_filtered(
     action: Option<String>, entity: Option<String>, user_id: Option<String>,
     date_start: Option<String>, date_end: Option<String>, limit: Option<i64>,
 ) -> Result<Vec<AuditLog>, AppError> {
-    let user_id = db.verify_token(&token)?;
-    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let current_user = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &current_user, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let limit_val = limit.unwrap_or(200);
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT id, user_id, action, entity, entity_id, details, created_at FROM audit_log WHERE 1=1"
@@ -554,8 +554,8 @@ pub async fn count_audit_logs_filtered(
     action: Option<String>, entity: Option<String>, user_id: Option<String>,
     date_start: Option<String>, date_end: Option<String>,
 ) -> Result<i64, AppError> {
-    let user_id = db.verify_token(&token)?;
-    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let current_user = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &current_user, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let mut builder = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM audit_log WHERE 1=1");
     if let Some(ref a) = action { builder.push(" AND action = ").push_bind(a.as_str()); }
     if let Some(ref e) = entity { builder.push(" AND entity = ").push_bind(e.as_str()); }
@@ -595,8 +595,8 @@ pub async fn export_audit_csv_filtered(
     action: Option<String>, entity: Option<String>, user_id: Option<String>,
     date_start: Option<String>, date_end: Option<String>, limit: Option<i64>,
 ) -> Result<String, AppError> {
-    let user_id = db.verify_token(&token)?;
-    if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let current_user = db.verify_token(&token)?;
+    if !validate::check_user_permission(&db.pool, &current_user, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let limit_val = limit.unwrap_or(500);
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT a.id, a.user_id, COALESCE(u.username, 'System'), a.action, a.entity, a.entity_id, a.details, a.created_at FROM audit_log a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1"

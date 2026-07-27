@@ -1,5 +1,4 @@
 import { setupTest, teardownTest, navigateTo } from "../helpers/tauri-helper";
-import type { TauriMcpClient } from "../helpers/tauri-helper";
 
 async function testNegative() {
   console.log("🧪 Negative & Edge Case Test Suite");

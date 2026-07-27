@@ -10,7 +10,7 @@ import { Badge } from "../../components/ui/badge"
 import { formatCurrency } from "../../lib/utils"
 import { toast } from "../../hooks/use-toast"
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts"
-import { Search, FileDown, DollarSign, TrendingUp, Package, Percent, Save, Trash2, BarChart3, Activity } from "lucide-react"
+import { Search, FileDown, DollarSign, TrendingUp, Package, Percent, Save, Trash2, BarChart3, Activity, Minus } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 
 const COLORS = ["#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308", "#06b6d4", "#f97316"]
@@ -205,6 +205,16 @@ export default function CostAnalysisPage() {
           </CardHeader>
           <CardContent>
             <div className="text-lg font-bold">{costSummary ? `${costSummary.carrying_cost_rate}%` : "—"}</div>
+            {costSummary?.cost_trend && (
+              <div className="flex items-center gap-1 text-xs mt-1">
+                {costSummary.cost_trend === "▲" ? <TrendingUp className="h-3 w-3 text-red-500" /> :
+                 costSummary.cost_trend === "▼" ? <TrendingUp className="h-3 w-3 text-green-500 rotate-180" /> :
+                 <Minus className="h-3 w-3 text-muted-foreground" />}
+                <span className={costSummary.cost_trend === "▲" ? "text-red-500" : costSummary.cost_trend === "▼" ? "text-green-500" : ""}>
+                  {costSummary.cost_trend} Trend
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
         <Card>

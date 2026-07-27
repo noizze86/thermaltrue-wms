@@ -505,3 +505,61 @@ pub async fn generate_count_sheet_pdf(
     }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(b64)))
 }
+
+pub async fn get_variance_root_cause(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Path(opname_id): Path<String>,
+) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
+    let rows = sqlx::query(
+        "SELECT m.id, m.name, COALESCE(c.name,'Uncategorized'), m.sku, soi.system_qty, soi.physical_qty, soi.difference,
+                COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='in' AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '90 days','YYYY-MM-DD HH24:MI:SS')),0) as inbound_90d,
+                COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '90 days','YYYY-MM-DD HH24:MI:SS')),0) as outbound_90d,
+                COALESCE((SELECT COUNT(*)::bigint FROM stock_opname_items soi2 WHERE soi2.material_id=m.id),0) as opname_count,
+                m.min_stock, m.max_stock,
+                CASE WHEN soi.difference > 0 THEN 'surplus' WHEN soi.difference < 0 THEN 'shortage' ELSE 'match' END as variance_type
+         FROM stock_opname_items soi
+         JOIN materials m ON soi.material_id=m.id
+         LEFT JOIN categories c ON m.category_id=c.id
+         WHERE soi.opname_id=$1
+         ORDER BY ABS(soi.difference) DESC"
+    ).bind(&opname_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let mut v = Vec::new();
+    for row in &rows {
+        v.push(serde_json::json!({
+            "material_id": row.get::<String,_>(0),
+            "material_name": row.get::<String,_>(1),
+            "category": row.get::<String,_>(2),
+            "sku": row.get::<String,_>(3),
+            "system_qty": row.get::<f64,_>(4),
+            "physical_qty": row.get::<f64,_>(5),
+            "difference": row.get::<f64,_>(6),
+            "inbound_90d": row.get::<f64,_>(7),
+            "outbound_90d": row.get::<f64,_>(8),
+            "opname_count": row.get::<i64,_>(9),
+            "min_stock": row.get::<f64,_>(10),
+            "max_stock": row.get::<f64,_>(11),
+            "variance_type": row.get::<String,_>(12),
+            "probable_cause": probable_cause(&row),
+        }));
+    }
+    Ok(Json(v))
+}
+
+fn probable_cause(row: &sqlx::postgres::PgRow) -> String {
+    let diff: f64 = row.get(6);
+    let inbound: f64 = row.get(7);
+    let outbound: f64 = row.get(8);
+    let opname_count: i64 = row.get(9);
+    let min_stock: f64 = row.get(10);
+    let variance_type: String = row.get(12);
+    if variance_type == "surplus" && opname_count > 1 { "Possible misplacement in previous opname".into() }
+    else if variance_type == "surplus" && inbound > 10.0 { "Unrecorded inbound".into() }
+    else if variance_type == "shortage" && outbound > 10.0 { "Unrecorded outbound".into() }
+    else if variance_type == "shortage" && opname_count > 1 { "Theft or miscount".into() }
+    else if diff.abs() < min_stock * 0.1 { "Rounding error or minor miscount".into() }
+    else { "Unknown — manual investigation needed".into() }
+}

@@ -72,7 +72,7 @@ pub async fn create(
     Extension(user_id): Extension<String>,
     Json(body): Json<CreateBody>,
 ) -> Result<Json<Transaction>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let id = gen_id();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -130,6 +130,15 @@ pub async fn create(
         _ => {}
     }
 
+    // Ensure sku_mapping exists (trigger trg_transactions_to_source handles source table insert)
+    sqlx::query(
+        "INSERT INTO sku_mapping (material_id, warehouse_id, sku_code, sku_name, is_active)
+         VALUES ($1, COALESCE($2, ''), '', '', true)
+         ON CONFLICT (material_id, warehouse_id) DO NOTHING"
+    )
+    .bind(&mat_id).bind(&body.tx.warehouse_id)
+    .execute(&mut *db_tx).await.ok();
+
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     Ok(Json(Transaction { id, transaction_number: txn_number, tx_type: body.tx.tx_type, material_id: mat_id, warehouse_id: body.tx.warehouse_id, rack_id: body.tx.rack_id, quantity: qty, price, reference: body.tx.reference, notes: body.tx.notes, user_id: body.tx.user_id, status, approved_by: body.tx.approved_by, po_number: body.tx.po_number, invoice_no: body.tx.invoice_no, destination: body.tx.destination, created_at: now.clone(), updated_at: Some(now) }))
 }
@@ -139,7 +148,7 @@ pub async fn approve(
     Extension(user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("UPDATE transactions SET status='approved' WHERE id=$1 AND status='pending'")
         .bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -151,7 +160,7 @@ pub async fn reject(
     Extension(user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("UPDATE transactions SET status='rejected' WHERE id=$1 AND status='pending'")
         .bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -217,7 +226,7 @@ pub async fn reverse(
     Path(id): Path<String>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let (cur_status, tx_type): (String, String) = sqlx::query("SELECT status, type FROM transactions WHERE id=$1")
         .bind(&id).fetch_optional(&mut *db_tx).await
@@ -289,7 +298,7 @@ pub async fn reverse_bulk(
     Extension(user_id): Extension<String>,
     Json(body): Json<ReverseBulkBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let mut reversed = 0i64;
     let mut errors = Vec::new();
@@ -352,7 +361,7 @@ pub async fn delete(
         log::error!("delete: {}", msg);
         (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": msg})))
     }
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let mut db_tx = pool.pool.begin().await.map_err(debug_err)?;
     let (cur_status, tx_type): (String, String) = sqlx::query("SELECT status, type FROM transactions WHERE id=$1")
         .bind(&id).fetch_optional(&mut *db_tx).await
@@ -421,7 +430,7 @@ pub async fn delete_bulk(
     Extension(user_id): Extension<String>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let ids: Vec<String> = body.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let mut voided = 0i64;
@@ -577,7 +586,7 @@ pub async fn update_purchase_order_status(
     Extension(user_id): Extension<String>,
     Json(body): Json<UpdatePoStatusBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query("UPDATE purchase_orders SET status=$1, updated_at=$2 WHERE id=$3")
         .bind(&body.status).bind(&now).bind(&id)
@@ -770,7 +779,7 @@ pub async fn delete_transaction_attachment(
     Path(id): Path<String>,
     Extension(_user_id): Extension<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &_user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM transaction_attachments WHERE id=$1")
         .bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;

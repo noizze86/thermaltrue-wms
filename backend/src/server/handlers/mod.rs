@@ -19,3 +19,4 @@ pub mod advanced;
 pub mod label_templates;
 pub mod settings_handler;
 pub mod reports;
+pub mod batch;

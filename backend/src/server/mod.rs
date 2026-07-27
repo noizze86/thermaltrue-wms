@@ -54,6 +54,7 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/dashboard/health-index", get(handlers::dashboard::health_index))
         .route("/api/dashboard/biggest-losses", get(handlers::dashboard::biggest_losses))
         .route("/api/dashboard/capacity-pressure", get(handlers::dashboard::capacity_pressure))
+        .route("/api/dashboard/compute-all", get(handlers::dashboard::compute_all))
         .route("/api/dashboard/metrics-latest", get(handlers::dashboard::metrics_latest))
         .route("/api/reports/mom-kpis", get(handlers::dashboard::mom_kpis))
         .route("/api/reports/aging", get(handlers::dashboard::aging_report))
@@ -65,6 +66,7 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/category-value-summary", get(handlers::dashboard::category_value_summary))
         .route("/api/stock-valuation", get(handlers::dashboard::stock_valuation))
         .route("/api/reports/opname-variance/:id", get(handlers::dashboard::opname_variance))
+        .route("/api/reports/opname-root-cause/:id", get(handlers::reports::get_variance_root_cause))
         .route("/api/dashboard/demand-forecast", get(handlers::dashboard::demand_forecast))
         .route("/api/dashboard/reorder-suggestions", get(handlers::dashboard::reorder_suggestions))
         // Material Analysis
@@ -252,6 +254,9 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/reports/picking-list-pdf", get(handlers::reports::generate_picking_list_pdf))
         .route("/api/reports/do-pdf", get(handlers::reports::generate_do_pdf))
         .route("/api/reports/count-sheet-pdf", get(handlers::reports::generate_count_sheet_pdf))
+        // Batch / scheduler endpoints
+        .route("/api/batch/nightly", post(handlers::batch::nightly_recalc))
+        .route("/api/batch/dashboard", post(handlers::batch::dashboard_refresh))
         // Security headers middleware (CSP, X-Frame-Options, etc.)
         .layer(middleware::from_fn(security_headers))
         // CORS — allow configured origin, or permissive for Tauri WebView

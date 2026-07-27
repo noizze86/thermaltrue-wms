@@ -79,10 +79,10 @@ export default function AnalysisDashboardPage() {
   }, [filteredTxs])
 
   const kpiCards = [
-    { label: "Total Materials", value: String(kpi?.total_materials || 0), navigateTo: "/materials" },
-    { label: "Stock Value", value: formatCurrency(kpi?.stock_value || 0), navigateTo: "/inventory" },
-    { label: "Low Stock", value: String(kpi?.low_stock_items || 0), className: "text-red-600", navigateTo: "/materials?filter=lowstock" },
-    { label: "Total Transactions", value: String(kpi?.total_transactions || 0), navigateTo: "/transactions" },
+    { label: "Total Materials", value: String(kpi?.total_materials || 0), navigateTo: "/materials/master-data" },
+    { label: "Stock Value", value: formatCurrency(kpi?.stock_value || 0), navigateTo: "/reports/stock" },
+    { label: "Low Stock", value: String(kpi?.low_stock_items || 0), className: "text-red-600", navigateTo: "/materials/stock" },
+    { label: "Total Transactions", value: String(kpi?.total_transactions || 0), navigateTo: "/transactions/history" },
   ]
 
   const exportPng = async () => {

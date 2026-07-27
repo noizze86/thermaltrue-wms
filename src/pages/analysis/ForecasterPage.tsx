@@ -7,7 +7,7 @@ import { Badge } from "../../components/ui/badge"
 import { Button } from "../../components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from "recharts"
-import { Package, ShoppingCart, AlertTriangle, DollarSign, Download, Save, RefreshCw, Database, TrendingUp, TrendingDown, Minus, BarChart3 } from "lucide-react"
+import { Package, Download, Save, RefreshCw, Database, TrendingUp, TrendingDown, Minus, BarChart3 } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 import { toast } from "../../hooks/use-toast"
 
@@ -210,15 +210,10 @@ export default function ForecasterPage() {
     return result
   }, [history, models, horizon])
 
-  const needsReorder = (items || []).filter((i) => i.forecast_qty > i.quantity)
-  const reorderValue = needsReorder.reduce((s, i) => s + i.forecast_qty - i.quantity, 0)
-  const sufficient = (items || []).filter((i) => i.forecast_qty <= i.quantity)
-  const coverageRatio = items?.length ? Math.round((sufficient.length / items.length) * 100) : 0
-
   const exportCsv = useCallback(() => {
     if (!models) return
     const rows = [["Model", "Forecast", "MAPE (%)", "MAE", "RMSE"]]
-    for (const m of models) rows.push([MODEL_LABELS[m.key], m.forecast.toFixed(2), m.mape.toFixed(2), m.mae.toFixed(2), m.rmse.toFixed(2)])
+    for (const m of models as ModelResult[]) rows.push([MODEL_LABELS[m.key], m.forecast.toFixed(2), m.mape.toFixed(2), m.mae.toFixed(2), m.rmse.toFixed(2)])
     const csv = rows.map((r) => r.join(",")).join("\n")
     const blob = new Blob([csv], { type: "text/csv" })
     const url = URL.createObjectURL(blob)

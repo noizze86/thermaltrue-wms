@@ -1,4 +1,5 @@
 import { useState, useRef } from "react"
+import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   getMaterials, getTransactions,
@@ -35,6 +36,7 @@ interface CartItem {
 
 export default function TransactionOutPage() {
   const { user, can } = useAuth()
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<"single" | "multi">("single")
 
@@ -208,14 +210,14 @@ export default function TransactionOutPage() {
           id: "", transaction_number: txNum, type: "out", material_id: cart[0]?.material_id || "",
           warehouse_id: null, rack_id: null, quantity: cart.reduce((s, c) => s + c.quantity, 0),
           price: 0, reference, notes,           user_id: user?.id || null, status: "approved", approved_by: null,
-          po_number: "", invoice_no: "", destination, created_at: "", updated_at: null,
+          po_number: "", invoice_no: "", destination: destination || null, created_at: "", updated_at: null,
         }, items)
       }
       return createTransaction({
         id: "", transaction_number: txNum, type: "out", material_id: materialId,
         warehouse_id: null, rack_id: null, quantity, price: selectedMaterial?.price || 0,
         reference, notes, user_id: user?.id || null, status: "approved", approved_by: null,
-        po_number: "", invoice_no: "", destination, created_at: "", updated_at: null,
+        po_number: "", invoice_no: "", destination: destination || null, created_at: "", updated_at: null,
       })
     },
     onSuccess: () => {
@@ -448,7 +450,7 @@ export default function TransactionOutPage() {
                   </TableHeader>
                   <TableBody>
                     {recentTx?.map((tx) => (
-                      <TableRow key={tx.id} className="cursor-pointer" onClick={() => setDetailTx(tx)}>
+                      <TableRow key={tx.id} className="cursor-pointer" onClick={() => navigate('/transactions/' + tx.id)}>
                         <TableCell className="font-mono text-xs">{tx.transaction_number}</TableCell>
                         <TableCell>{materials?.find((m) => m.id === tx.material_id)?.name || "-"}</TableCell>
                         <TableCell><Badge variant="destructive">-{tx.quantity}</Badge></TableCell>

@@ -1,5 +1,6 @@
 use std::sync::Arc;
 use axum::{Json, extract::{State, Query}, Extension};
+use chrono::Datelike;
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
@@ -23,7 +24,7 @@ async fn persist_consumption_metrics(
 ) {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let period = chrono::Local::now().format("%Y-%m").to_string();
+    let period = chrono::Local::now().format("%Y-%m-%d").to_string();
 
     let yesterday = (chrono::Local::now() - chrono::Duration::days(1)).format("%Y-%m-%d").to_string();
     let last_week = (chrono::Local::now() - chrono::Duration::days(7)).format("%Y-%m-%d").to_string();
@@ -75,16 +76,25 @@ async fn persist_consumption_metrics(
 pub async fn consumption_summary(
     Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
+    Query(q): Query<ConsumptionQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let total_c3: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(consumption_3mo),0) FROM materials m WHERE m.is_active=true").fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let total_c6: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(consumption_6mo),0) FROM materials m WHERE m.is_active=true").fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let total_c12: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(consumption_12mo),0) FROM materials m WHERE m.is_active=true").fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let wh = q.warehouse_id.as_deref().unwrap_or("");
+
+    let total_c3: f64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(sub.c3),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as c3 FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)) sub"
+    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let total_c6: f64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(sub.c6),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as c6 FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)) sub"
+    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let total_c12: f64 = sqlx::query_scalar(
+        "SELECT COALESCE(SUM(sub.c12),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as c12 FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)) sub"
+    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0.0);
     let avg_lt: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(AVG(COALESCE((SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id),0)),0) FROM materials m WHERE m.is_active=true"
-    ).fetch_one(&pool.pool).await.unwrap_or(0.0);
+        "SELECT COALESCE(AVG(COALESCE((SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id),0)),0) FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)"
+    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0.0);
     Ok(Json(json!({
         "total_consumption_3mo": (total_c3 * 100.0).round() / 100.0,
         "total_consumption_6mo": (total_c6 * 100.0).round() / 100.0,
@@ -180,28 +190,46 @@ pub async fn consumption_details(
 pub async fn consumption_seasonal(
     Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
+    Query(q): Query<ConsumptionQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let wh = q.warehouse_id.as_deref().unwrap_or("");
+
     let month_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     let now = chrono::Local::now();
-    let cur_month = now.month() as usize;
+
+    let monthly_rows = sqlx::query(
+        "SELECT EXTRACT(MONTH FROM t.created_at::timestamp) as m, \
+         COALESCE(SUM(t.quantity),0) as total_qty, \
+         COUNT(DISTINCT t.material_id) as material_count \
+         FROM transactions t WHERE t.type='out' AND t.status NOT IN ('voided','reversed') \
+         AND t.created_at::timestamp >= NOW() - INTERVAL '12 months' \
+         AND ($1 = '' OR t.warehouse_id = $1) \
+         GROUP BY EXTRACT(MONTH FROM t.created_at::timestamp) ORDER BY m"
+    ).bind(wh).fetch_all(&pool.pool).await.unwrap_or_default();
+
+    let mut month_totals = [0.0_f64; 12];
+    let mut month_counts = [0_i64; 12];
+    for row in &monthly_rows {
+        let month_idx = row.get::<f64,_>("m") as usize - 1;
+        month_totals[month_idx] = row.get::<f64,_>("total_qty");
+        month_counts[month_idx] = row.get::<i64,_>("material_count");
+    }
+
+    let grand_total: f64 = month_totals.iter().sum();
+    let monthly_avg = if grand_total > 0.0 { grand_total / 12.0 } else { 1.0 };
+
     let mut seasonal = Vec::new();
     for i in 0..12 {
-        let idx = (cur_month + i) % 12;
+        let idx = (now.month() as usize + i) % 12;
         let label = month_labels[idx];
-        seasonal.push(json!({"name": label, "avg": 0, "index": 1.0, "season": "Normal"}));
+        let avg = month_totals[idx];
+        let index = if monthly_avg > 0.0 { (avg / monthly_avg * 100.0).round() / 100.0 } else { 1.0 };
+        let season = if index > 1.1 { "High" } else if index < 0.9 { "Low" } else { "Normal" };
+        seasonal.push(json!({"name": label, "avg": (avg * 100.0).round() / 100.0, "index": index, "season": season}));
     }
-    let row = sqlx::query_scalar::<_, f64>(
-        "SELECT COALESCE(AVG(seasonal_index),1.0) FROM consumption_metrics WHERE period_start=TO_CHAR(NOW(),'YYYY-MM')"
-    ).fetch_one(&pool.pool).await.unwrap_or(1.0);
-    for m in &mut seasonal {
-        let idx = m["index"].as_f64().unwrap_or(1.0) * row;
-        let season_label = if idx > 1.1 { "High" } else if idx < 0.9 { "Low" } else { "Normal" };
-        m["index"] = json!((idx * 100.0).round() / 100.0);
-        m["season"] = json!(season_label);
-        m["avg"] = json!(0);
-    }
+
     Ok(Json(json!(seasonal)))
 }

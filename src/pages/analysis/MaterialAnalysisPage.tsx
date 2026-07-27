@@ -32,8 +32,8 @@ export default function MaterialAnalysisPage() {
     queryFn: () => getTransactions(undefined, undefined, selectedMaterialId, undefined, undefined, undefined, undefined, "active"),
     enabled: !!selectedMaterialId,
   })
-  const { data: matSummary } = useQuery({ queryKey: ["matSummary"], queryFn: getMaterialSummary })
-  const { data: matDetails } = useQuery({ queryKey: ["matDetails"], queryFn: getMaterialDetails })
+  const { data: matSummary } = useQuery({ queryKey: ["matSummary"], queryFn: () => getMaterialSummary() })
+  const { data: matDetails } = useQuery({ queryKey: ["matDetails"], queryFn: () => getMaterialDetails() })
   // Purchase prices for price trend overlay
   const { data: supplierPrices } = useQuery({
     queryKey: ["supplierPricesMaterial", selectedMaterialId],
@@ -327,13 +327,14 @@ export default function MaterialAnalysisPage() {
                   <TableHead>Days Since Tx</TableHead>
                   <TableHead>ITR</TableHead>
                   <TableHead>Risk</TableHead>
+                  <TableHead>ABC</TableHead>
                   <TableHead>Status</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {sorted.map((item) => {
-                  const itr = item.quantity > 0 ? item.consumption_12mo / item.quantity : 0
                   const md = matDetails?.find((d) => d.material_id === item.material_id)
+                  const itr = md?.turnover_ratio ?? (item.quantity > 0 ? item.consumption_12mo / item.quantity : 0)
                   let badgeVariant: "success" | "warning" | "destructive" = "success"
                   let label = "Active"
                   if (item.days_since_last > 90) { badgeVariant = "destructive"; label = "Dead Stock" }
@@ -350,6 +351,13 @@ export default function MaterialAnalysisPage() {
                         <span className={`text-xs font-semibold ${risk > 80 ? "text-red-600" : risk > 50 ? "text-orange-500" : "text-green-600"}`}>
                           {risk}%
                         </span>
+                      </TableCell>
+                      <TableCell>
+                        {md?.abc_class && (
+                          <Badge variant={md.abc_class === "A" ? "destructive" : md.abc_class === "B" ? "warning" : "secondary"}>
+                            {md.abc_class}{md.xyz_class ? `/ ${md.xyz_class}` : ""}
+                          </Badge>
+                        )}
                       </TableCell>
                       <TableCell><Badge variant={badgeVariant}>{label}</Badge></TableCell>
                     </TableRow>

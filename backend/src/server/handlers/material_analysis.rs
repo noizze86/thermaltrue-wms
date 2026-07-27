@@ -1,9 +1,16 @@
 use std::sync::Arc;
-use axum::{Json, extract::{State, Path}, Extension};
+use axum::{Json, extract::{State, Query}, Extension};
+use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
 use crate::validate;
 use sqlx::Row;
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MaterialQuery {
+    pub warehouse_id: Option<String>,
+}
 
 async fn persist_material_metrics(
     pool: &sqlx::PgPool,
@@ -67,18 +74,22 @@ async fn persist_material_metrics(
 pub async fn material_summary(
     Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
+    Query(q): Query<MaterialQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let total: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.unwrap_or(0);
+    let wh = q.warehouse_id.as_deref().unwrap_or("");
+
+    let total: i64 = sqlx::query_scalar(
+        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)"
+    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0);
     let dead: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days')"
-    ).fetch_one(&pool.pool).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days') AND ($1 = '' OR m.warehouse_id = $1)"
+    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0);
     let slow: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND EXISTS (SELECT 1 FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days' AND t.created_at::timestamp < NOW() - INTERVAL '30 days')"
-    ).fetch_one(&pool.pool).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND EXISTS (SELECT 1 FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days' AND t.created_at::timestamp < NOW() - INTERVAL '30 days') AND ($1 = '' OR m.warehouse_id = $1)"
+    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0);
     let avg_turnover: f64 = sqlx::query_scalar(
         "SELECT COALESCE(AVG(turnover),0) FROM material_metrics WHERE period_start=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD')"
     ).fetch_one(&pool.pool).await.unwrap_or(0.0);
@@ -86,8 +97,8 @@ pub async fn material_summary(
         "SELECT COALESCE(AVG(stockout_risk),0) FROM material_metrics WHERE period_start=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD')"
     ).fetch_one(&pool.pool).await.unwrap_or(0.0);
     let high_risk: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND m.quantity <= m.min_stock AND m.min_stock > 0"
-    ).fetch_one(&pool.pool).await.unwrap_or(0);
+        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND m.quantity <= m.min_stock AND m.min_stock > 0 AND ($1 = '' OR m.warehouse_id = $1)"
+    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0);
 
     Ok(Json(json!({
         "total_materials": total,
@@ -102,13 +113,15 @@ pub async fn material_summary(
 pub async fn material_details(
     Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
+    Query(q): Query<MaterialQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let wh = q.warehouse_id.as_deref().unwrap_or("");
 
     let rows = sqlx::query(
-        "SELECT m.id, m.name, m.sku, m.quantity, m.price, m.min_stock, m.max_stock, \
+        "SELECT m.id, m.name, m.sku, m.quantity, m.price, m.min_stock, m.max_stock, m.warehouse_id, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo, \
@@ -116,9 +129,11 @@ pub async fn material_details(
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as outbound_30d, \
          COALESCE((SELECT t.quantity FROM transactions t WHERE t.material_id=m.id AND t.type='out' ORDER BY t.created_at DESC LIMIT 1),0) as turnover, \
          (SELECT MAX(created_at) FROM transactions WHERE material_id=m.id) as last_transaction, \
-         (SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id) as lead_time_days \
-         FROM materials m WHERE m.is_active=true ORDER BY m.name"
-    ).fetch_all(&pool.pool).await
+         (SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id) as lead_time_days, \
+         (SELECT abc_class FROM abc_classification WHERE material_id=m.id AND period=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD') ORDER BY updated_at DESC LIMIT 1) as abc_class, \
+         (SELECT xyz_class FROM abc_classification WHERE material_id=m.id AND period=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD') ORDER BY updated_at DESC LIMIT 1) as xyz_class \
+         FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
+    ).bind(wh).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let mut details = Vec::new();
@@ -133,7 +148,7 @@ pub async fn material_details(
         let c12: f64 = row.get("consumption_12mo");
         let inbound: f64 = row.get("inbound_30d");
         let outbound: f64 = row.get("outbound_30d");
-        let turnover: f64 = row.get("turnover");
+        let _turnover: f64 = row.get("turnover");
         let last_tx: Option<String> = row.get("last_transaction");
         let lead_time: i64 = row.get("lead_time_days");
         let value = qty * price;
@@ -158,16 +173,18 @@ pub async fn material_details(
         let itr = if qty > 0.0 { c12 / qty } else { 0.0 };
 
         let last_tx_str = last_tx.as_deref().unwrap_or("");
+        let abc_class: Option<String> = row.get("abc_class");
+        let xyz_class: Option<String> = row.get("xyz_class");
 
         persist_material_metrics(
-            &pool.pool, &id, "",
+            &pool.pool, &id, wh,
             qty, min_stock, max_stock,
             stockout_risk, days_cover,
             is_dead, is_slow,
             itr, c3, c6, c12, inbound, outbound,
             price, value,
             days_since, last_tx_str,
-            "", 0.0,
+            abc_class.as_deref().unwrap_or(""), 0.0,
         ).await;
 
         details.push(json!({
@@ -192,6 +209,8 @@ pub async fn material_details(
             "days_since_last_tx": days_since,
             "last_tx_date": last_tx_str,
             "lead_time_days": lead_time,
+            "abc_class": abc_class,
+            "xyz_class": xyz_class,
         }));
     }
     Ok(Json(json!(details)))

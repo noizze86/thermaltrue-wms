@@ -9,7 +9,7 @@ import {
   LayoutDashboard, Package, ArrowRightLeft, BarChart3, Warehouse,
   FileText, Settings, LogOut, Menu, X, ChevronDown, QrCode,
   Tags, Truck, Users, ClipboardList, FileBarChart, Sun, Moon, Shield,
-  Plus, Search, Radio, Download,
+  Plus, Search, Radio, Download, User,
 } from "lucide-react"
 
 const menuItems = [
@@ -66,6 +66,7 @@ const menuItems = [
   {
     label: "Settings", icon: Settings,
     children: [
+      { to: "/settings/profile", label: "My Profile", icon: User },
       { to: "/settings/system", label: "System", icon: Settings },
       { to: "/settings/users", label: "Users", icon: Users },
       { to: "/settings/categories", label: "Categories", icon: Tags },
@@ -74,6 +75,7 @@ const menuItems = [
       { to: "/settings/audit-log", label: "Audit Log", icon: ClipboardList },
       { to: "/settings/roles", label: "Roles", icon: Shield },
       { to: "/settings/label-templates", label: "Label Templates", icon: Tags },
+      { to: "/settings/inventory", label: "Inventory Settings", icon: Package },
       { to: "/settings/api", label: "API Settings", icon: Settings },
       { to: "/settings/network-test", label: "Network Test", icon: Radio },
       { to: "/settings/update-test", label: "Update Test", icon: Download },

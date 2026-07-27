@@ -39,6 +39,9 @@ import PivotReportPage from "./pages/reports/PivotReportPage"
 import VarianceRootCausePage from "./pages/reports/VarianceRootCausePage"
 import SystemPage from "./pages/settings/SystemPage"
 import UsersPage from "./pages/settings/UsersPage"
+import ProfilePage from "./pages/settings/ProfilePage"
+import InventorySettingsPage from "./pages/settings/InventorySettingsPage"
+import TransactionDetailPage from "./pages/transactions/TransactionDetailPage"
 import CategoriesPage from "./pages/settings/CategoriesPage"
 import UnitsPage from "./pages/settings/UnitsPage"
 import SuppliersPage from "./pages/settings/SuppliersPage"
@@ -189,6 +192,7 @@ export default function App() {
                 <Route path="transactions/in" element={<TransactionInPage />} />
                 <Route path="transactions/out" element={<TransactionOutPage />} />
                 <Route path="transactions/history" element={<TransactionHistoryPage />} />
+                <Route path="transactions/:id" element={<TransactionDetailPage />} />
                 <Route path="analysis/dashboard" element={<AnalysisDashboardPage />} />
                 <Route path="analysis/material" element={<MaterialAnalysisPage />} />
                 <Route path="analysis/consumption" element={<ConsumptionPage />} />
@@ -207,6 +211,7 @@ export default function App() {
                 <Route path="reports/multi-warehouse" element={<MultiWarehouseComparisonPage />} />
                 <Route path="reports/pivot" element={<PivotReportPage />} />
                 <Route path="reports/variance/:opnameId" element={<VarianceRootCausePage />} />
+                <Route path="settings/profile" element={<ProfilePage />} />
                 <Route path="settings/system" element={<SystemPage />} />
                 <Route path="settings/users" element={<UsersPage />} />
                 <Route path="settings/categories" element={<CategoriesPage />} />
@@ -215,6 +220,7 @@ export default function App() {
                 <Route path="settings/audit-log" element={<AuditLogPage />} />
                 <Route path="settings/roles" element={<RolesPage />} />
                 <Route path="settings/label-templates" element={<LabelTemplatesPage />} />
+                <Route path="settings/inventory" element={<InventorySettingsPage />} />
                 <Route path="settings/api" element={<ApiSettingsPage />} />
                 <Route path="settings/network-test" element={<NetworkTestPage />} />
                 <Route path="settings/update-test" element={<UpdateTestPage />} />

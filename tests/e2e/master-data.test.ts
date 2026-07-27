@@ -1,6 +1,5 @@
 import { setupTest, teardownTest, navigateTo } from "../helpers/tauri-helper";
 import { testData } from "../fixtures/data";
-import type { TauriMcpClient } from "../helpers/tauri-helper";
 
 async function testMasterData() {
   console.log("🧪 Master Data Test Suite");

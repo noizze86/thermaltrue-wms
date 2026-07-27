@@ -1,8 +1,9 @@
 import { useState, useEffect, useMemo } from "react"
+import { useNavigate } from "react-router-dom"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import {
   getTransactions, getMaterials, getWarehouses, getUsers, getCategories,
-  reverseTransaction, reverseTransactionsBulk, getTransactionItems, getTransactionAttachments, generateReportPdf,
+  reverseTransaction, reverseTransactionsBulk, generateReportPdf,
   generateReceiptPdf, generateDoPdf, deleteTransaction, deleteTransactionsBulk,
 } from "../../api"
 import type { Transaction, TransactionItem, TransactionAttachment } from "../../api"
@@ -27,6 +28,7 @@ const statusColors: Record<string, "default" | "secondary" | "destructive" | "ou
 }
 
 export default function TransactionHistoryPage() {
+  const navigate = useNavigate()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState("")
   const [debouncedSearch, setDebouncedSearch] = useState("")
@@ -149,19 +151,8 @@ export default function TransactionHistoryPage() {
     }
   }
 
-  const handleViewDetail = async (tx: Transaction) => {
-    setDetailTx(tx)
-    try {
-      const [items, attachments] = await Promise.all([
-        getTransactionItems(tx.id),
-        getTransactionAttachments(tx.id),
-      ])
-      setTxItems(items)
-      setTxAttachments(attachments)
-    } catch {
-      setTxItems([])
-      setTxAttachments([])
-    }
+  const handleViewDetail = (tx: Transaction) => {
+    navigate('/transactions/' + tx.id)
   }
 
   const handleExportPdf = async () => {

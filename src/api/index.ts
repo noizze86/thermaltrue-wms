@@ -431,6 +431,12 @@ export const getExpiringMaterials = (days: number) => invokeAuth<Material[]>("ge
 // Transactions
 export const getTransactions = (search?: string, type_filter?: string, material_id?: string, warehouse_id?: string, date_start?: string, date_end?: string, limit?: number, status_filter?: string) =>
   invokeAuth<Transaction[]>("get_transactions", { search, typeFilter: type_filter, materialId: material_id, warehouseId: warehouse_id, dateStart: date_start, dateEnd: date_end, limit, statusFilter: status_filter });
+
+export interface TransactionDetail {
+  transaction: Transaction;
+  items: TransactionItem[];
+}
+export const getTransaction = (id: string) => invokeAuth<TransactionDetail>("get_transaction", { id });
 export const createTransaction = (tx: Transaction, items?: TransactionItem[]) => invokeAuth<Transaction>("create_transaction", { tx, items: items || [] });
 export const approveTransaction = (id: string) => invokeAuth<void>("approve_transaction", { id });
 export const rejectTransaction = (id: string) => invokeAuth<void>("reject_transaction", { id });
@@ -535,9 +541,9 @@ export interface CapacityPressure {
   capacity_pressure_score?: number;
   predicted_full_date?: string;
 }
-export const getHealthIndex = () => invokeAuth<HealthIndexResponse>("get_health_index");
-export const getBiggestLosses = () => invokeAuth<BiggestLossItem[]>("get_biggest_losses");
-export const getCapacityPressure = () => invokeAuth<CapacityPressure>("get_capacity_pressure");
+export const getHealthIndex = (warehouseId?: string) => invokeAuth<HealthIndexResponse>("get_health_index", { warehouseId });
+export const getBiggestLosses = (warehouseId?: string) => invokeAuth<BiggestLossItem[]>("get_biggest_losses", { warehouseId });
+export const getCapacityPressure = (warehouseId?: string) => invokeAuth<CapacityPressure>("get_capacity_pressure", { warehouseId });
 
 // Consolidated Dashboard Metrics (Latest Row)
 export interface DashboardMetricsLatest {
@@ -576,6 +582,9 @@ export interface CostSummary {
   estimated_annual_carrying_cost: number;
   avg_purchase_price_90d: number;
   avg_value_per_material: number;
+  cost_trend?: "▲" | "▼" | "→";
+  yesterday_total_cost?: number;
+  avg_7days_total_cost?: number;
 }
 export interface CarryingCostItem {
   material_id: string;
@@ -665,10 +674,12 @@ export interface MaterialDetail {
   is_slow_moving: boolean;
   days_since_last_tx: number;
   last_tx_date: string;
-  lead_time_days: number;
+lead_time_days: number;
+  abc_class?: string | null;
+  xyz_class?: string | null;
 }
-export const getMaterialSummary = () => invokeAuth<MaterialSummary>("get_material_analysis_summary");
-export const getMaterialDetails = () => invokeAuth<MaterialDetail[]>("get_material_analysis_details");
+export const getMaterialSummary = (warehouseId?: string) => invokeAuth<MaterialSummary>("get_material_analysis_summary", { warehouseId });
+export const getMaterialDetails = (warehouseId?: string) => invokeAuth<MaterialDetail[]>("get_material_analysis_details", { warehouseId });
 
 // Fase 8 — Consumption Analysis
 export interface ConsumptionSummary {
@@ -704,10 +715,10 @@ export interface SeasonalEntry {
   index: number;
   season: string;
 }
-export const getConsumptionSummary = () => invokeAuth<ConsumptionSummary>("get_consumption_summary");
+export const getConsumptionSummary = (warehouseId?: string) => invokeAuth<ConsumptionSummary>("get_consumption_summary", { warehouseId });
 export const getConsumptionDetails = (warehouse_id?: string) =>
   invokeAuth<ConsumptionDetail[]>("get_consumption_details", { warehouseId: warehouse_id || null });
-export const getConsumptionSeasonal = () => invokeAuth<SeasonalEntry[]>("get_consumption_seasonal");
+export const getConsumptionSeasonal = (warehouseId?: string) => invokeAuth<SeasonalEntry[]>("get_consumption_seasonal", { warehouseId });
 
 // Reports
 export const exportReportCsv = (report_type: string) => invokeAuth<string>("export_report_csv", { reportType: report_type });
@@ -754,6 +765,9 @@ export const getUserActivity = (user_id: string) =>
   invokeAuth<UserActivity[]>("get_user_activity", { userId: user_id });
 export const logUserActivity = (user_id: string, activity: string, details: string, ip_address: string) =>
   invokeAuth<void>("log_user_activity", { userId: user_id, activity, details, ipAddress: ip_address });
+export const getCurrentUser = () => invokeAuth<User>("get_current_user");
+export const changeMyPassword = (old_password: string, new_password: string) =>
+  invokeAuth<void>("change_my_password", { oldPassword: old_password, newPassword: new_password });
 
 // Settings - Categories
 export const getCategories = (search?: string) => invokeAuth<Category[]>("get_categories", { search });
@@ -840,8 +854,14 @@ export const cloneRole = (source_role_id: string, new_name: string, new_descript
 export const checkPermission = (permission: string) => invokeAuth<boolean>("check_permission", { permission });
 export const updateRole = (id: string, name: string, description: string, permissions: string) =>
   invokeAuth<void>("update_role", { id, name, description, permissions });
+export const createRole = (name: string, description: string, permissions: string) =>
+  invokeAuth<Role>("create_role", { name, description, permissions });
+export const deleteRole = (id: string) =>
+  invokeAuth<void>("delete_role", { id });
 export const getAllAppConfig = () => invokeAuth<{ key: string; value: string }[]>("get_all_app_config");
 export const deleteAppConfig = (key: string) => invokeAuth<void>("delete_app_config", { key });
+export const getInventorySettings = () => invokeAuth<{ key: string; value: string }[]>("get_inventory_settings");
+export const saveInventorySetting = (key: string, value: string) => invokeAuth<void>("save_inventory_setting", { key, value });
 export const getUserLoginHistory = (user_id: string, limit?: number) =>
   invokeAuth<LoginHistoryEntry[]>("get_user_login_history", { userId: user_id, limit: limit || 100 });
 export const exportAuditCsvFiltered = (action?: string, entity?: string, user_id?: string, date_start?: string, date_end?: string, limit?: number) =>

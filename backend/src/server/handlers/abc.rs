@@ -80,6 +80,8 @@ pub async fn abc_classify(
 
     let rows = sqlx::query(
         "SELECT m.id, m.name, m.sku, m.quantity, m.price, m.min_stock, \
+         COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo, \
+         COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo, \
          COALESCE((SELECT t.quantity FROM transactions t WHERE t.material_id=m.id AND t.type='out' ORDER BY t.created_at DESC LIMIT 1),0) as turnover, \
          (SELECT MAX(created_at) FROM transactions WHERE material_id=m.id) as last_transaction \
@@ -116,6 +118,8 @@ pub async fn abc_classify(
         let qty: f64 = row.get("quantity");
         let price: f64 = row.get("price");
         let consumption: f64 = row.get("consumption_12mo");
+        let _c3: f64 = row.get("consumption_3mo");
+        let _c6: f64 = row.get("consumption_6mo");
         let turnover: f64 = row.get("turnover");
         let last_tx: Option<String> = row.get("last_transaction");
         let days_since = last_tx.as_ref().and_then(|d| {
@@ -138,14 +142,22 @@ pub async fn abc_classify(
             if composite >= 0.05 { "A" } else if composite >= 0.015 { "B" } else { "C" }
         };
 
-        let monthly_vals = [
-            consumption / 12.0,
-            consumption / 12.0,
-            consumption / 12.0,
-        ];
-        let mean = consumption / 12.0;
-        let variance = if mean > 0.0 { monthly_vals.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / 3.0 } else { 0.0 };
-        let cv = if mean > 0.0 { variance.sqrt() / mean } else { 999.0 };
+        let monthly_rows = sqlx::query(
+            "SELECT COALESCE(SUM(quantity),0) as cons FROM transactions \
+             WHERE material_id=$1 AND type='out' AND status NOT IN ('voided','reversed') \
+             AND created_at::timestamp >= NOW() - INTERVAL '12 months' \
+             GROUP BY DATE_TRUNC('month', created_at::timestamp) ORDER BY DATE_TRUNC('month', created_at::timestamp)"
+        ).bind(&id).fetch_all(&pool.pool).await.unwrap_or_default();
+        let monthly_cons: Vec<f64> = monthly_rows.iter().map(|r| r.get("cons")).collect();
+        let n = monthly_cons.len() as f64;
+        let cv = if n > 1.0 {
+            let sum: f64 = monthly_cons.iter().sum();
+            let mean = sum / n;
+            if mean > 0.0 {
+                let variance = monthly_cons.iter().map(|v| (v - mean).powi(2)).sum::<f64>() / n;
+                variance.sqrt() / mean
+            } else { 999.0 }
+        } else { 999.0 };
         let xyz = if cv < 0.5 { "X" } else if cv < 1.0 { "Y" } else { "Z" };
 
         cumulative += value_pct;
@@ -168,6 +180,11 @@ pub async fn abc_classify(
             composite, consumption_norm, turnover_norm, recency_norm,
             value_pct, consumption, turnover, qty, price, inv_value, "",
         ).await;
+
+        // Propagate abc_class and xyz_class to material_metrics
+        sqlx::query(
+            "UPDATE material_metrics SET abc_class=$1, abc_score=$2 WHERE material_id=$3 AND period_start=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD')"
+        ).bind(abc).bind(composite).bind(&id).execute(&pool.pool).await.ok();
     }
 
     let mut class_a = Vec::new();

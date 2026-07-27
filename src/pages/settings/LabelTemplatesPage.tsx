@@ -1,6 +1,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getLabelTemplates, saveLabelTemplate, deleteLabelTemplate } from "../../api"
 import type { LabelTemplate } from "../../api"
+import { useAuth } from "../../contexts/AuthContext"
 import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -9,7 +10,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Label } from "../../components/ui/label"
 import { Checkbox } from "../../components/ui/checkbox"
 import { Select } from "../../components/ui/select"
-import { Plus, Pencil, Trash2, Tags, Eye } from "lucide-react"
+import { Plus, Pencil, Trash2, Tags, Eye, Copy, ShieldAlert } from "lucide-react"
 import { toast } from "../../hooks/use-toast"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 import { useState } from "react"
@@ -39,6 +40,7 @@ const emptyForm = (): LabelTemplate => ({
 })
 
 export default function LabelTemplatesPage() {
+  const { can } = useAuth()
   const queryClient = useQueryClient()
   const { data: templates, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["label_templates"],
@@ -49,8 +51,15 @@ export default function LabelTemplatesPage() {
   const [editId, setEditId] = useState<string | null>(null)
   const [form, setForm] = useState<LabelTemplate>(emptyForm())
 
+  const canManage = can("manage_settings")
+
   const openCreate = () => { setEditId(null); setForm(emptyForm()); setShowForm(true) }
   const openEdit = (t: LabelTemplate) => { setEditId(t.id); setForm({ ...t }); setShowForm(true) }
+  const openClone = (t: LabelTemplate) => {
+    setEditId(null)
+    setForm({ ...t, id: "", name: `${t.name} (copy)` })
+    setShowForm(true)
+  }
 
   const saveMut = useMutation({
     mutationFn: () => saveLabelTemplate(form),
@@ -86,6 +95,16 @@ export default function LabelTemplatesPage() {
       two_side: "Left: SKU/Name/Company/Qty/Price/Location... | Right: QR(large)",
     }
     return examples[style] || ""
+  }
+
+  if (!canManage) {
+    return (
+      <div className="flex flex-col items-center justify-center py-20 gap-4">
+        <ShieldAlert className="h-16 w-16 text-muted-foreground" />
+        <h1 className="text-2xl font-bold">Access Denied</h1>
+        <p className="text-muted-foreground">You don't have permission to manage label templates.</p>
+      </div>
+    )
   }
 
   if (isLoading) return <LoadingState text="Loading label templates..." />
@@ -124,6 +143,9 @@ export default function LabelTemplatesPage() {
                   <TableCell className="text-xs font-mono">{t.label_width_mm}×{t.label_height_mm}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
+                      <Button variant="ghost" size="icon" onClick={() => openClone(t)} title="Duplicate">
+                        <Copy className="h-4 w-4" />
+                      </Button>
                       <Button variant="ghost" size="icon" onClick={() => openEdit(t)} title="Edit">
                         <Pencil className="h-4 w-4" />
                       </Button>
