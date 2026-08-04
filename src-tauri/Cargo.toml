@@ -1,4 +1,4 @@
-﻿[package]
+[package]
 name = "app"
 version = "1.0.4"
 description = "Thermaltrue WMS - Tauri Desktop App"
