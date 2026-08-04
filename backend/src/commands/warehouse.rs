@@ -644,7 +644,7 @@ pub async fn recount_cycle_task(pool: State<'_, DbPool>, token: String, task_id:
             .bind(format!("Recount round {} for {} items", round, items.len()))
             .execute(&pool.pool).await?;
     }
-    crate::server::handlers::audit(&pool.pool, &user_id, "recount", "stock_opname", &oid, &format!("Recount of {} — round {} ({} items)", task_id, round, items.len())).await;
+    crate::commands::audit_log(&pool.pool, &user_id, "recount", "stock_opname", &oid, &format!("Recount of {} — round {} ({} items)", task_id, round, items.len())).await;
     Ok(serde_json::json!({"id": oid, "opname_number": opname_number, "warehouse_id": src_wh, "status": "open", "cycle_mode": src_mode, "cycle_round": round, "recount_of": task_id, "created_at": now}))
 }
 
@@ -1060,8 +1060,8 @@ pub async fn set_opname_config(pool: State<'_, DbPool>, token: String, key: Stri
 pub async fn auto_generate_cycle_opname(pool: State<'_, DbPool>, token: String) -> Result<String, AppError> {
     let user_id = pool.verify_token(&token)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
-    let (created, expired) = crate::server::handlers::stock_opname::run_auto_generate(&pool.pool, &user_id).await?;
-    crate::server::handlers::audit(&pool.pool, &user_id, "create", "stock_opname", "auto", &format!("Auto-generated {} task(s), expired {}", created, expired)).await;
+    let (created, expired) = crate::cycle_count::run_auto_generate(&pool.pool, &user_id).await?;
+    crate::commands::audit_log(&pool.pool, &user_id, "create", "stock_opname", "auto", &format!("Auto-generated {} task(s), expired {}", created, expired)).await;
     Ok(format!("Created {} task(s), expired {}", created, expired))
 }
 
