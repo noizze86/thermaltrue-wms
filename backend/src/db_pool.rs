@@ -58,6 +58,11 @@ impl DbPool {
 
         sqlx::migrate!("./migrations").run(&pool).await?;
         Self::seed_defaults(&pool).await?;
+        if let Err(e) = sqlx::query("DELETE FROM audit_log WHERE created_at::timestamp < NOW() - interval '12 months'")
+            .execute(&pool).await
+        {
+            log::warn!("audit_log auto-purge (12 months) failed: {}", e);
+        }
         Ok(DbPool {
             pool,
             login_attempts: Mutex::new(HashMap::new()),

@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useState, useEffect } from "react"
 import { useNavigate } from "react-router-dom"
 import { z } from "zod"
 import { useAuth } from "../contexts/AuthContext"
@@ -21,7 +21,7 @@ export default function LoginPage() {
   const [newPassword, setNewPassword] = useState("")
   const [changingPassword, setChangingPassword] = useState(false)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
-  const { login: setAuth } = useAuth()
+  const { user, login: setAuth } = useAuth()
 
   const loginSchema = z.object({
     username: z.string().min(3, "Username minimal 3 karakter"),
@@ -32,6 +32,10 @@ export default function LoginPage() {
     newPassword: z.string().min(8, "Password minimal 8 karakter"),
   })
   const navigate = useNavigate()
+
+  useEffect(() => {
+    if (user) navigate("/dashboard", { replace: true })
+  }, [user, navigate])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -51,8 +55,6 @@ export default function LoginPage() {
       if (res.password_expired) {
         setPasswordExpired(true)
         setUserForExpiry({ id: res.user.id, token: res.token })
-      } else {
-        navigate("/dashboard")
       }
     } catch (err) {
       setError((err as Record<string, unknown>)?.message as string || String(err))

@@ -790,6 +790,7 @@ pub async fn backup_database(db: State<'_, DbPool>, token: String, app_handle: A
     if !output.status.success() {
         return Err(AppError::Internal(format!("pg_dump failed: {}", String::from_utf8_lossy(&output.stderr))));
     }
+    crate::commands::audit_log(&db.pool, &user_id, "export", "database_backup", &backup_path.to_string_lossy().to_string(), "Database backup created").await;
     Ok(backup_path.to_string_lossy().to_string())
 }
 
@@ -808,6 +809,7 @@ pub async fn restore_database(db: State<'_, DbPool>, token: String, backup_path:
     if !output.status.success() {
         return Err(AppError::Internal(format!("psql restore failed: {}", String::from_utf8_lossy(&output.stderr))));
     }
+    crate::commands::audit_log(&db.pool, &user_id, "import", "database_restore", &backup_path, "Database restored from backup").await;
     Ok("Database restored successfully".into())
 }
 

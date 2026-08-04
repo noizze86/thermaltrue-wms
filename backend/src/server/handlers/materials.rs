@@ -19,15 +19,16 @@ pub async fn list(
     Extension(user_id): Extension<String>,
     Query(q): Query<ListQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     use sqlx::QueryBuilder;
     let mut builder = QueryBuilder::new(
         "SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, \
          m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, \
-         c.name as category_name, u.name as unit_name, w.name as warehouse_name \
+         c.name as category_name, u.name as unit_name, w.name as warehouse_name, s.name as supplier_name \
          FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id \
-         LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true"
+         LEFT JOIN warehouses w ON m.warehouse_id=w.id LEFT JOIN suppliers s ON m.supplier_id=s.id WHERE m.is_active=true"
     );
     if let Some(ref s) = q.search { if !s.is_empty() {
         let pat = format!("%{}%", s);
@@ -56,7 +57,7 @@ pub async fn list(
             "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"),
             "updated_at": row.get::<String,_>("updated_at"),
             "category_name": row.get::<Option<String>,_>("category_name"), "unit_name": row.get::<Option<String>,_>("unit_name"),
-            "warehouse_name": row.get::<Option<String>,_>("warehouse_name")})
+            "warehouse_name": row.get::<Option<String>,_>("warehouse_name"), "supplier_name": row.get::<Option<String>,_>("supplier_name")})
     }).collect();
     Ok(Json(json!(materials)))
 }
@@ -108,8 +109,10 @@ pub async fn expiring(
 
 pub async fn get_one(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let row = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.id=$1")
         .bind(&id).fetch_optional(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?
@@ -136,6 +139,7 @@ pub async fn create(
         .map_err(|e| crate::server::server_error(e))?;
     let row = sqlx::query("SELECT m.id, m.sku, m.name, m.description, m.category_id, m.unit_id, m.supplier_id, m.warehouse_id, m.rack_id, m.quantity, m.min_stock, m.max_stock, m.price, m.image, m.expiry_date, m.is_active, m.created_at, m.updated_at, c.name as category_name, u.name as unit_name, w.name as warehouse_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN units u ON m.unit_id=u.id LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.id=$1").bind(&id).fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "material", &id, &format!("SKU {} - {}", input.sku, input.name)).await;
     Ok(Json(json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"), "description": row.get::<String,_>("description"), "category_id": row.get::<Option<String>,_>("category_id"), "unit_id": row.get::<Option<String>,_>("unit_id"), "supplier_id": row.get::<Option<String>,_>("supplier_id"), "warehouse_id": row.get::<Option<String>,_>("warehouse_id"), "rack_id": row.get::<Option<String>,_>("rack_id"), "quantity": row.get::<f64,_>("quantity"), "min_stock": row.get::<f64,_>("min_stock"), "max_stock": row.get::<f64,_>("max_stock"), "price": row.get::<f64,_>("price"), "image": row.get::<String,_>("image"), "expiry_date": row.get::<Option<String>,_>("expiry_date"), "is_active": row.get::<bool,_>("is_active"), "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at"), "category_name": row.get::<Option<String>,_>("category_name"), "unit_name": row.get::<Option<String>,_>("unit_name"), "warehouse_name": row.get::<Option<String>,_>("warehouse_name")})))
 }
 
@@ -157,6 +161,7 @@ pub async fn update(
         .bind(&input.image).bind(&input.expiry_date).bind(input.is_active).bind(&id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "material", &id, &format!("SKU {} - {}", input.sku, input.name)).await;
     Ok(Json(()))
 }
 
@@ -166,10 +171,12 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "delete_any").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let qty: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1").bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"}))))?;
     if qty > 0.0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Cannot delete material with remaining stock"})))); }
     sqlx::query("UPDATE materials SET is_active=false, updated_at=NOW() WHERE id=$1").bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "material", &id, "Material soft-deleted").await;
     Ok(Json(()))
 }
 
@@ -179,8 +186,10 @@ pub async fn bulk_delete(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "delete_any").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let ids: Vec<String> = body.get("ids").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect()).unwrap_or_default();
-    for id in &ids { sqlx::query("UPDATE materials SET is_active=false, updated_at=NOW() WHERE id=$1").bind(id).execute(&pool.pool).await.ok(); }
+    for id in &ids { sqlx::query("UPDATE materials SET is_active=false, updated_at=NOW() WHERE id=$1").bind(id).execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("materials bulk soft-delete failed: {}", e); Default::default() }); }
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "material", "bulk", &format!("Soft-deleted {} material(s)", ids.len())).await;
     Ok(Json(json!(format!("Deleted {} material(s)", ids.len()))))
 }
 
@@ -202,6 +211,7 @@ pub async fn bulk_update(
         builder.push(" WHERE id=").push_bind(id);
         builder.build().execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "material", "bulk", &format!("Bulk updated {} material(s)", ids.len())).await;
     Ok(Json(()))
 }
 
@@ -230,6 +240,7 @@ pub async fn import_csv(
             Err(e) => errors.push(format!("Row {}: {}", i+1, e)),
         }
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "import", "material", "csv", &format!("CSV import: {} imported, {} errors, {} rows", imported, errors.len(), records.len())).await;
     Ok(Json(json!({"imported": imported, "errors": errors, "total": records.len()})))
 }
 
@@ -271,6 +282,7 @@ pub async fn import_xlsx(
             Err(e) => errors.push(format!("Row {}: {}", i + 1, e)),
         }
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "import", "material", "xlsx", &format!("XLSX import: {} imported, {} errors", imported, errors.len())).await;
     Ok(Json(json!({"imported": imported, "errors": errors})))
 }
 
@@ -329,7 +341,7 @@ pub async fn generate_zpl(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let material_id = body.get("materialId").and_then(|v| v.as_str()).ok_or((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Missing materialId"}))))?;
     let template_id = body.get("templateId").and_then(|v| v.as_str()).ok_or((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Missing templateId"}))))?;
-    let mat = sqlx::query("SELECT sku, name, quantity, price FROM materials WHERE id=$1")
+    let mat = sqlx::query("SELECT m.sku, m.name, m.quantity, m.price, COALESCE(m.expiry_date,'') AS expiry_date, COALESCE(c.name,'') AS category_name, COALESCE(w.name,'') AS warehouse_name, COALESCE(s.name,'') AS supplier_name FROM materials m LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN warehouses w ON m.warehouse_id=w.id LEFT JOIN suppliers s ON m.supplier_id=s.id WHERE m.id=$1")
         .bind(material_id).fetch_optional(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?
         .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"}))))?;
@@ -337,7 +349,11 @@ pub async fn generate_zpl(
     let name: String = mat.get("name");
     let qty: f64 = mat.get("quantity");
     let price: f64 = mat.get("price");
-    let tmpl = sqlx::query("SELECT layout_style, show_company, show_qty, show_price, show_barcode, show_sku, show_name, show_category, show_location, show_expiry, show_batch, qr_size, font_scale, template_type FROM label_templates WHERE id=$1")
+    let expiry_date: String = mat.get("expiry_date");
+    let category_name: String = mat.get("category_name");
+    let warehouse_name: String = mat.get("warehouse_name");
+    let supplier_name: String = mat.get("supplier_name");
+    let tmpl = sqlx::query("SELECT layout_style, show_company, show_qty, show_price, show_barcode, show_sku, show_name, show_category, show_supplier, show_location, show_expiry, show_batch, qr_size, font_scale, template_type FROM label_templates WHERE id=$1")
         .bind(template_id).fetch_optional(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?
         .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Template not found"}))))?;
@@ -348,6 +364,10 @@ pub async fn generate_zpl(
     let show_barcode: bool = tmpl.get("show_barcode");
     let show_sku: bool = tmpl.get("show_sku");
     let show_name: bool = tmpl.get("show_name");
+    let show_category: bool = tmpl.get("show_category");
+    let show_supplier: bool = tmpl.get("show_supplier");
+    let show_location: bool = tmpl.get("show_location");
+    let show_expiry: bool = tmpl.get("show_expiry");
     let qr_size: String = tmpl.get("qr_size");
     let font_scale: f32 = tmpl.get("font_scale");
     let fs = (font_scale * 30.0) as u32;
@@ -383,6 +403,10 @@ pub async fn generate_zpl(
             zpl.push_str(&format!("^FO30,{}^ADN,20,10^FD{}^FS", y, company_name)); y += 22;
             if show_qty { zpl.push_str(&format!("^FO30,{}^ADN,20,10^FDQty: {:.*}^FS", y, 2, qty)); y += 22; }
             if show_price { zpl.push_str(&format!("^FO30,{}^ADN,20,10^FDRp {:.*}^FS", y, 2, price)); y += 22; }
+            if show_category && !category_name.is_empty() { let c = category_name.chars().take(25).collect::<String>(); zpl.push_str(&format!("^FO30,{}^ADN,20,10^FDCat: {}^FS", y, c)); y += 22; }
+            if show_supplier && !supplier_name.is_empty() { let c = supplier_name.chars().take(25).collect::<String>(); zpl.push_str(&format!("^FO30,{}^ADN,20,10^FDSup: {}^FS", y, c)); y += 22; }
+            if show_location && !warehouse_name.is_empty() { let c = warehouse_name.chars().take(25).collect::<String>(); zpl.push_str(&format!("^FO30,{}^ADN,20,10^FDLoc: {}^FS", y, c)); y += 22; }
+            if show_expiry && !expiry_date.is_empty() { zpl.push_str(&format!("^FO30,{}^ADN,20,10^FDExp: {}^FS", y, expiry_date)); y += 22; }
             if show_barcode { zpl.push_str(&format!("^FO30,{}^BCN,50,Y,N,N^FD{}^FS", y, sku)); }
         }
         "branded" => {
@@ -411,6 +435,10 @@ pub async fn generate_zpl(
                 if show_price { let px = if show_qty { 180u32 } else { 30u32 }; zpl.push_str(&format!("^FO{},{}^ADN,{},10^FDRp {:.*}^FS", px, y, fs, 2, price)); }
                 if show_qty || show_price { y += fs + 5; }
             }
+            if show_category && !category_name.is_empty() { let c = category_name.chars().take(25).collect::<String>(); zpl.push_str(&format!("^FO30,{}^ADN,{},10^FDCat: {}^FS", y, fs, c)); y += fs + 5; }
+            if show_supplier && !supplier_name.is_empty() { let c = supplier_name.chars().take(25).collect::<String>(); zpl.push_str(&format!("^FO30,{}^ADN,{},10^FDSup: {}^FS", y, fs, c)); y += fs + 5; }
+            if show_location && !warehouse_name.is_empty() { let c = warehouse_name.chars().take(25).collect::<String>(); zpl.push_str(&format!("^FO30,{}^ADN,{},10^FDLoc: {}^FS", y, fs, c)); y += fs + 5; }
+            if show_expiry && !expiry_date.is_empty() { zpl.push_str(&format!("^FO30,{}^ADN,{},10^FDExp: {}^FS", y, fs, expiry_date)); y += fs + 5; }
             if show_barcode { y = y.max(160); zpl.push_str(&format!("^FO30,{}^BCN,60,Y,N,N^FD{}^FS", y, sku)); }
         }
     }
@@ -482,6 +510,7 @@ pub async fn create_material_batch(
         .bind(&id).bind(material_id).bind(batch_no).bind(qty).bind(&exp).bind(&recv)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "material_batch", &id, &format!("Material {} - Batch {}", material_id, batch_no)).await;
     Ok(Json(json!({"id": id, "materialId": material_id, "batchNo": batch_no, "qty": qty, "expiryDate": exp, "receivedAt": recv})))
 }
 
@@ -493,6 +522,7 @@ pub async fn delete_material_batch(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM material_batches WHERE id=$1").bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "material_batch", &id, "Material batch deleted").await;
     Ok(Json(()))
 }
 
@@ -527,6 +557,7 @@ pub async fn create_material_image(
         .bind(&id).bind(material_id).bind(url).bind(max_sort)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "material_image", &id, &format!("Material {} image", material_id)).await;
     Ok(Json(json!({"id": id, "materialId": material_id, "url": url, "sortOrder": max_sort})))
 }
 
@@ -538,6 +569,7 @@ pub async fn delete_material_image(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM material_images WHERE id=$1").bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "material_image", &id, "Material image deleted").await;
     Ok(Json(()))
 }
 
@@ -557,5 +589,6 @@ pub async fn reorder_material_images(
     }
     tx.commit().await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "material_image", "bulk", &format!("Reordered {} image(s)", ids.len())).await;
     Ok(Json(()))
 }

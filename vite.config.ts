@@ -19,7 +19,8 @@ export default defineConfig({
         manualChunks: {
           "vendor-react": ["react", "react-dom", "react-router-dom"],
           "vendor-charts": ["recharts"],
-          "vendor-qr": ["html5-qrcode", "jsbarcode", "html2canvas"],
+          "vendor-qrcode": ["html5-qrcode"],
+          "vendor-barcode": ["jsbarcode", "html2canvas"],
           "vendor-ui": ["@radix-ui/react-avatar", "@radix-ui/react-checkbox", "@radix-ui/react-dropdown-menu", "@radix-ui/react-separator", "@radix-ui/react-tabs", "@radix-ui/react-toast", "cmdk", "lucide-react"],
           "vendor-forms": ["zod"],
         },

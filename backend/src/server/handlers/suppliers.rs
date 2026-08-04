@@ -39,6 +39,7 @@ pub async fn create(
         .bind(&supplier.pic_phone).bind(&supplier.pic_email)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "supplier", &id, &supplier.name).await;
     Ok(Json(()))
 }
 
@@ -53,6 +54,7 @@ pub async fn update(
         .bind(&supplier.address).bind(&supplier.contact_person).bind(&supplier.pic_phone).bind(&supplier.pic_email).bind(&supplier.id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "supplier", &supplier.id, &supplier.name).await;
     Ok(Json(()))
 }
 
@@ -65,9 +67,10 @@ pub async fn delete(
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE supplier_id=$1 AND is_active=true")
         .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     if used > 0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Supplier is used by {} active material(s)", used)})))); }
-    sqlx::query("DELETE FROM supplier_ratings WHERE supplier_id=$1").bind(&id).execute(&pool.pool).await.ok();
-    sqlx::query("DELETE FROM supplier_prices WHERE supplier_id=$1").bind(&id).execute(&pool.pool).await.ok();
+    sqlx::query("DELETE FROM supplier_ratings WHERE supplier_id=$1").bind(&id).execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("suppliers delete ratings cascade failed: {}", e); Default::default() });
+    sqlx::query("DELETE FROM supplier_prices WHERE supplier_id=$1").bind(&id).execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("suppliers delete prices cascade failed: {}", e); Default::default() });
     sqlx::query("DELETE FROM suppliers WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "supplier", &id, "Supplier deleted").await;
     Ok(Json(()))
 }
 
@@ -84,6 +87,7 @@ pub async fn list_ratings(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateRatingBody { pub supplier_id: String, pub metric: String, pub score: f64, pub period: String, pub notes: String }
 
 pub async fn create_rating(
@@ -97,6 +101,7 @@ pub async fn create_rating(
         .bind(&id).bind(&body.supplier_id).bind(&body.metric).bind(body.score).bind(&body.period).bind(&body.notes)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "supplier_rating", &id, &format!("supplier {} - {} {} period {}", body.supplier_id, body.metric, body.score, body.period)).await;
     Ok(Json(()))
 }
 
@@ -117,6 +122,7 @@ pub async fn list_prices(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreatePriceBody { pub supplier_id: String, pub material_id: String, pub price: f64, pub date: String }
 
 pub async fn create_price(
@@ -130,5 +136,38 @@ pub async fn create_price(
         .bind(&id).bind(&body.supplier_id).bind(&body.material_id).bind(body.price).bind(&body.date)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "supplier_price", &id, &format!("supplier {} material {} price {} date {}", body.supplier_id, body.material_id, body.price, body.date)).await;
+    Ok(Json(()))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePriceBody { pub material_id: String, pub price: f64, pub date: String }
+
+pub async fn update_price(
+    State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
+    Path(id): Path<String>,
+    Json(body): Json<UpdatePriceBody>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    sqlx::query("UPDATE supplier_prices SET material_id=$1, price=$2, date=$3 WHERE id=$4")
+        .bind(&body.material_id).bind(body.price).bind(&body.date).bind(&id)
+        .execute(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "supplier_price", &id, &format!("material {} price {} date {}", body.material_id, body.price, body.date)).await;
+    Ok(Json(()))
+}
+
+pub async fn delete_price(
+    State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
+    Path(id): Path<String>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    sqlx::query("DELETE FROM supplier_prices WHERE id=$1")
+        .bind(&id).execute(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "supplier_price", &id, "Supplier price deleted").await;
     Ok(Json(()))
 }

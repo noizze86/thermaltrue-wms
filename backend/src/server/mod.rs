@@ -1,10 +1,20 @@
 use std::sync::Arc;
 use std::path::Path;
-use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::Request, response::{IntoResponse, Response}, body::Body, http::{Method, StatusCode, Uri, header::{AUTHORIZATION, COOKIE}}};
+use std::collections::HashMap;
+use std::time::Instant;
+use std::sync::RwLock;
+use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::{Request, State}, response::{IntoResponse, Response}, body::Body, http::{Method, StatusCode, Uri, header::{AUTHORIZATION, COOKIE}}};
 
 use tower_http::cors::CorsLayer;
 use tokio::fs as async_fs;
 use crate::db_pool::DbPool;
+
+// Per-IP rate limiter: max 120 requests per minute per IP
+const RATE_LIMIT_MAX: usize = 120;
+const RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
+
+static RATE_LIMITER: once_cell::sync::Lazy<RwLock<HashMap<String, Vec<Instant>>>> =
+    once_cell::sync::Lazy::new(|| RwLock::new(HashMap::new()));
 
 pub mod handlers;
 
@@ -13,6 +23,7 @@ pub fn create_router(pool: DbPool) -> Router {
     Router::new()
         // Health
         .route("/api/health", get(health))
+        .route("/api/health/db", get(health_db))
         // Auth
         .route("/api/login", post(handlers::auth::login))
         .route("/api/logout", post(handlers::auth::logout))
@@ -37,8 +48,22 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/stock-opname-config", put(handlers::stock_opname::set_config))
         .route("/api/cycle-schedules", get(handlers::stock_opname::get_cycle_schedules))
         .route("/api/cycle-schedules", post(handlers::stock_opname::create_cycle_schedule))
-        .route("/api/cycle-schedules/:id", delete(handlers::stock_opname::delete_cycle_schedule))
-        .route("/api/cycle-opname/generate", post(handlers::stock_opname::auto_generate))
+.route("/api/cycle-schedules/:id", delete(handlers::stock_opname::delete_cycle_schedule))
+.route("/api/cycle-opname/generate", post(handlers::stock_opname::auto_generate))
+.route("/api/cycle-count/scope-items", get(handlers::stock_opname::get_scope_items))
+.route("/api/cycle-count/tasks/:id/history", get(handlers::stock_opname::get_task_history))
+.route("/api/cycle-count/tasks/:id/recount", post(handlers::stock_opname::recount))
+.route("/api/notifications", get(handlers::stock_opname::list_notifications))
+.route("/api/notifications/read-all", post(handlers::stock_opname::mark_all_notifications_read))
+.route("/api/notifications/:id/read", post(handlers::stock_opname::mark_notification_read))
+.route("/api/cycle-count/zones", get(handlers::stock_opname::get_cycle_zones))
+.route("/api/cycle-count/zones", post(handlers::stock_opname::create_zone_schedule))
+.route("/api/cycle-count/zones/:id", delete(handlers::stock_opname::delete_zone_schedule))
+.route("/api/cycle-count/report/summary", get(handlers::cycle_reports::cycle_summary))
+.route("/api/cycle-count/report/accuracy", get(handlers::cycle_reports::cycle_accuracy))
+.route("/api/cycle-count/report/by-staff", get(handlers::cycle_reports::cycle_by_staff))
+.route("/api/cycle-count/report/by-location", get(handlers::cycle_reports::cycle_by_location))
+.route("/api/cycle-count/report/export-xlsx", get(handlers::cycle_reports::export_cycle_xlsx))
         // Transfers
         .route("/api/transfers/material", post(handlers::transfers::transfer_material))
         .route("/api/transfers/bulk", post(handlers::transfers::transfer_bulk))
@@ -135,6 +160,8 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/suppliers/ratings", post(handlers::suppliers::create_rating))
         .route("/api/suppliers/:id/prices", get(handlers::suppliers::list_prices))
         .route("/api/suppliers/prices", post(handlers::suppliers::create_price))
+        .route("/api/suppliers/prices/:id", put(handlers::suppliers::update_price))
+        .route("/api/suppliers/prices/:id", delete(handlers::suppliers::delete_price))
         // Warehouses
         .route("/api/warehouses", get(handlers::warehouses::list))
         .route("/api/warehouses/stats", get(handlers::warehouses::stats))
@@ -228,6 +255,8 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/app-config", post(handlers::settings_handler::set_app_config))
         .route("/api/app-config/all", get(handlers::settings_handler::get_all_app_config))
         .route("/api/app-config/:key", delete(handlers::settings_handler::delete_app_config))
+        .route("/api/email-config", get(handlers::settings_handler::get_email_config))
+        .route("/api/email-config", post(handlers::settings_handler::save_email_config))
         .route("/api/inventory-settings", get(handlers::settings_handler::get_inventory_settings))
         .route("/api/inventory-settings", post(handlers::settings_handler::save_inventory_setting))
         .route("/api/audit-logs", get(handlers::settings_handler::list_audit_logs))
@@ -262,10 +291,11 @@ pub fn create_router(pool: DbPool) -> Router {
         // CORS — allow configured origin, or permissive for Tauri WebView
         .layer({
             let origin = std::env::var("CORS_ORIGIN").unwrap_or_default();
-            if origin.is_empty() {
+            let origin = origin.trim();
+            if origin.is_empty() || origin == "*" {
                 CorsLayer::permissive()
             } else {
-                match origin.as_str().parse::<axum::http::HeaderValue>() {
+                match origin.parse::<axum::http::HeaderValue>() {
                     Ok(parsed_origin) => {
                         CorsLayer::new()
                             .allow_origin(parsed_origin)
@@ -275,12 +305,14 @@ pub fn create_router(pool: DbPool) -> Router {
                                 axum::http::header::AUTHORIZATION])
                     }
                     Err(e) => {
-                        log::warn!("Invalid CORS_ORIGIN value '{}': {}. Falling back to permissive CORS.", origin, e);
-                        CorsLayer::permissive()
+                        log::error!("Invalid CORS_ORIGIN value '{}': {}. Server will not start. Set CORS_ORIGIN to a valid origin (e.g. 'https://app.example.com'), '*' for permissive, or leave it empty.", origin, e);
+                        std::process::exit(1);
                     }
                 }
             }
         })
+        // General API rate limiter (skip for health, login, and non-API paths)
+        .layer(middleware::from_fn(rate_limiter))
         // Middleware (skip auth for health, login & non-API paths)
         .layer(middleware::from_fn_with_state(state.clone(), auth_middleware))
         .with_state(state)
@@ -288,7 +320,7 @@ pub fn create_router(pool: DbPool) -> Router {
         .fallback(spa_handler)
 }
 
-/// Security headers middleware: adds CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy
+/// Security headers middleware: adds CSP, X-Frame-Options, X-Content-Type-Options, Referrer-Policy, Permissions-Policy, HSTS
 async fn security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
@@ -296,10 +328,14 @@ async fn security_headers(request: Request, next: Next) -> Response {
     headers.insert("X-Frame-Options", "DENY".parse().unwrap());
     headers.insert("Referrer-Policy", "strict-origin-when-cross-origin".parse().unwrap());
     headers.insert("X-XSS-Protection", "0".parse().unwrap());
+    headers.insert("Permissions-Policy", "geolocation=(), microphone=(), camera=()".parse().unwrap());
+    if std::env::var("TLS_CERT_PATH").is_ok() {
+        headers.insert("Strict-Transport-Security", "max-age=31536000; includeSubDomains".parse().unwrap());
+    }
     let csp = if cfg!(debug_assertions) {
         "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://localhost:*;"
     } else {
-        "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self';"
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self';"
     };
     headers.insert("Content-Security-Policy", csp.parse().unwrap());
     response
@@ -314,8 +350,14 @@ async fn spa_handler(uri: Uri) -> Response<Body> {
     if !path.is_empty() && file_path.is_file() {
         match async_fs::read(&file_path).await {
             Ok(content) => {
+                let cache = if path.contains("index.html") || path.is_empty() {
+                    "no-cache"
+                } else {
+                    "public, max-age=31536000, immutable"
+                };
                 return match Response::builder()
                     .header("Content-Type", mime_type(&file_path))
+                    .header("Cache-Control", cache)
                     .body(Body::from(content))
                 {
                     Ok(res) => res,
@@ -332,6 +374,7 @@ async fn spa_handler(uri: Uri) -> Response<Body> {
         Ok(content) => {
             match Response::builder()
                 .header("Content-Type", "text/html")
+                .header("Cache-Control", "no-cache")
                 .body(Body::from(content))
             {
                 Ok(res) => res,
@@ -387,6 +430,14 @@ async fn health() -> Json<serde_json::Value> {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
+async fn health_db(State(state): State<Arc<crate::db_pool::DbPool>>) -> Json<serde_json::Value> {
+    let db_ok = sqlx::query("SELECT 1")
+        .execute(&state.pool)
+        .await
+        .is_ok();
+    Json(serde_json::json!({ "status": "ok", "database": db_ok }))
+}
+
 async fn auth_middleware(
     mut req: Request,
     next: Next,
@@ -395,10 +446,35 @@ async fn auth_middleware(
     // Skip auth for: CORS preflight, health, login, and all non-API paths (static files, SPA)
     if req.method() == Method::OPTIONS
         || path == "/api/health"
+        || path == "/api/health/db"
         || path == "/api/login"
         || !path.starts_with("/api/")
     {
         return next.run(req).await;
+    }
+
+    // CSRF protection: validate Origin (or Referer fallback) against CORS_ORIGIN for mutating requests
+    let allowed = std::env::var("CORS_ORIGIN").unwrap_or_default();
+    let allowed = allowed.trim();
+    if !allowed.is_empty() && allowed != "*" && matches!(req.method(), &Method::POST | &Method::PUT | &Method::DELETE | &Method::PATCH) {
+        let request_origin = req.headers().get("Origin").and_then(|v| v.to_str().ok())
+            .or_else(|| req.headers().get("Referer").and_then(|v| v.to_str().ok())
+                .and_then(|r| r.find("://").map(|s| {
+                    let after_host = &r[s + 3..];
+                    let end = after_host.find('/').unwrap_or(after_host.len());
+                    &r[..s + 3 + end]
+                })));
+        if let Some(origin) = request_origin {
+            let host = req.headers().get("Host").and_then(|v| v.to_str().ok());
+            let matches_cors = origin == allowed;
+            let matches_host = host.map_or(false, |h| {
+                origin == format!("http://{}", h) || origin == format!("https://{}", h)
+            });
+            if !matches_cors && !matches_host {
+                log::warn!("CSRF origin check failed: origin={:?}, host={:?}, allowed={:?}", origin, host, allowed);
+                return (StatusCode::FORBIDDEN, Json(serde_json::json!({ "error": "Origin not allowed" }))).into_response();
+            }
+        }
     }
 
     // Check httpOnly cookie first, then fall back to Authorization header (Tauri IPC compat)
@@ -433,6 +509,44 @@ async fn auth_middleware(
             (StatusCode::UNAUTHORIZED, Json(serde_json::json!({ "error": "Unauthorized" }))).into_response()
         }
     }
+}
+
+/// General rate limiter: 120 requests/min per IP, skips non-API paths
+async fn rate_limiter(request: Request, next: Next) -> Response {
+    let path = request.uri().path();
+    if request.method() == Method::OPTIONS || !path.starts_with("/api/") || path == "/api/health" || path == "/api/health/db" || path == "/api/login" {
+        return next.run(request).await;
+    }
+    let ip = request.headers().get("X-Forwarded-For").and_then(|v| v.to_str().ok())
+        .or_else(|| request.headers().get("X-Real-IP").and_then(|v| v.to_str().ok()))
+        .or_else(|| {
+            request.headers().get("X-Forwarded-For").and_then(|v| v.to_str().ok())
+                .and_then(|v| v.split(',').next().map(|s| s.trim()))
+        })
+        .unwrap_or("unknown")
+        .to_string();
+    let now = Instant::now();
+    let blocked = {
+        if let Ok(mut guard) = RATE_LIMITER.write() {
+            guard.retain(|_, times| {
+                times.retain(|t| now.duration_since(*t) < RATE_LIMIT_WINDOW);
+                !times.is_empty()
+            });
+            let entry = guard.entry(ip).or_default();
+            if entry.len() >= RATE_LIMIT_MAX {
+                true
+            } else {
+                entry.push(now);
+                false
+            }
+        } else {
+            false
+        }
+    };
+    if blocked {
+        return (StatusCode::TOO_MANY_REQUESTS, Json(serde_json::json!({"error":"Rate limit exceeded. Try again later."}))).into_response();
+    }
+    next.run(request).await
 }
 
 // Re-export shared JWT functions from the jwt module

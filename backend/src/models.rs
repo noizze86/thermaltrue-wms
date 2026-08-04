@@ -399,6 +399,22 @@ pub struct StockOpname {
     pub created_by: Option<String>,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub cycle_mode: String,
+    #[serde(default)]
+    pub task_type: String,
+    #[serde(default)]
+    pub deadline: String,
+    #[serde(default)]
+    pub blind_mode: bool,
+    #[serde(default)]
+    pub tolerance_pct: f64,
+    #[serde(default)]
+    pub assigned_to: String,
+    #[serde(default)]
+    pub zone_id: String,
+    #[serde(default)]
+    pub recount_of: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -410,6 +426,46 @@ pub struct StockOpnameItem {
     pub physical_qty: f64,
     pub difference: f64,
     pub notes: String,
+    #[serde(default)]
+    pub cycle_round: i64,
+    #[serde(default)]
+    pub approved_status: String,
+    #[serde(default)]
+    pub reviewer_id: String,
+    #[serde(default)]
+    pub reviewed_at: String,
+    #[serde(default)]
+    pub remark: String,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct CreateTaskBody {
+    #[serde(default)]
+    pub warehouse_id: Option<String>,
+    #[serde(default)]
+    pub notes: String,
+    #[serde(default)]
+    pub deadline: String,
+    #[serde(default)]
+    pub blind_mode: bool,
+    #[serde(default)]
+    pub assigned_to: String,
+    #[serde(default)]
+    pub zone_id: String,
+    #[serde(default)]
+    pub cycle_mode: String,
+    #[serde(default)]
+    pub material_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Clone)]
+pub struct ApproveItemBody {
+    pub item_id: String,
+    pub approved: bool,
+    #[serde(default)]
+    pub manual_qty: Option<f64>,
+    #[serde(default)]
+    pub remark: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -487,6 +543,18 @@ pub struct CompanyProfile {
 pub struct AppConfig {
     pub key: String,
     pub value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct EmailConfig {
+    pub id: String,
+    pub smtp_host: String,
+    pub smtp_port: i32,
+    pub smtp_user: String,
+    pub smtp_pass: String,
+    pub sender_name: String,
+    pub sender_email: String,
+    pub use_tls: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

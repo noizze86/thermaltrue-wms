@@ -27,7 +27,7 @@ const ALL_PERMISSIONS = [
 ]
 
 export default function RolesPage() {
-  const { can } = useAuth()
+  const { can, refreshRoles } = useAuth()
   const queryClient = useQueryClient()
   const { data: roles, isLoading, isError, error, refetch } = useQuery({ queryKey: ["roles"], queryFn: getRoles })
 
@@ -47,25 +47,25 @@ export default function RolesPage() {
 
   const cloneMut = useMutation({
     mutationFn: () => cloneRole(cloneDialog!.id, cloneName, cloneDesc),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["roles"] }); setCloneDialog(null); setCloneName(""); setCloneDesc(""); toast({ title: "Cloned", description: "Role cloned successfully" }) },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["roles"] }); refreshRoles(); setCloneDialog(null); setCloneName(""); setCloneDesc(""); toast({ title: "Cloned", description: "Role cloned successfully" }) },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   })
 
   const updatePermMut = useMutation({
     mutationFn: () => updateRole(permDialog!.id, permDialog!.name, permDialog!.description, JSON.stringify(permValues)),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["roles"] }); setPermDialog(null); toast({ title: "Updated", description: "Permissions updated" }) },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["roles"] }); refreshRoles(); setPermDialog(null); toast({ title: "Updated", description: "Permissions updated" }) },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   })
 
   const createMut = useMutation({
     mutationFn: () => createRole(createName, createDesc, JSON.stringify(createPerms)),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["roles"] }); setCreateOpen(false); setCreateName(""); setCreateDesc(""); setCreatePerms([]); toast({ title: "Created", description: "Role created successfully" }) },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["roles"] }); refreshRoles(); setCreateOpen(false); setCreateName(""); setCreateDesc(""); setCreatePerms([]); toast({ title: "Created", description: "Role created successfully" }) },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   })
 
   const deleteMut = useMutation({
     mutationFn: () => deleteRole(deleteTarget!.id),
-    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["roles"] }); setDeleteTarget(null); toast({ title: "Deleted", description: "Role deleted" }) },
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["roles"] }); refreshRoles(); setDeleteTarget(null); toast({ title: "Deleted", description: "Role deleted" }) },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   })
 
@@ -133,7 +133,7 @@ export default function RolesPage() {
                   </TableCell>
                   <TableCell>
                     <div className="flex gap-1">
-                      <Button variant="ghost" size="icon" onClick={() => openPermEditor(r)} disabled={r.is_system} title="Edit permissions">
+                      <Button variant="ghost" size="icon" onClick={() => openPermEditor(r)} title={r.is_system ? "Edit permissions (system role)" : "Edit permissions"}>
                         <Pencil className="h-4 w-4" />
                       </Button>
                       <Button variant="ghost" size="icon" onClick={() => { setCloneDialog(r); setCloneName(`${r.name} (clone)`); setCloneDesc(r.description) }} title="Clone role">

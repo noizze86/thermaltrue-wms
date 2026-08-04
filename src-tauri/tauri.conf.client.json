@@ -1,0 +1,60 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "Thermaltrue",
+  "version": "1.0.1",
+  "identifier": "com.thermaltrue.wms.client",
+  "build": {
+    "frontendDist": "../dist-client-stub",
+    "devUrl": "http://localhost:5174",
+    "beforeDevCommand": "npm run cap:dev && npm run dev",
+    "beforeBuildCommand": "npm run cap:client"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Thermaltrue WMS",
+        "width": 1280,
+        "height": 800,
+        "minWidth": 1024,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "url": "http://{{SERVER_IP}}:3000",
+        "devtools": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; connect-src 'self' http: https: https://github.com https://*.githubusercontent.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; object-src 'none'; frame-src 'none'; base-uri 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["msi", "nsis"],
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "certificateThumbprint": null,
+      "digestAlgorithm": "sha256",
+      "timestampUrl": "http://timestamp.digicert.com",
+      "webviewInstallMode": {
+        "type": "embedBootstrapper"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "active": true,
+      "dialog": true,
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEE2QTE2MzI2RDI3NzU3QzkKUldUSlYzZlNKbU9ocHZTdlZ3Z20xd0xwMmVOMWg5WVJ4UXFtaFVqQ2R1YitNVGVLbE5zZGdxcEgK",
+      "endpoints": [
+        "https://github.com/noizze86/thermaltrue-wms/releases/latest/download/update.json"
+      ]
+    }
+  }
+}

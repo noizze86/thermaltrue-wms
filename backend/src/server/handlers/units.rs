@@ -15,7 +15,7 @@ pub async fn list(
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Unit>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let rows = sqlx::query("SELECT id, name, symbol, category, created_at FROM units WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%') ORDER BY name")
         .bind(&params.search)
         .fetch_all(&pool.pool)
@@ -40,6 +40,7 @@ pub async fn create(
         .bind(&id).bind(&body.name).bind(&body.symbol).bind(&body.category)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "unit", &id, &format!("{} ({})", body.name, body.symbol)).await;
     Ok(Json(()))
 }
 
@@ -56,6 +57,7 @@ pub async fn update(
         .bind(&body.name).bind(&body.symbol).bind(&body.category).bind(&body.id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "unit", &body.id, &format!("{} ({})", body.name, body.symbol)).await;
     Ok(Json(()))
 }
 
@@ -68,8 +70,9 @@ pub async fn delete(
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE unit_id=$1 AND is_active=true")
         .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     if used > 0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Unit is used by {} active material(s)", used)})))); }
-    sqlx::query("DELETE FROM unit_conversions WHERE from_unit_id=$1 OR to_unit_id=$1").bind(&id).execute(&pool.pool).await.ok();
+    sqlx::query("DELETE FROM unit_conversions WHERE from_unit_id=$1 OR to_unit_id=$1").bind(&id).execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("units delete conversion cascade failed: {}", e); Default::default() });
     sqlx::query("DELETE FROM units WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "unit", &id, "Unit deleted").await;
     Ok(Json(()))
 }
 
@@ -103,6 +106,7 @@ pub async fn create_conversion(
         .bind(&id).bind(&body.from_unit_id).bind(&body.to_unit_id).bind(body.factor)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "unit_conversion", &id, &format!("{} -> {} factor {}", body.from_unit_id, body.to_unit_id, body.factor)).await;
     Ok(Json(()))
 }
 
@@ -117,6 +121,7 @@ pub async fn delete_unit_conversion(
     sqlx::query("DELETE FROM unit_conversions WHERE id=$1")
         .bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "unit_conversion", &id, "Unit conversion deleted").await;
     Ok(Json(()))
 }
 

@@ -106,6 +106,7 @@ pub async fn create(
     .bind(&now)
     .execute(&pool.pool).await
     .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "label_template", &id, &template.name).await;
     let row = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates WHERE id=$1").bind(&id).fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(row_to_template(&row)))
@@ -145,6 +146,7 @@ pub async fn update(
     .bind(&now).bind(&template.id)
     .execute(&pool.pool).await
     .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "label_template", &template.id, &template.name).await;
     let row = sqlx::query("SELECT id, name, layout_style, show_sku, show_name, show_company, show_qty, show_price, show_barcode, show_qr, show_category, show_supplier, show_location, show_expiry, show_batch, show_min_stock, show_logo, show_border, qr_size, border_style, font_scale, template_type, label_width_mm, label_height_mm, created_at, updated_at FROM label_templates WHERE id=$1").bind(&template.id).fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(row_to_template(&row)))
@@ -158,11 +160,12 @@ pub async fn delete(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let protected = vec!["default", "company", "asset_standard", "branded", "rack_label", "full_card", "mini_thermal", "qr_only", "two_side"];
+    let protected = vec!["default", "company", "asset_standard", "branded", "rack_label", "full_card", "mini_thermal", "qr_only", "two_side", "standard_inventory"];
     if protected.contains(&id.as_str()) {
         return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Cannot delete system templates"}))));
     }
     sqlx::query("DELETE FROM label_templates WHERE id=$1").bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "label_template", &id, "Label template deleted").await;
     Ok(Json(()))
 }

@@ -68,8 +68,9 @@ async fn persist_material_metrics(
     .bind(yesterday_risk).bind(avg_7).bind(trend)
     .bind(abc_class).bind(abc_score).bind(days_since).bind(last_tx)
     .bind(&now).bind(&now)
-    .execute(pool).await.ok();
+    .execute(pool).await.unwrap_or_else(|e| { log::warn!("persist_material_metrics failed: {}", e); Default::default() });
 }
+
 
 pub async fn material_summary(
     Extension(user_id): Extension<String>,

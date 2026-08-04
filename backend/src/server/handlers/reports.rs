@@ -144,22 +144,90 @@ pub async fn approve_opname(
     Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<serde_json::Value>,
-) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let id = body.get("opnameId").and_then(|v| v.as_str()).unwrap_or("");
     let approved = body.get("approved").and_then(|v| v.as_bool()).unwrap_or(false);
+    let item_ids: Vec<String> = body.get("itemIds")
+        .and_then(|v| v.as_array())
+        .map(|arr| arr.iter().filter_map(|x| x.as_str().map(|s| s.to_string())).collect())
+        .unwrap_or_default();
+    if id.is_empty() { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"opnameId is required"})))); }
+    let task_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_opname WHERE id=$1)")
+        .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if !task_exists { return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Stock opname task not found"})))); }
     let mut tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let opname_number: String = sqlx::query_scalar("SELECT opname_number FROM stock_opname WHERE id=$1")
+        .bind(&id).fetch_one(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+    let mut approved_count: i64 = 0;
     if approved {
-        let items: Vec<(String,f64)> = sqlx::query("SELECT material_id,physical_qty FROM stock_opname_items WHERE opname_id=$1").bind(id).fetch_all(&mut *tx).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1))).collect();
-        for (mid,qty) in items { sqlx::query("UPDATE materials SET quantity=$1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?; }
-        sqlx::query("UPDATE stock_opname SET status='completed', updated_at=NOW() WHERE id=$1").bind(id).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+        let mut items: Vec<(String, String, f64, f64)> = sqlx::query("SELECT i.id, i.material_id, i.physical_qty, i.system_qty FROM stock_opname_items i WHERE i.opname_id=$1")
+            .bind(&id).fetch_all(&mut *tx).await.map_err(|e| crate::server::server_error(e))?
+            .iter().map(|r| (r.get(0), r.get(1), r.get(2), r.get(3))).collect();
+        if !item_ids.is_empty() {
+            items.retain(|(iid, _, _, _)| item_ids.contains(iid));
+        }
+        for (iid, mid, phy_qty, sys_qty) in &items {
+            sqlx::query("UPDATE materials SET quantity=$1 WHERE id=$2").bind(phy_qty).bind(mid).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+            let txn_id = uuid::Uuid::new_v4().to_string();
+            sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, price, reference, notes, user_id, status, approved_by, created_at, updated_at) VALUES ($1,$2,'adjustment',$3,(SELECT warehouse_id FROM materials WHERE id=$3),NULL,$4,0,$5,$6,$7,'approved',$7,$8,$8)")
+                .bind(&txn_id).bind(&format!("ADJ-{}", opname_number)).bind(mid).bind(phy_qty)
+                .bind(&opname_number).bind("Cycle count approval").bind(&user_id).bind(&now)
+                .execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+            sqlx::query("INSERT INTO cycle_count_history (id, task_id, material_id, action, before_qty, after_qty, changed_by) VALUES ($1,$2,$3,'approve',$4,$5,$6)")
+                .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(mid).bind(sys_qty).bind(phy_qty).bind(&user_id)
+                .execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+            sqlx::query("UPDATE stock_opname_items SET approved_status='approved', reviewer_id=$1, reviewed_at=$2 WHERE id=$3")
+                .bind(&user_id).bind(&now).bind(iid).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+            let acc: f64 = if *sys_qty != 0.0 { 100.0 - ((phy_qty - sys_qty).abs() / sys_qty * 100.0) } else { 100.0 };
+            sqlx::query("UPDATE material_metrics SET accuracy_pct=$1, last_cycle_count_qty=$2, last_cycle_count_date=$3, updated_at=$4 WHERE material_id=$5")
+                .bind(acc).bind(phy_qty).bind(&today).bind(&now).bind(mid)
+                .execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+            approved_count += 1;
+        }
     } else {
-        sqlx::query("UPDATE stock_opname SET status='draft', updated_at=NOW() WHERE id=$1").bind(id).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+        if !item_ids.is_empty() {
+            for iid in &item_ids {
+                sqlx::query("UPDATE stock_opname_items SET approved_status='rejected', reviewer_id=$1, reviewed_at=$2 WHERE id=$3")
+                    .bind(&user_id).bind(&now).bind(iid).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+                let m: Option<(String, f64)> = sqlx::query_as::<_, (String, f64)>("SELECT material_id, system_qty FROM stock_opname_items WHERE id=$1")
+                    .bind(iid).fetch_optional(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+                if let Some((mid, sys_qty)) = m {
+                    sqlx::query("INSERT INTO cycle_count_history (id, task_id, material_id, action, before_qty, after_qty, changed_by) VALUES ($1,$2,$3,'reject',$4,$5,$6)")
+                        .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(&mid).bind(sys_qty).bind(sys_qty).bind(&user_id)
+                        .execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+                }
+            }
+        } else {
+            sqlx::query("UPDATE stock_opname SET status='rejected', updated_at=$1 WHERE id=$2").bind(&now).bind(&id).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+            for m in sqlx::query("SELECT material_id, system_qty FROM stock_opname_items WHERE opname_id=$1")
+                .bind(&id).fetch_all(&mut *tx).await.map_err(|e| crate::server::server_error(e))? {
+                let (mid, sq): (String, f64) = (m.get(0), m.get(1));
+                sqlx::query("INSERT INTO cycle_count_history (id, task_id, material_id, action, before_qty, after_qty, changed_by) VALUES ($1,$2,$3,'reject',$4,$5,$6)")
+                    .bind(uuid::Uuid::new_v4().to_string()).bind(&id).bind(&mid).bind(sq).bind(sq).bind(&user_id)
+                    .execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+            }
+        }
     }
-    sqlx::query("INSERT INTO audit_log (id,user_id,action,entity,entity_id) VALUES ($1,$2,$3,$4,$5)")
-        .bind(uuid::Uuid::new_v4().to_string()).bind(&user_id).bind(if approved{"approve_opname"}else{"reject_opname"}).bind("stock_opname").bind(id)
+    if approved {
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stock_opname_items WHERE opname_id=$1 AND approved_status != 'approved'")
+            .bind(&id).fetch_one(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+        if remaining == 0 {
+            sqlx::query("UPDATE stock_opname SET status='completed', updated_at=$1 WHERE id=$2").bind(&now).bind(&id).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+        } else {
+            sqlx::query("UPDATE stock_opname SET status='pending_review', updated_at=$1 WHERE id=$2").bind(&now).bind(&id).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+        }
+    }
+    sqlx::query("INSERT INTO audit_log (id,user_id,action,entity,entity_id,details,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
+        .bind(uuid::Uuid::new_v4().to_string()).bind(&user_id).bind(if approved{"approve_opname"}else{"reject_opname"}).bind("stock_opname").bind(&id)
+        .bind(if approved { format!("Approved {} item(s), stock adjusted + journaled", approved_count) } else { "Rejected, recount requested".to_string() }).bind(&now)
         .execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
     tx.commit().await.map_err(|e| crate::server::server_error(e))?;
-    Ok(Json(()))
+    Ok(Json(json!({"opnameId": id, "approved": approved, "approvedItems": approved_count, "journaled": true})))
 }
 
 pub async fn export_opname_xlsx(
@@ -233,6 +301,7 @@ pub async fn save_schedule(
     sqlx::query("INSERT INTO report_schedules (id,report_type,email_to,frequency,day_of_week,hour,is_active) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(id) DO UPDATE SET report_type=$2,email_to=$3,frequency=$4,day_of_week=$5,hour=$6,is_active=$7")
         .bind(&id).bind(rt).bind(em).bind(fr).bind(dw).bind(hr).bind(ia)
         .execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "upsert", "report_schedule", &id, &format!("{} - freq {} hour {} active {}", rt, fr, hr, ia)).await;
     Ok(Json(()))
 }
 
@@ -245,6 +314,7 @@ pub async fn delete_schedule(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     sqlx::query("DELETE FROM report_schedules WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "report_schedule", &id, "Report schedule deleted").await;
     Ok(Json(()))
 }
 
@@ -253,6 +323,9 @@ pub async fn run_schedule(
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
     let sched = sqlx::query("SELECT id,report_type,email_to,frequency,day_of_week,hour,is_active FROM report_schedules WHERE id=$1").bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Schedule not found"}))))?;
     let rt: String = sched.get(1);
     let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();

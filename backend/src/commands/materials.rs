@@ -220,19 +220,23 @@ pub async fn delete_materials_bulk(pool: State<'_, DbPool>, token: String, ids: 
     let mut deleted = 0u64;
     let mut errors = Vec::new();
     for id in &ids {
-        match sqlx::query("DELETE FROM materials WHERE id=$1").bind(id).execute(&mut *tx).await {
-            Ok(_) => {
-                crate::commands::audit_log(&pool.pool, &user_id, "delete", "material", id, "Material hard-deleted").await;
-                deleted += 1;
+        match sqlx::query("UPDATE materials SET is_active=false, updated_at=NOW() WHERE id=$1 AND is_active=true").bind(id).execute(&mut *tx).await {
+            Ok(r) => {
+                if r.rows_affected() > 0 {
+                    crate::commands::audit_log(&pool.pool, &user_id, "delete", "material", id, "Material soft-deleted").await;
+                    deleted += 1;
+                } else {
+                    errors.push(format!("{}: not found or already inactive", id));
+                }
             }
             Err(e) => errors.push(format!("{}: {}", id, e)),
         }
     }
     tx.commit().await?;
     if errors.is_empty() {
-        Ok(format!("Successfully deleted {} materials", deleted))
+        Ok(format!("Successfully deactivated {} materials", deleted))
     } else {
-        Ok(format!("Deleted {} materials with {} errors:\n{}", deleted, errors.len(), errors.join("\n")))
+        Ok(format!("Deactivated {} materials with {} errors:\n{}", deleted, errors.len(), errors.join("\n")))
     }
 }
 

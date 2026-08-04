@@ -8,6 +8,7 @@ use crate::validate;
 use sqlx::Row;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListParams { pub warehouse_id: Option<String>, pub search: Option<String> }
 
 pub async fn list(
@@ -37,6 +38,7 @@ pub async fn create(
         .bind(&id).bind(&rack.warehouse_id).bind(&rack.area).bind(&rack.rack_name).bind(&rack.bin_location).bind(rack.max_capacity).bind(&rack.location_id).bind(&now)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "rack", &id, &format!("{} - {} ({})", rack.rack_name, rack.area, rack.warehouse_id)).await;
     Ok(Json(Rack { id, warehouse_id: rack.warehouse_id, area: rack.area, rack_name: rack.rack_name, bin_location: rack.bin_location, max_capacity: rack.max_capacity, location_id: rack.location_id, created_at: now }))
 }
 
@@ -51,6 +53,7 @@ pub async fn update(
         .bind(&rack.warehouse_id).bind(&rack.area).bind(&rack.rack_name).bind(&rack.bin_location).bind(rack.max_capacity).bind(&rack.location_id).bind(&rack.id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "rack", &rack.id, &format!("{} - {} ({})", rack.rack_name, rack.area, rack.warehouse_id)).await;
     Ok(Json(()))
 }
 
@@ -60,8 +63,13 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
-    sqlx::query("DELETE FROM rack_utilization_log WHERE rack_id=$1").bind(&id).execute(&pool.pool).await.ok();
+    if !validate::check_user_permission(&pool.pool, &user_id, "delete_any").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE rack_id=$1")
+        .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if used > 0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Cannot delete rack: still contains {} material(s)", used)})))); }
+    sqlx::query("DELETE FROM rack_utilization_log WHERE rack_id=$1").bind(&id).execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("racks delete util_log failed: {}", e); Default::default() });
     sqlx::query("DELETE FROM racks WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "rack", &id, "Rack deleted").await;
     Ok(Json(()))
 }
 
@@ -82,7 +90,7 @@ pub async fn occupancy_details(
     let rows = sqlx::query(
         "SELECT r.id, r.warehouse_id, r.rack_name, r.area, r.max_capacity, \
          COUNT(m.id) as material_count, COALESCE(SUM(m.quantity), 0) as total_qty, \
-         COALESCE((SELECT AVG(t.created_at)::text FROM transactions t WHERE t.material_id IN (SELECT id FROM materials WHERE rack_id=r.id) AND t.created_at > NOW() - INTERVAL '30 days'), '') as recent \
+         COALESCE((SELECT MAX(t.created_at::timestamp)::text FROM transactions t WHERE t.material_id IN (SELECT id FROM materials WHERE rack_id=r.id) AND t.created_at::timestamp > NOW() - INTERVAL '30 days'), '') as recent \
          FROM racks r LEFT JOIN materials m ON m.rack_id = r.id AND m.is_active = true GROUP BY r.id ORDER BY r.warehouse_id, r.rack_name"
     )
     .fetch_all(&pool.pool).await
@@ -110,6 +118,7 @@ pub async fn utilization_history(
 
 // --- Putaway Suggestion ---
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct PutawayParams { pub warehouse_id: Option<String>, pub material_id: Option<String> }
 
 pub async fn putaway_suggestion(

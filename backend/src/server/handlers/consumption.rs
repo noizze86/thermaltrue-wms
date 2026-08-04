@@ -70,7 +70,7 @@ async fn persist_consumption_metrics(
     .bind(yesterday_c3).bind(avg_7_c3).bind(trend)
     .bind(qty)
     .bind(&now).bind(&now)
-    .execute(pool).await.ok();
+    .execute(pool).await.unwrap_or_else(|e| { log::warn!("persist_consumption_metrics failed: {}", e); Default::default() });
 }
 
 pub async fn consumption_summary(

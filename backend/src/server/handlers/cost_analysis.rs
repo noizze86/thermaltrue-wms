@@ -42,7 +42,7 @@ async fn persist_cost_metrics(
     .bind(actual_hrs).bind(standard_hrs).bind(labor_rate)
     .bind(penalty).bind(serve)
     .bind(&now).bind(&now)
-    .execute(pool).await.ok();
+    .execute(pool).await.unwrap_or_else(|e| { log::warn!("persist_cost_metrics failed: {}", e); Default::default() });
 }
 
 pub async fn carrying_cost(
@@ -168,7 +168,7 @@ pub async fn cost_to_serve(
         .bind(picking_cost).bind(packing_cost).bind(0.0).bind(admin_cost)
         .bind(total_cost).bind(order_margin).bind(is_profitable)
         .bind(&now)
-        .execute(&pool.pool).await.ok();
+        .execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("cost_per_order insert failed: {}", e); Default::default() });
 
         cost_items.push(json!({
             "transaction_id": tx_id, "transaction_number": tx_num, "type": tx_type,

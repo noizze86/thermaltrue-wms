@@ -347,36 +347,80 @@ pub async fn get_opname_variance(pool: State<'_, DbPool>, token: String, opname_
     Ok(v)
 }
 
-// ── Approve/Reject Opname Adjustment ──
+// ── Approve/Reject Opname Adjustment (journaled) ──
 
 #[tauri::command]
-pub async fn approve_opname_adjustment(pool: State<'_, DbPool>, token: String, opname_id: String, approved: bool) -> Result<(), AppError> {
+pub async fn approve_opname_adjustment(pool: State<'_, DbPool>, token: String, opname_id: String, approved: bool, item_ids: Option<Vec<String>>) -> Result<serde_json::Value, AppError> {
     let user_id = pool.verify_token(&token)?;
     let mut tx = pool.pool.begin().await?;
-
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let opname_number: String = sqlx::query_scalar("SELECT opname_number FROM stock_opname WHERE id=$1")
+        .bind(&opname_id).fetch_one(&mut *tx).await?;
+    let ids = item_ids.unwrap_or_default();
+    let mut approved_count: i64 = 0;
     if approved {
-        let items: Vec<(String, f64)> = sqlx::query("SELECT material_id, physical_qty FROM stock_opname_items WHERE opname_id=$1")
-            .bind(&opname_id).fetch_all(&mut *tx).await?.iter().map(|row| (row.get(0), row.get(1))).collect();
-        for (mid, phy_qty) in items {
-            sqlx::query("UPDATE materials SET quantity=$1 WHERE id=$2")
-                .bind(phy_qty).bind(&mid).execute(&mut *tx).await?;
+        let mut items: Vec<(String, String, f64, f64)> = sqlx::query("SELECT i.id, i.material_id, i.physical_qty, i.system_qty FROM stock_opname_items i WHERE i.opname_id=$1")
+            .bind(&opname_id).fetch_all(&mut *tx).await?.iter().map(|r| (r.get(0), r.get(1), r.get(2), r.get(3))).collect();
+        if !ids.is_empty() { items.retain(|(iid, _, _, _)| ids.contains(iid)); }
+        for (iid, mid, phy_qty, sys_qty) in &items {
+            sqlx::query("UPDATE materials SET quantity=$1 WHERE id=$2").bind(phy_qty).bind(mid).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, reference, notes, user_id, status, approved_by, created_at, updated_at) VALUES ($1,$2,'adjustment',$3,(SELECT warehouse_id FROM materials WHERE id=$3),$4,$5,$6,$7,'approved',$7,$8,$8)")
+                .bind(uuid::Uuid::new_v4().to_string()).bind(&format!("ADJ-{}", opname_number)).bind(mid).bind(phy_qty)
+                .bind(&opname_number).bind("Cycle count approval").bind(&user_id).bind(&now)
+                .execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO cycle_count_history (id, task_id, material_id, action, before_qty, after_qty, changed_by) VALUES ($1,$2,$3,'approve',$4,$5,$6)")
+                .bind(uuid::Uuid::new_v4().to_string()).bind(&opname_id).bind(mid).bind(sys_qty).bind(phy_qty).bind(&user_id)
+                .execute(&mut *tx).await?;
+            sqlx::query("UPDATE stock_opname_items SET approved_status='approved', reviewer_id=$1, reviewed_at=$2 WHERE id=$3")
+                .bind(&user_id).bind(&now).bind(iid).execute(&mut *tx).await?;
+            let acc: f64 = if *sys_qty != 0.0 { 100.0 - ((phy_qty - sys_qty).abs() / sys_qty * 100.0) } else { 100.0 };
+            sqlx::query("UPDATE material_metrics SET accuracy_pct=$1, last_cycle_count_qty=$2, last_cycle_count_date=$3, updated_at=$4 WHERE material_id=$5")
+                .bind(acc).bind(phy_qty).bind(&today).bind(&now).bind(mid).execute(&mut *tx).await?;
+            approved_count += 1;
         }
-        sqlx::query("UPDATE stock_opname SET status='completed', updated_at=NOW() WHERE id=$1")
-            .bind(&opname_id).execute(&mut *tx).await?;
     } else {
-        sqlx::query("UPDATE stock_opname SET status='draft', updated_at=NOW() WHERE id=$1")
-            .bind(&opname_id).execute(&mut *tx).await?;
+        if !ids.is_empty() {
+            for iid in &ids {
+                sqlx::query("UPDATE stock_opname_items SET approved_status='rejected', reviewer_id=$1, reviewed_at=$2 WHERE id=$3")
+                    .bind(&user_id).bind(&now).bind(iid).execute(&mut *tx).await?;
+                let m: Option<(String, f64)> = sqlx::query_as::<_, (String, f64)>("SELECT material_id, system_qty FROM stock_opname_items WHERE id=$1")
+                    .bind(iid).fetch_optional(&mut *tx).await?;
+                if let Some((mid, sys_qty)) = m {
+                    sqlx::query("INSERT INTO cycle_count_history (id, task_id, material_id, action, before_qty, after_qty, changed_by) VALUES ($1,$2,$3,'reject',$4,$5,$6)")
+                        .bind(uuid::Uuid::new_v4().to_string()).bind(&opname_id).bind(&mid).bind(sys_qty).bind(sys_qty).bind(&user_id)
+                        .execute(&mut *tx).await?;
+                }
+            }
+        } else {
+            sqlx::query("UPDATE stock_opname SET status='rejected', updated_at=$1 WHERE id=$2").bind(&now).bind(&opname_id).execute(&mut *tx).await?;
+            for m in sqlx::query("SELECT material_id, system_qty FROM stock_opname_items WHERE opname_id=$1")
+                .bind(&opname_id).fetch_all(&mut *tx).await? {
+                let (mid, sq): (String, f64) = (m.get(0), m.get(1));
+                sqlx::query("INSERT INTO cycle_count_history (id, task_id, material_id, action, before_qty, after_qty, changed_by) VALUES ($1,$2,$3,'reject',$4,$5,$6)")
+                    .bind(uuid::Uuid::new_v4().to_string()).bind(&opname_id).bind(&mid).bind(sq).bind(sq).bind(&user_id)
+                    .execute(&mut *tx).await?;
+            }
+        }
     }
-
+    if approved {
+        let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stock_opname_items WHERE opname_id=$1 AND approved_status != 'approved'")
+            .bind(&opname_id).fetch_one(&mut *tx).await?;
+        if remaining == 0 {
+            sqlx::query("UPDATE stock_opname SET status='completed', updated_at=$1 WHERE id=$2").bind(&now).bind(&opname_id).execute(&mut *tx).await?;
+        } else {
+            sqlx::query("UPDATE stock_opname SET status='pending_review', updated_at=$1 WHERE id=$2").bind(&now).bind(&opname_id).execute(&mut *tx).await?;
+        }
+    }
     let action = if approved { "approve_opname" } else { "reject_opname" };
     sqlx::query(
-        "INSERT INTO audit_log (id, user_id, action, entity, entity_id, details) VALUES ($1,$2,$3,$4,$5,$6)"
+        "INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)"
     )
-        .bind(uuid::Uuid::new_v4().to_string()).bind(&user_id).bind(action).bind("stock_opname").bind(&opname_id).bind("")
+        .bind(uuid::Uuid::new_v4().to_string()).bind(&user_id).bind(action).bind("stock_opname").bind(&opname_id)
+        .bind(if approved { format!("Approved {} item(s), stock adjusted + journaled", approved_count) } else { "Rejected, recount requested".to_string() }).bind(&now)
         .execute(&mut *tx).await?;
-
     tx.commit().await?;
-    Ok(())
+    Ok(serde_json::json!({"opnameId": opname_id, "approved": approved, "approvedItems": approved_count, "journaled": true}))
 }
 
 // ── XLSX Export ──

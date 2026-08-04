@@ -87,6 +87,7 @@ pub async fn create(
         .bind(&id).bind(&body.username).bind(&hash).bind(&body.full_name).bind(&body.role)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "user", &id, &format!("Username {} - role {}", body.username, body.role)).await;
     Ok(Json(()))
 }
 
@@ -101,6 +102,7 @@ pub async fn update(
         .bind(&body.full_name).bind(&body.email).bind(&body.role).bind(body.is_active).bind(&id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "user", &id, &format!("full_name={} role={} is_active={}", body.full_name, body.role, body.is_active)).await;
     Ok(Json(()))
 }
 
@@ -113,6 +115,7 @@ pub async fn delete(
     sqlx::query("DELETE FROM users WHERE id=$1 AND username != 'admin'").bind(&id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "user", &id, "User deleted").await;
     Ok(Json(()))
 }
 
@@ -129,6 +132,7 @@ pub async fn change_password(
         .bind(&hash).bind(&id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "user", &id, "Password changed by admin").await;
     Ok(Json(()))
 }
 
@@ -150,6 +154,7 @@ pub async fn change_my_password(
         .bind(&new_hash).bind(&user_id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "user", &user_id, "User changed own password").await;
     Ok(Json(()))
 }
 
@@ -165,6 +170,7 @@ pub async fn update_photo(
         .bind(photo).bind(&id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "user", &id, "Profile photo updated").await;
     Ok(Json(()))
 }
 

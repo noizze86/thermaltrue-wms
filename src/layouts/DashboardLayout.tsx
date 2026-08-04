@@ -5,11 +5,12 @@ import { useTheme } from "../contexts/ThemeContext"
 import { useOffline } from "../contexts/OfflineContext"
 import { cn } from "../lib/utils"
 import CommandPalette, { useCommandPalette } from "../components/CommandPalette"
+import NotificationBell from "../components/notifications/NotificationBell"
 import {
   LayoutDashboard, Package, ArrowRightLeft, BarChart3, Warehouse,
   FileText, Settings, LogOut, Menu, X, ChevronDown, QrCode,
   Tags, Truck, Users, ClipboardList, FileBarChart, Sun, Moon, Shield,
-  Plus, Search, Radio, Download, User,
+  Plus, Search, Radio, Download, User, Mail,
 } from "lucide-react"
 
 const menuItems = [
@@ -76,6 +77,7 @@ const menuItems = [
       { to: "/settings/roles", label: "Roles", icon: Shield },
       { to: "/settings/label-templates", label: "Label Templates", icon: Tags },
       { to: "/settings/inventory", label: "Inventory Settings", icon: Package },
+      { to: "/settings/email", label: "Email Config", icon: Mail },
       { to: "/settings/api", label: "API Settings", icon: Settings },
       { to: "/settings/network-test", label: "Network Test", icon: Radio },
       { to: "/settings/update-test", label: "Update Test", icon: Download },
@@ -151,15 +153,32 @@ function SidebarItem({ item, collapsed }: { item: MenuItem; collapsed: boolean }
 function filterMenu(items: MenuItem[], can: (perm: string) => boolean): MenuItem[] {
   return items
     .map((item) => {
-      if (item.to === "/settings/users" && !can("manage_users")) return null
-      if (item.to === "/settings/categories" && !can("manage_settings")) return null
-      if (item.to === "/settings/units" && !can("manage_settings")) return null
-      if (item.to === "/settings/suppliers" && !can("manage_settings")) return null
+      if (item.to?.startsWith("/settings")) {
+        if (item.to === "/settings/profile") return item
+        if (item.to === "/settings/users" || item.to === "/settings/roles") return can("manage_users") ? item : null
+        return can("manage_settings") ? item : null
+      }
+      if (item.to === "/warehouse/transfer" || item.to === "/warehouse/opname") {
+        return can("manage_warehouse") ? item : null
+      }
       if (item.children) {
         const filtered = item.children.filter((child) => {
-          if (child.to?.startsWith("/settings") && !can("manage_settings")) return false
-          if (child.to === "/warehouse/transfer" && !can("manage_warehouse")) return false
-          if (child.to === "/warehouse/opname" && !can("manage_warehouse")) return false
+          if (child.to?.startsWith("/settings")) {
+            if (child.to === "/settings/profile") return true
+            if (child.to === "/settings/users" || child.to === "/settings/roles") return can("manage_users")
+            return can("manage_settings")
+          }
+          if (child.to?.startsWith("/materials")) return can("view_materials")
+          if (child.to?.startsWith("/transactions")) {
+            if (child.to === "/transactions/history") return can("view_transactions")
+            return can("manage_transactions")
+          }
+          if (child.to?.startsWith("/analysis")) return can("view_dashboard")
+          if (child.to?.startsWith("/warehouse")) {
+            if (child.to === "/warehouse/transfer" || child.to === "/warehouse/opname") return can("manage_warehouse")
+            return can("view_warehouse")
+          }
+          if (child.to?.startsWith("/reports")) return can("view_reports")
           return true
         })
         if (filtered.length === 0) return null
@@ -204,7 +223,7 @@ export default function DashboardLayout() {
 
   const sidebar = (
     <aside className={cn(
-      "border-r bg-background transition-all duration-300 flex flex-col",
+      "border-r bg-background transition-all duration-300 flex flex-col no-print",
       collapsed ? "w-16" : "w-64",
       isMobile && "fixed inset-y-0 left-0 z-40 shadow-xl",
       isMobile && !mobileOpen && "-translate-x-full"
@@ -245,6 +264,7 @@ export default function DashboardLayout() {
           {!collapsed && <span className="flex-1 text-left">Search...</span>}
           {!collapsed && <kbd className="ml-auto text-xs text-muted-foreground border rounded px-1.5 py-0.5">Ctrl+K</kbd>}
         </button>
+        <NotificationBell collapsed={collapsed} />
         <button onClick={toggleTheme} className="flex w-full items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-accent-foreground">
           {theme === "dark" ? <Sun className="h-4 w-4 shrink-0" /> : <Moon className="h-4 w-4 shrink-0" />}
           {!collapsed && (
@@ -291,6 +311,7 @@ export default function DashboardLayout() {
             <button onClick={() => setPaletteOpen(true)} className="ml-auto rounded-md p-1 hover:bg-accent">
               <Search className="h-5 w-5" />
             </button>
+            <NotificationBell />
             <button onClick={toggleTheme} className="rounded-md p-1 hover:bg-accent">
               {theme === "dark" ? <Sun className="h-5 w-5" /> : <Moon className="h-5 w-5" />}
             </button>
@@ -304,19 +325,26 @@ export default function DashboardLayout() {
       {/* Mobile bottom nav */}
       {isMobile && (
         <nav className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background flex items-center justify-around py-1 pb-2">
-          {bottomNavItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              className={({ isActive }) =>
-                cn("flex flex-col items-center gap-0.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors",
-                  isActive ? "text-primary" : "text-muted-foreground hover:text-foreground")
-              }
-            >
-              <item.icon className="h-5 w-5" />
-              {item.label}
-            </NavLink>
-          ))}
+          {bottomNavItems
+            .filter((item) => {
+              if (item.to === "/dashboard") return can("view_dashboard")
+              if (item.to === "/materials/stock") return can("view_materials")
+              if (item.to === "/transactions/in" || item.to === "/transactions/out") return can("manage_transactions")
+              return true
+            })
+            .map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                className={({ isActive }) =>
+                  cn("flex flex-col items-center gap-0.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors",
+                    isActive ? "text-primary" : "text-muted-foreground hover:text-foreground")
+                }
+              >
+                <item.icon className="h-5 w-5" />
+                {item.label}
+              </NavLink>
+            ))}
         </nav>
       )}
     </div>

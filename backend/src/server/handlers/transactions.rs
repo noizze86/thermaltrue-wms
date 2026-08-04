@@ -18,6 +18,7 @@ pub async fn list(
     Extension(user_id): Extension<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Transaction>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     let search_pat = params.search.as_ref().filter(|s| !s.is_empty()).map(|s| format!("%{}%", s));
@@ -131,15 +132,47 @@ pub async fn create(
     }
 
     // Ensure sku_mapping exists (trigger trg_transactions_to_source handles source table insert)
-    sqlx::query(
+    if let Err(e) = sqlx::query(
         "INSERT INTO sku_mapping (material_id, warehouse_id, sku_code, sku_name, is_active)
          VALUES ($1, COALESCE($2, ''), '', '', true)
          ON CONFLICT (material_id, warehouse_id) DO NOTHING"
     )
     .bind(&mat_id).bind(&body.tx.warehouse_id)
-    .execute(&mut *db_tx).await.ok();
+    .execute(&mut *db_tx).await {
+        log::warn!("sku_mapping insert failed (non-critical): {}", e);
+    }
 
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
+
+    // Fase 4: soft-freeze warning — record in-progress cycle count tasks touched by this transaction
+    if !mat_id.is_empty() && (body.tx.tx_type == "in" || body.tx.tx_type == "out") {
+        let active_tasks = sqlx::query("SELECT DISTINCT o.id, o.opname_number, o.assigned_to FROM stock_opname o JOIN stock_opname_items i ON i.opname_id = o.id WHERE i.material_id=$1 AND o.status IN ('in_progress','pending_review')")
+            .bind(&mat_id).fetch_all(&pool.pool).await
+            .map_err(|e| crate::server::server_error(e))?;
+        if !active_tasks.is_empty() {
+            let qty_delta: f64 = if body.tx.tx_type == "in" { qty } else { -qty };
+            for t in &active_tasks {
+                let task_id: String = t.get(0);
+                let opname_number: String = t.get(1);
+                let assigned: String = t.get(2);
+                sqlx::query("INSERT INTO cycle_count_history (id, task_id, material_id, action, before_qty, after_qty, changed_by, created_at) VALUES ($1,$2,$3,'soft_freeze_warning',$4,$5,$6,$7)")
+                    .bind(uuid::Uuid::new_v4().to_string()).bind(&task_id).bind(&mat_id)
+                    .bind(0.0_f64).bind(0.0_f64).bind(&user_id)
+                    .bind(chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string())
+                    .execute(&pool.pool).await
+                    .map_err(|e| crate::server::server_error(e))?;
+                if !assigned.is_empty() {
+                    sqlx::query("INSERT INTO app_notifications (id, user_id, title, message, notif_type) VALUES ($1,$2,$3,$4,'warning')")
+                        .bind(uuid::Uuid::new_v4().to_string()).bind(&assigned)
+                        .bind(format!("Stock changed during cycle count {}", opname_number))
+                        .bind(format!("Transaction {} ({:+.2}) affected material during active count. Reconcile before approving.", txn_number, qty_delta))
+                        .execute(&pool.pool).await
+                        .map_err(|e| crate::server::server_error(e))?;
+                }
+            }
+        }
+    }
+
     Ok(Json(Transaction { id, transaction_number: txn_number, tx_type: body.tx.tx_type, material_id: mat_id, warehouse_id: body.tx.warehouse_id, rack_id: body.tx.rack_id, quantity: qty, price, reference: body.tx.reference, notes: body.tx.notes, user_id: body.tx.user_id, status, approved_by: body.tx.approved_by, po_number: body.tx.po_number, invoice_no: body.tx.invoice_no, destination: body.tx.destination, created_at: now.clone(), updated_at: Some(now) }))
 }
 
@@ -552,6 +585,7 @@ pub async fn create_purchase_order(
     Extension(user_id): Extension<String>,
     Json(body): Json<CreatePoBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let id = gen_id();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*)+1 FROM purchase_orders")
@@ -573,7 +607,7 @@ pub async fn create_purchase_order(
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("create").bind("purchase_order").bind(&id).bind(&format!("PO {}", po_number)).bind(&now)
-        .execute(&pool.pool).await.ok();
+        .execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("transactions audit_log create PO failed: {}", e); Default::default() });
     Ok(Json(json!({"id": id, "po_number": po_number, "status": body.po.status, "created_at": now})))
 }
 
@@ -595,7 +629,7 @@ pub async fn update_purchase_order_status(
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("update_status").bind("purchase_order").bind(&id).bind(&format!("Status -> {}", body.status)).bind(&now)
-        .execute(&pool.pool).await.ok();
+        .execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("transactions audit_log update PO status failed: {}", e); Default::default() });
     Ok(Json(json!({"message": "PO status updated"})))
 }
 
@@ -668,6 +702,7 @@ pub async fn create_sales_order(
     Extension(user_id): Extension<String>,
     Json(body): Json<CreateSoBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let id = gen_id();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let count: i64 = sqlx::query_scalar::<_, i64>("SELECT COUNT(*)+1 FROM sales_orders")
@@ -689,7 +724,7 @@ pub async fn create_sales_order(
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("create").bind("sales_order").bind(&id).bind(&format!("SO {}", so_number)).bind(&now)
-        .execute(&pool.pool).await.ok();
+        .execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("transactions audit_log create SO failed: {}", e); Default::default() });
     Ok(Json(json!({"id": id, "so_number": so_number, "status": body.so.status, "created_at": now})))
 }
 
@@ -702,6 +737,7 @@ pub async fn update_sales_order_status(
     Extension(user_id): Extension<String>,
     Json(body): Json<UpdateSoStatusBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query("UPDATE sales_orders SET status=$1, updated_at=$2 WHERE id=$3")
         .bind(&body.status).bind(&now).bind(&id)
@@ -710,7 +746,7 @@ pub async fn update_sales_order_status(
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("update_status").bind("sales_order").bind(&id).bind(&format!("Status -> {}", body.status)).bind(&now)
-        .execute(&pool.pool).await.ok();
+        .execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("transactions audit_log update SO status failed: {}", e); Default::default() });
     Ok(Json(json!({"message": "SO status updated"})))
 }
 
@@ -823,6 +859,7 @@ pub async fn create_quality_inspection(
     Extension(user_id): Extension<String>,
     Json(body): Json<CreateQiBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let id = gen_id();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query(
@@ -834,7 +871,7 @@ pub async fn create_quality_inspection(
     let audit_id = gen_id();
     sqlx::query("INSERT INTO audit_log (id, user_id, action, entity, entity_id, details, created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)")
         .bind(&audit_id).bind(&user_id).bind("create").bind("quality_inspection").bind(&id).bind(&format!("Material {} -> {}", body.material_id, body.status)).bind(&now)
-        .execute(&pool.pool).await.ok();
+        .execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("transactions audit_log create quality_inspection failed: {}", e); Default::default() });
     Ok(Json(json!({"id": id, "tx_id": body.tx_id, "material_id": body.material_id, "status": body.status, "notes": body.notes, "created_at": now})))
 }
 

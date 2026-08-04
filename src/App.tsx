@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, lazy, Suspense } from "react"
 import { HashRouter, Routes, Route, Navigate } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { AuthProvider, useAuth } from "./contexts/AuthContext"
@@ -11,47 +11,49 @@ import { getDetectedUrl, getDetectedUrlDisplay } from "./api/lan-detector"
 import { isTauri } from "./lib/tauri"
 import { useUpdateLogger } from "./hooks/useUpdateLogger"
 import DashboardLayout from "./layouts/DashboardLayout"
-import LoginPage from "./pages/LoginPage"
-import DashboardPage from "./pages/dashboard/DashboardPage"
-import StockPage from "./pages/materials/StockPage"
-import QrGeneratorPage from "./pages/materials/QrGeneratorPage"
-import LabelPrintPage from "./pages/materials/LabelPrintPage"
-import TransactionInPage from "./pages/transactions/TransactionInPage"
-import TransactionOutPage from "./pages/transactions/TransactionOutPage"
-import TransactionHistoryPage from "./pages/transactions/TransactionHistoryPage"
-import AnalysisDashboardPage from "./pages/analysis/AnalysisDashboardPage"
-import MaterialAnalysisPage from "./pages/analysis/MaterialAnalysisPage"
-import ConsumptionPage from "./pages/analysis/ConsumptionPage"
-import CostAnalysisPage from "./pages/analysis/CostAnalysisPage"
-import AbcAnalysisPage from "./pages/analysis/AbcAnalysisPage"
-import ForecasterPage from "./pages/analysis/ForecasterPage"
-import WarehouseDashboardPage from "./pages/warehouse/WarehouseDashboardPage"
-import WarehouseListPage from "./pages/warehouse/WarehouseListPage"
-import RackPage from "./pages/warehouse/RackPage"
-import TransferPage from "./pages/warehouse/TransferPage"
-import StockOpnamePage from "./pages/warehouse/StockOpnamePage"
-import ReportSummaryPage from "./pages/reports/ReportSummaryPage"
-import StockReportPage from "./pages/reports/StockReportPage"
-import TransactionReportPage from "./pages/reports/TransactionReportPage"
-import OpnameReportPage from "./pages/reports/OpnameReportPage"
-import MultiWarehouseComparisonPage from "./pages/reports/MultiWarehouseComparisonPage"
-import PivotReportPage from "./pages/reports/PivotReportPage"
-import VarianceRootCausePage from "./pages/reports/VarianceRootCausePage"
-import SystemPage from "./pages/settings/SystemPage"
-import UsersPage from "./pages/settings/UsersPage"
-import ProfilePage from "./pages/settings/ProfilePage"
-import InventorySettingsPage from "./pages/settings/InventorySettingsPage"
-import TransactionDetailPage from "./pages/transactions/TransactionDetailPage"
-import CategoriesPage from "./pages/settings/CategoriesPage"
-import UnitsPage from "./pages/settings/UnitsPage"
-import SuppliersPage from "./pages/settings/SuppliersPage"
-import AuditLogPage from "./pages/settings/AuditLogPage"
-import RolesPage from "./pages/settings/RolesPage"
-import LabelTemplatesPage from "./pages/settings/LabelTemplatesPage"
-import ApiSettingsPage from "./pages/settings/ApiSettingsPage"
-import NetworkTestPage from "./pages/settings/NetworkTestPage"
-import UpdateTestPage from "./pages/settings/UpdateTestPage"
-import MasterDataPage from "./pages/MasterDataPage"
+
+const LoginPage = lazy(() => import("./pages/LoginPage"))
+const DashboardPage = lazy(() => import("./pages/dashboard/DashboardPage"))
+const StockPage = lazy(() => import("./pages/materials/StockPage"))
+const QrGeneratorPage = lazy(() => import("./pages/materials/QrGeneratorPage"))
+const LabelPrintPage = lazy(() => import("./pages/materials/LabelPrintPage"))
+const TransactionInPage = lazy(() => import("./pages/transactions/TransactionInPage"))
+const TransactionOutPage = lazy(() => import("./pages/transactions/TransactionOutPage"))
+const TransactionHistoryPage = lazy(() => import("./pages/transactions/TransactionHistoryPage"))
+const AnalysisDashboardPage = lazy(() => import("./pages/analysis/AnalysisDashboardPage"))
+const MaterialAnalysisPage = lazy(() => import("./pages/analysis/MaterialAnalysisPage"))
+const ConsumptionPage = lazy(() => import("./pages/analysis/ConsumptionPage"))
+const CostAnalysisPage = lazy(() => import("./pages/analysis/CostAnalysisPage"))
+const AbcAnalysisPage = lazy(() => import("./pages/analysis/AbcAnalysisPage"))
+const ForecasterPage = lazy(() => import("./pages/analysis/ForecasterPage"))
+const WarehouseDashboardPage = lazy(() => import("./pages/warehouse/WarehouseDashboardPage"))
+const WarehouseListPage = lazy(() => import("./pages/warehouse/WarehouseListPage"))
+const RackPage = lazy(() => import("./pages/warehouse/RackPage"))
+const TransferPage = lazy(() => import("./pages/warehouse/TransferPage"))
+const StockOpnamePage = lazy(() => import("./pages/warehouse/StockOpnamePage"))
+const ReportSummaryPage = lazy(() => import("./pages/reports/ReportSummaryPage"))
+const StockReportPage = lazy(() => import("./pages/reports/StockReportPage"))
+const TransactionReportPage = lazy(() => import("./pages/reports/TransactionReportPage"))
+const OpnameReportPage = lazy(() => import("./pages/reports/OpnameReportPage"))
+const MultiWarehouseComparisonPage = lazy(() => import("./pages/reports/MultiWarehouseComparisonPage"))
+const PivotReportPage = lazy(() => import("./pages/reports/PivotReportPage"))
+const VarianceRootCausePage = lazy(() => import("./pages/reports/VarianceRootCausePage"))
+const SystemPage = lazy(() => import("./pages/settings/SystemPage"))
+const UsersPage = lazy(() => import("./pages/settings/UsersPage"))
+const ProfilePage = lazy(() => import("./pages/settings/ProfilePage"))
+const InventorySettingsPage = lazy(() => import("./pages/settings/InventorySettingsPage"))
+const TransactionDetailPage = lazy(() => import("./pages/transactions/TransactionDetailPage"))
+const CategoriesPage = lazy(() => import("./pages/settings/CategoriesPage"))
+const UnitsPage = lazy(() => import("./pages/settings/UnitsPage"))
+const SuppliersPage = lazy(() => import("./pages/settings/SuppliersPage"))
+const AuditLogPage = lazy(() => import("./pages/settings/AuditLogPage"))
+const RolesPage = lazy(() => import("./pages/settings/RolesPage"))
+const LabelTemplatesPage = lazy(() => import("./pages/settings/LabelTemplatesPage"))
+const ApiSettingsPage = lazy(() => import("./pages/settings/ApiSettingsPage"))
+const NetworkTestPage = lazy(() => import("./pages/settings/NetworkTestPage"))
+const EmailSettingsPage = lazy(() => import("./pages/settings/EmailSettingsPage"))
+const UpdateTestPage = lazy(() => import("./pages/settings/UpdateTestPage"))
+const MasterDataPage = lazy(() => import("./pages/MasterDataPage"))
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -173,6 +175,7 @@ export default function App() {
         <AuthProvider>
           <HashRouter>
             <ErrorBoundary>
+            <Suspense fallback={<div className="flex h-screen items-center justify-center text-sm text-muted-foreground">Loading&hellip;</div>}>
             <Routes>
               <Route path="/login" element={<LoginPage />} />
               <Route
@@ -220,12 +223,14 @@ export default function App() {
                 <Route path="settings/audit-log" element={<AuditLogPage />} />
                 <Route path="settings/roles" element={<RolesPage />} />
                 <Route path="settings/label-templates" element={<LabelTemplatesPage />} />
+                <Route path="settings/email" element={<EmailSettingsPage />} />
                 <Route path="settings/inventory" element={<InventorySettingsPage />} />
                 <Route path="settings/api" element={<ApiSettingsPage />} />
                 <Route path="settings/network-test" element={<NetworkTestPage />} />
                 <Route path="settings/update-test" element={<UpdateTestPage />} />
               </Route>
             </Routes>
+            </Suspense>
             <Toaster />
             </ErrorBoundary>
           </HashRouter>

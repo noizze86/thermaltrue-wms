@@ -53,6 +53,10 @@ pub struct ServerStatus {
 }
 
 async fn check_health(timeout_secs: u64) -> bool {
+    check_health_at("http://localhost:3000", timeout_secs).await
+}
+
+async fn check_health_at(url: &str, timeout_secs: u64) -> bool {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(2))
         .build().ok();
@@ -60,9 +64,10 @@ async fn check_health(timeout_secs: u64) -> bool {
         Some(c) => c,
         None => return false,
     };
+    let health_url = format!("{}/api/health", url.trim_end_matches('/'));
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(timeout_secs);
     while std::time::Instant::now() < deadline {
-        if let Ok(resp) = client.get("http://localhost:3000/api/health").send().await {
+        if let Ok(resp) = client.get(&health_url).send().await {
             if resp.status().is_success() {
                 return true;
             }
@@ -75,6 +80,14 @@ async fn check_health(timeout_secs: u64) -> bool {
 #[tauri::command]
 async fn ensure_server_running() -> Result<ServerStatus, String> {
     startup_log("ensure_server_running ENTERED");
+    let is_client_only = std::env::args().any(|a| a == "--client-only");
+    if is_client_only {
+        startup_log("ensure_server_running: client-only mode, checking HTTP health...");
+        if check_health(5).await {
+            return Ok(ServerStatus { status: "running".into(), message: "Server is reachable.".into() });
+        }
+        return Ok(ServerStatus { status: "unreachable".into(), message: "Cannot reach server at the configured URL.".into() });
+    }
     #[cfg(windows)]
     {
         startup_log("ensure_server_running: cfg(windows) active, running sc query ThermaltrueServer...");
@@ -275,12 +288,20 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
 
         .setup(|app| {
             startup_log("Tauri setup hook started...");
+            let is_client_only = std::env::args().any(|a| a == "--client-only");
+            if is_client_only {
+                startup_log("client-only mode: skipping local server.exe management");
+            }
             // Ensure backend server is running
             startup_log("ensure_server_running: masuk setup");
-            let server_exe = std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.join("server.exe")))
-                .filter(|p| p.exists());
+            let server_exe = if is_client_only {
+                None
+            } else {
+                std::env::current_exe()
+                    .ok()
+                    .and_then(|p| p.parent().map(|d| d.join("server.exe")))
+                    .filter(|p| p.exists())
+            };
             if let Some(srv) = server_exe {
                 startup_log(&format!("ensure_server_running: server.exe ditemukan di {:?}", srv));
                 match std::process::Command::new("sc")
@@ -328,6 +349,66 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
                 }
             } else {
                 startup_log("ensure_server_running: server.exe not found alongside app.exe");
+            }
+            // Tunggu server sehat (periksa URL target), lalu pastikan window ada di URL server
+            // (auto-recover jika load awal gagal karena server belum aktif)
+            let target_url = app.config().app.windows.iter()
+                .find(|w| w.label == "main")
+                .and_then(|w| match &w.url {
+                    tauri::WebviewUrl::External(u) => Some(u.to_string()),
+                    tauri::WebviewUrl::App(p) => Some(format!("tauri://localhost/{}", p.display())),
+                    tauri::WebviewUrl::CustomProtocol(u) => Some(u.to_string()),
+                    _ => None,
+                })
+                .unwrap_or_else(|| "http://127.0.0.1:3000".into());
+            startup_log(&format!("ensure_server_running: target URL = {}", target_url));
+            // Coba target URL config dulu, lalu fallback ke localhost/127.0.0.1
+            // (IP mesin bisa berubah via DHCP; app di mesin server tetap harus jalan)
+            let mut nav_url = target_url.clone();
+            let mut healthy = tauri::async_runtime::block_on(check_health_at(&nav_url, 1));
+            for i in 1..=8 {
+                if healthy {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_secs(1));
+                healthy = tauri::async_runtime::block_on(check_health_at(&nav_url, 1));
+                startup_log(&format!("ensure_server_running: menunggu server sehat... attempt {}/8", i));
+            }
+            if !healthy && nav_url != "http://localhost:3000" {
+                startup_log("ensure_server_running: mencoba fallback localhost:3000...");
+                if tauri::async_runtime::block_on(check_health_at("http://localhost:3000", 2)) {
+                    nav_url = "http://localhost:3000".into();
+                    healthy = true;
+                }
+            }
+            if !healthy && nav_url != "http://127.0.0.1:3000" {
+                startup_log("ensure_server_running: mencoba fallback 127.0.0.1:3000...");
+                if tauri::async_runtime::block_on(check_health_at("http://127.0.0.1:3000", 2)) {
+                    nav_url = "http://127.0.0.1:3000".into();
+                    healthy = true;
+                }
+            }
+            if let Some(window) = app.get_webview_window("main") {
+                let current = window.url().map(|u| u.to_string()).unwrap_or_default();
+                if healthy {
+                    if current.is_empty() || current == "about:blank" || !current.starts_with(&nav_url) {
+                        startup_log(&format!("ensure_server_running: navigasi window dari '{}' ke {}", current, nav_url));
+                        if let Ok(u) = tauri::Url::parse(&nav_url) {
+                            let _ = window.navigate(u);
+                        }
+                    } else {
+                        startup_log("ensure_server_running: window sudah di URL server");
+                    }
+                } else {
+                    // Last resort: tetap arahkan ke URL config supaya halaman error frontend
+                    // (dengan tombol Coba Lagi/Ubah URL) muncul, bukan error page WebView2
+                    if current.is_empty() || current == "about:blank" || !current.starts_with(&target_url) {
+                        startup_log(&format!("ensure_server_running: navigasi last-resort ke {}", target_url));
+                        if let Ok(u) = tauri::Url::parse(&target_url) {
+                            let _ = window.navigate(u);
+                        }
+                    }
+                }
             }
             // Log window URL for debugging
             if let Some(window) = app.get_webview_window("main") {
@@ -555,6 +636,20 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             commands::generate_picking_list_pdf,
             commands::generate_do_pdf,
             commands::auto_generate_cycle_opname,
+            commands::get_cycle_scope_items,
+            commands::get_cycle_task_history,
+    commands::get_cycle_zones,
+    commands::create_zone_schedule,
+    commands::delete_zone_schedule,
+    commands::get_cycle_summary,
+    commands::get_cycle_accuracy,
+    commands::get_cycle_by_staff,
+    commands::get_cycle_by_location,
+    commands::export_cycle_xlsx,
+    commands::recount_cycle_task,
+    commands::get_notifications,
+    commands::mark_notification_read,
+    commands::mark_all_notifications_read,
             commands::batch_transfer_rack,
             commands::generate_count_sheet_pdf,
             commands::run_report_schedule,

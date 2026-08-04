@@ -197,7 +197,7 @@ pub async fn update_rack(pool: State<'_, DbPool>, token: String, rack: Rack) -> 
 pub async fn delete_rack(pool: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
     let user_id = pool.verify_token(&token)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
-    sqlx::query("DELETE FROM rack_utilization_log WHERE rack_id=$1").bind(&id).execute(&pool.pool).await.ok();
+    sqlx::query("DELETE FROM rack_utilization_log WHERE rack_id=$1").bind(&id).execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("delete_rack util_log cascade failed: {}", e); Default::default() });
     sqlx::query("DELETE FROM racks WHERE id=$1").bind(&id).execute(&pool.pool).await?;
     Ok(())
 }
@@ -342,7 +342,12 @@ pub async fn get_stock_opnames(pool: State<'_, DbPool>, token: String) -> Result
         .fetch_all(&pool.pool)
         .await?;
     let list = rows.iter().map(|row| {
-        StockOpname { id: row.get(0), opname_number: row.get(1), warehouse_id: row.get::<Option<String>, _>(2), status: row.get(3), notes: row.get(4), created_by: row.get(5), created_at: row.get(6), updated_at: row.get(7) }
+        StockOpname {
+            id: row.get(0), opname_number: row.get(1), warehouse_id: row.get::<Option<String>, _>(2),
+            status: row.get(3), notes: row.get(4), created_by: row.get(5), created_at: row.get(6), updated_at: row.get(7),
+            cycle_mode: "manual".into(), task_type: "opname".into(), deadline: String::new(), blind_mode: false,
+            tolerance_pct: 5.0, assigned_to: String::new(), zone_id: String::new(), recount_of: String::new(),
+        }
     }).collect();
     Ok(list)
 }
@@ -358,10 +363,13 @@ pub async fn create_stock_opname(pool: State<'_, DbPool>, token: String, so: Sto
         .await
         .unwrap_or(1);
     let opname_number = format!("OPN-{:04}", count);
-    sqlx::query("INSERT INTO stock_opname (id, opname_number, warehouse_id, status, notes, created_by, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
-        .bind(&id).bind(&opname_number).bind(&so.warehouse_id).bind("draft").bind(&so.notes).bind(&so.created_by).bind(&now).bind(&now)
-        .execute(&pool.pool).await?;
-    Ok(StockOpname { id, opname_number, warehouse_id: so.warehouse_id, status: "draft".into(), notes: so.notes, created_by: so.created_by, created_at: now.clone(), updated_at: now })
+    let mut db_tx = pool.pool.begin().await?;
+    sqlx::query("INSERT INTO stock_opname (id, opname_number, warehouse_id, status, notes, created_by, created_at, updated_at, cycle_mode, deadline, blind_mode, assigned_to, zone_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)")
+        .bind(&id).bind(&opname_number).bind(&so.warehouse_id).bind("open").bind(&so.notes).bind(&so.created_by).bind(&now).bind(&now)
+        .bind(&so.cycle_mode).bind(&so.deadline).bind(so.blind_mode).bind(&so.assigned_to).bind(&so.zone_id)
+        .execute(&mut *db_tx).await?;
+    db_tx.commit().await?;
+    Ok(StockOpname { id, opname_number, warehouse_id: so.warehouse_id, status: "open".into(), notes: so.notes, created_by: so.created_by, created_at: now.clone(), updated_at: now, cycle_mode: so.cycle_mode, task_type: so.task_type, deadline: so.deadline, blind_mode: so.blind_mode, tolerance_pct: so.tolerance_pct, assigned_to: so.assigned_to, zone_id: so.zone_id, recount_of: so.recount_of })
 }
 
 #[tauri::command]
@@ -392,7 +400,7 @@ pub async fn update_stock_opname_status(pool: State<'_, DbPool>, token: String, 
             }
             sqlx::query("UPDATE materials SET quantity=$1 WHERE id=$2")
                 .bind(phy_qty).bind(&mid)
-                .execute(&mut *tx).await.ok();
+                .execute(&mut *tx).await?;
         }
     }
     tx.commit().await?;
@@ -402,12 +410,12 @@ pub async fn update_stock_opname_status(pool: State<'_, DbPool>, token: String, 
 #[tauri::command]
 pub async fn get_stock_opname_items(pool: State<'_, DbPool>, token: String, opname_id: String) -> Result<Vec<StockOpnameItem>, AppError> {
     pool.verify_token(&token)?;
-    let rows = sqlx::query("SELECT id, opname_id, material_id, system_qty, physical_qty, difference, notes FROM stock_opname_items WHERE opname_id=$1")
+    let rows = sqlx::query("SELECT id, opname_id, material_id, system_qty, physical_qty, difference, notes, cycle_round, approved_status, reviewer_id, reviewed_at, remark FROM stock_opname_items WHERE opname_id=$1")
         .bind(&opname_id)
         .fetch_all(&pool.pool)
         .await?;
     let list = rows.iter().map(|row| {
-        StockOpnameItem { id: row.get(0), opname_id: row.get(1), material_id: row.get(2), system_qty: row.get(3), physical_qty: row.get(4), difference: row.get(5), notes: row.get(6) }
+        StockOpnameItem { id: row.get(0), opname_id: row.get(1), material_id: row.get(2), system_qty: row.get(3), physical_qty: row.get(4), difference: row.get(5), notes: row.get(6), cycle_round: row.get(7), approved_status: row.get(8), reviewer_id: row.get(9), reviewed_at: row.get(10), remark: row.get(11) }
     }).collect();
     Ok(list)
 }
@@ -438,6 +446,234 @@ pub async fn save_stock_opname_item(pool: State<'_, DbPool>, token: String, item
             .bind(&id).bind(&item.opname_id).bind(&item.material_id).bind(item.system_qty).bind(item.physical_qty).bind(item.physical_qty - item.system_qty).bind(&item.notes)
             .execute(&pool.pool).await?;
     }
+    Ok(())
+}
+
+// --- Cycle Count ---
+#[tauri::command]
+pub async fn get_cycle_scope_items(pool: State<'_, DbPool>, token: String, warehouse_id: Option<String>, category_id: Option<String>, rack_id: Option<String>) -> Result<serde_json::Value, AppError> {
+    pool.verify_token(&token)?;
+    let mut builder = QueryBuilder::new("SELECT m.id, m.sku, m.name, m.quantity, m.min_stock, COALESCE(m.rack_id,'') AS rack_id, COALESCE(m.category_id,'') AS category_id FROM materials m WHERE m.is_active=true");
+    if let Some(ref w) = warehouse_id { builder.push(" AND m.warehouse_id = "); builder.push_bind(w); }
+    if let Some(ref c) = category_id { builder.push(" AND m.category_id = "); builder.push_bind(c); }
+    if let Some(ref r) = rack_id { builder.push(" AND m.rack_id = "); builder.push_bind(r); }
+    builder.push(" ORDER BY m.sku");
+    let rows = builder.build().fetch_all(&pool.pool).await?;
+    Ok(serde_json::json!(rows.iter().map(|row| {
+        serde_json::json!({"id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"),
+            "name": row.get::<String,_>("name"), "quantity": row.get::<f64,_>("quantity"),
+            "min_stock": row.get::<Option<f64>,_>("min_stock"),
+            "rack_id": row.get::<String,_>("rack_id"), "category_id": row.get::<String,_>("category_id")})
+    }).collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub async fn get_cycle_task_history(pool: State<'_, DbPool>, token: String, task_id: String) -> Result<serde_json::Value, AppError> {
+    pool.verify_token(&token)?;
+    let rows = sqlx::query("SELECT id, task_id, material_id, action, before_qty, after_qty, changed_by, created_at FROM cycle_count_history WHERE task_id=$1 ORDER BY created_at DESC")
+        .bind(&task_id).fetch_all(&pool.pool).await?;
+    Ok(serde_json::json!(rows.iter().map(|row| {
+        serde_json::json!({"id": row.get::<String,_>("id"), "task_id": row.get::<String,_>("task_id"),
+            "material_id": row.get::<String,_>("material_id"), "action": row.get::<String,_>("action"),
+            "before_qty": row.get::<f64,_>("before_qty"), "after_qty": row.get::<f64,_>("after_qty"),
+            "changed_by": row.get::<String,_>("changed_by"), "created_at": row.get::<String,_>("created_at")})
+    }).collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub async fn get_cycle_zones(pool: State<'_, DbPool>, token: String) -> Result<serde_json::Value, AppError> {
+    pool.verify_token(&token)?;
+    let rows = sqlx::query("SELECT id, zone_id, warehouse_id, assign_mode, last_date, next_date, created_at FROM cycle_count_zones ORDER BY next_date")
+        .fetch_all(&pool.pool).await?;
+    Ok(serde_json::json!(rows.iter().map(|row| {
+        serde_json::json!({"id": row.get::<String,_>("id"), "zone_id": row.get::<String,_>("zone_id"),
+            "warehouse_id": row.get::<Option<String>,_>("warehouse_id"), "assign_mode": row.get::<String,_>("assign_mode"),
+            "last_date": row.get::<String,_>("last_date"), "next_date": row.get::<String,_>("next_date"),
+            "created_at": row.get::<String,_>("created_at")})
+    }).collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub async fn create_zone_schedule(pool: State<'_, DbPool>, token: String, zone_id: String, warehouse_id: Option<String>, assign_mode: String) -> Result<serde_json::Value, AppError> {
+    let user_id = pool.verify_token(&token)?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
+    if assign_mode != "daily" && assign_mode != "weekly" { return Err(AppError::Validation("assign_mode must be 'daily' or 'weekly'".into())); }
+    let id = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    sqlx::query("INSERT INTO cycle_count_zones (id, zone_id, warehouse_id, assign_mode, next_date, created_at) VALUES ($1,$2,$3,$4,CURRENT_DATE,$5)")
+        .bind(&id).bind(&zone_id).bind(&warehouse_id).bind(&assign_mode).bind(&now)
+        .execute(&pool.pool).await?;
+    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
+    Ok(serde_json::json!({"id": id, "zone_id": zone_id, "warehouse_id": warehouse_id, "assign_mode": assign_mode, "last_date": "", "next_date": today, "created_at": now}))
+}
+
+#[tauri::command]
+pub async fn delete_zone_schedule(pool: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
+    let user_id = pool.verify_token(&token)?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
+    sqlx::query("DELETE FROM cycle_count_zones WHERE id=$1").bind(&id).execute(&pool.pool).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn get_cycle_summary(pool: State<'_, DbPool>, token: String) -> Result<serde_json::Value, AppError> {
+    pool.verify_token(&token)?;
+    let by_status: Vec<(String, i64)> = sqlx::query("SELECT status, COUNT(*) FROM stock_opname GROUP BY status")
+        .fetch_all(&pool.pool).await?
+        .iter().map(|r| (r.get(0), r.get(1))).collect();
+    let mut status_map = serde_json::Map::new();
+    for (s, c) in by_status { status_map.insert(s, serde_json::json!(c)); }
+    let total_tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stock_opname").fetch_one(&pool.pool).await.unwrap_or(0);
+    let open_tasks: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM stock_opname WHERE status IN ('open','in_progress','pending_review')").fetch_one(&pool.pool).await.unwrap_or(0);
+    let total_diff: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(ABS(difference)),0) FROM stock_opname_items i JOIN stock_opname o ON o.id=i.opname_id WHERE o.status IN ('completed','pending_review')").fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let avg_acc: f64 = sqlx::query_scalar("SELECT COALESCE(AVG(accuracy_pct),0) FROM material_metrics WHERE accuracy_pct > 0").fetch_one(&pool.pool).await.unwrap_or(0.0);
+    Ok(serde_json::json!({"totalTasks": total_tasks, "openTasks": open_tasks, "byStatus": status_map, "totalDiscrepancy": total_diff, "avgAccuracy": avg_acc}))
+}
+
+#[tauri::command]
+pub async fn get_cycle_accuracy(pool: State<'_, DbPool>, token: String, days: Option<i64>) -> Result<serde_json::Value, AppError> {
+    pool.verify_token(&token)?;
+    let d = days.unwrap_or(30);
+    let rows = sqlx::query("SELECT to_char(updated_at::timestamp::date, 'YYYY-MM-DD') AS day, ROUND(AVG(accuracy_pct)::numeric,1)::float8 AS acc, COUNT(*) AS n FROM material_metrics WHERE accuracy_pct > 0 AND updated_at::timestamp >= NOW() - ($1 || ' days')::interval GROUP BY day ORDER BY day")
+        .bind(d.to_string()).fetch_all(&pool.pool).await?;
+    Ok(serde_json::json!(rows.iter().map(|r| {
+        serde_json::json!({"date": r.get::<String,_>("day"), "accuracy": r.get::<f64,_>("acc"), "count": r.get::<i64,_>("n")})
+    }).collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub async fn get_cycle_by_staff(pool: State<'_, DbPool>, token: String) -> Result<serde_json::Value, AppError> {
+    pool.verify_token(&token)?;
+    let rows = sqlx::query("SELECT h.changed_by, u.full_name, COUNT(*) AS actions, COALESCE(SUM(ABS(h.after_qty - h.before_qty)),0) AS total_diff FROM cycle_count_history h LEFT JOIN users u ON u.id = h.changed_by WHERE h.action='approve' GROUP BY h.changed_by, u.full_name ORDER BY total_diff DESC")
+        .fetch_all(&pool.pool).await?;
+    Ok(serde_json::json!(rows.iter().map(|r| {
+        serde_json::json!({"user_id": r.get::<String,_>("changed_by"), "name": r.get::<Option<String>,_>("full_name"),
+            "actions": r.get::<i64,_>("actions"), "total_diff": r.get::<f64,_>("total_diff")})
+    }).collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub async fn get_cycle_by_location(pool: State<'_, DbPool>, token: String) -> Result<serde_json::Value, AppError> {
+    pool.verify_token(&token)?;
+    let rows = sqlx::query("SELECT COALESCE(r.rack_name, 'No Rack') AS location, COUNT(*) AS items, COALESCE(SUM(ABS(i.difference)),0) AS total_diff FROM stock_opname_items i JOIN stock_opname o ON o.id=i.opname_id LEFT JOIN materials m ON m.id=i.material_id LEFT JOIN racks r ON r.id=m.rack_id WHERE o.status IN ('completed','pending_review') GROUP BY location ORDER BY total_diff DESC")
+        .fetch_all(&pool.pool).await?;
+    Ok(serde_json::json!(rows.iter().map(|r| {
+        serde_json::json!({"location": r.get::<String,_>("location"), "items": r.get::<i64,_>("items"),
+            "total_diff": r.get::<f64,_>("total_diff")})
+    }).collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub async fn export_cycle_xlsx(pool: State<'_, DbPool>, token: String) -> Result<Vec<u8>, AppError> {
+    let user_id = pool.verify_token(&token)?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let rows = sqlx::query("SELECT o.opname_number, o.status, o.cycle_mode, m.sku, m.name, COALESCE(r.rack_name,'') AS rack, i.system_qty, i.physical_qty, i.difference, i.approved_status, i.remark, o.created_at FROM stock_opname_items i JOIN stock_opname o ON o.id=i.opname_id LEFT JOIN materials m ON m.id=i.material_id LEFT JOIN racks r ON r.id=m.rack_id ORDER BY o.created_at DESC, m.sku")
+        .fetch_all(&pool.pool).await?;
+    use rust_xlsxwriter::*;
+    let mut wb = Workbook::new();
+    let sh = wb.add_worksheet(); sh.set_name("Cycle Count").map_err(|e| AppError::Internal(e.to_string()))?;
+    let hdr = Format::new().set_bold().set_border(FormatBorder::Thin).set_background_color("CCCCCC");
+    let cf = Format::new().set_border(FormatBorder::Thin);
+    let headers = ["Opname", "Status", "Mode", "SKU", "Material", "Rack", "System", "Physical", "Diff", "Approved", "Remark", "Date"];
+    for (ci, h) in headers.iter().enumerate() {
+        sh.write_string_with_format(0, ci as u16, *h, &hdr).map_err(|e| AppError::Internal(e.to_string()))?;
+    }
+    for (i, r) in rows.iter().enumerate() {
+        let ri = (i + 1) as u32;
+        sh.write_string_with_format(ri, 0, r.get::<String,_>(0), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_string_with_format(ri, 1, r.get::<String,_>(1), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_string_with_format(ri, 2, r.get::<String,_>(2), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_string_with_format(ri, 3, r.get::<String,_>(3), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_string_with_format(ri, 4, r.get::<String,_>(4), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_string_with_format(ri, 5, r.get::<String,_>(5), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_number_with_format(ri, 6, r.get::<f64,_>(6), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_number_with_format(ri, 7, r.get::<f64,_>(7), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_number_with_format(ri, 8, r.get::<f64,_>(8), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_string_with_format(ri, 9, r.get::<String,_>(9), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_string_with_format(ri, 10, r.get::<String,_>(10), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+        sh.write_string_with_format(ri, 11, r.get::<String,_>(11), &cf).map_err(|e| AppError::Internal(e.to_string()))?;
+    }
+    for (ci, w) in [14u16, 10, 9, 14, 28, 12, 9, 10, 9, 10, 24, 19].iter().enumerate() {
+        sh.set_column_width(ci as u16, *w).map_err(|e| AppError::Internal(e.to_string()))?;
+    }
+    Ok(wb.save_to_buffer().map_err(|e| AppError::Internal(e.to_string()))?)
+}
+
+#[tauri::command]
+pub async fn recount_cycle_task(pool: State<'_, DbPool>, token: String, task_id: String) -> Result<serde_json::Value, AppError> {
+    let user_id = pool.verify_token(&token)?;
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
+    let src = sqlx::query("SELECT warehouse_id, cycle_mode, deadline, blind_mode, assigned_to, zone_id, tolerance_pct FROM stock_opname WHERE id=$1")
+        .bind(&task_id).fetch_optional(&pool.pool).await?
+        .ok_or_else(|| AppError::NotFound("Task not found".into()))?;
+    let src_wh: String = src.get(0);
+    let src_mode: String = src.get(1);
+    let src_deadline: String = src.get(2);
+    let src_blind: bool = src.get(3);
+    let src_assigned: String = src.get(4);
+    let src_zone: String = src.get(5);
+    let src_tol: f64 = src.get(6);
+    let round: i32 = sqlx::query_scalar("SELECT COALESCE(MAX(cycle_round),0) + 1 FROM stock_opname_items WHERE opname_id=$1")
+        .bind(&task_id).fetch_one(&pool.pool).await?;
+    let mut db_tx = pool.pool.begin().await?;
+    let oid = uuid::Uuid::new_v4().to_string();
+    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let count: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM stock_opname").fetch_one(&mut *db_tx).await.unwrap_or(1);
+    let opname_number = format!("OPN-{:04}", count);
+    sqlx::query("INSERT INTO stock_opname (id, opname_number, warehouse_id, status, notes, created_by, created_at, updated_at, cycle_mode, task_type, deadline, blind_mode, assigned_to, zone_id, tolerance_pct, recount_of) VALUES ($1,$2,$3,'open',$4,$5,$6,$6,$7,'recount',$8,$9,$10,$11,$12,$13)")
+        .bind(&oid).bind(&opname_number).bind(&src_wh).bind(format!("Recount round {} of previous count", round)).bind(&user_id)
+        .bind(&now).bind(&src_mode).bind(&src_deadline).bind(src_blind).bind(&src_assigned).bind(&src_zone).bind(src_tol).bind(&task_id)
+        .execute(&mut *db_tx).await?;
+    let items: Vec<(String, f64)> = sqlx::query("SELECT i.material_id, m.quantity FROM stock_opname_items i JOIN materials m ON m.id=i.material_id WHERE i.opname_id=$1 AND i.approved_status IN ('pending','rejected','flagged')")
+        .bind(&task_id).fetch_all(&mut *db_tx).await?
+        .iter().map(|row| (row.get::<String,_>(0), row.get::<f64,_>(1))).collect();
+    for (mid, qty) in &items {
+        let iid = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO stock_opname_items (id, opname_id, material_id, system_qty, physical_qty, difference, cycle_round) VALUES ($1,$2,$3,$4,$5,0,$6)")
+            .bind(&iid).bind(&oid).bind(mid).bind(qty).bind(qty).bind(round)
+            .execute(&mut *db_tx).await?;
+    }
+    sqlx::query("INSERT INTO cycle_count_history (id, task_id, material_id, action, changed_by, created_at) VALUES ($1,$2,'','recount',$3,$4)")
+        .bind(uuid::Uuid::new_v4().to_string()).bind(&task_id).bind(&user_id).bind(&now)
+        .execute(&mut *db_tx).await?;
+    db_tx.commit().await?;
+    if !src_assigned.is_empty() {
+        sqlx::query("INSERT INTO app_notifications (id, user_id, title, message, notif_type) VALUES ($1,$2,$3,$4,'info')")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(&src_assigned)
+            .bind(format!("New recount task {}", opname_number))
+            .bind(format!("Recount round {} for {} items", round, items.len()))
+            .execute(&pool.pool).await?;
+    }
+    crate::server::handlers::audit(&pool.pool, &user_id, "recount", "stock_opname", &oid, &format!("Recount of {} — round {} ({} items)", task_id, round, items.len())).await;
+    Ok(serde_json::json!({"id": oid, "opname_number": opname_number, "warehouse_id": src_wh, "status": "open", "cycle_mode": src_mode, "cycle_round": round, "recount_of": task_id, "created_at": now}))
+}
+
+#[tauri::command]
+pub async fn get_notifications(pool: State<'_, DbPool>, token: String) -> Result<serde_json::Value, AppError> {
+    let user_id = pool.verify_token(&token)?;
+    let rows = sqlx::query("SELECT id, user_id, title, message, notif_type, is_read, created_at FROM app_notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50")
+        .bind(&user_id).fetch_all(&pool.pool).await?;
+    Ok(serde_json::json!(rows.iter().map(|row| {
+        serde_json::json!({"id": row.get::<String,_>("id"), "user_id": row.get::<String,_>("user_id"),
+            "title": row.get::<String,_>("title"), "message": row.get::<String,_>("message"),
+            "type": row.get::<String,_>("notif_type"), "is_read": row.get::<bool,_>("is_read"),
+            "created_at": row.get::<String,_>("created_at")})
+    }).collect::<Vec<_>>()))
+}
+
+#[tauri::command]
+pub async fn mark_notification_read(pool: State<'_, DbPool>, token: String, id: String) -> Result<(), AppError> {
+    let user_id = pool.verify_token(&token)?;
+    sqlx::query("UPDATE app_notifications SET is_read=true WHERE id=$1 AND user_id=$2")
+        .bind(&id).bind(&user_id).execute(&pool.pool).await?;
+    Ok(())
+}
+
+#[tauri::command]
+pub async fn mark_all_notifications_read(pool: State<'_, DbPool>, token: String) -> Result<(), AppError> {
+    let user_id = pool.verify_token(&token)?;
+    sqlx::query("UPDATE app_notifications SET is_read=true WHERE user_id=$1 AND is_read=false")
+        .bind(&user_id).execute(&pool.pool).await?;
     Ok(())
 }
 
@@ -824,58 +1060,9 @@ pub async fn set_opname_config(pool: State<'_, DbPool>, token: String, key: Stri
 pub async fn auto_generate_cycle_opname(pool: State<'_, DbPool>, token: String) -> Result<String, AppError> {
     let user_id = pool.verify_token(&token)?;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await? { return Err(AppError::Auth("Permission denied".into())); }
-    let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let today = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let mut tx = pool.pool.begin().await.map_err(|e| AppError::Db(format!("begin tx: {}", e)))?;
-
-    let schedules: Vec<(String, Option<String>, String, i64)> = sqlx::query("SELECT id, warehouse_id, class, frequency_days FROM cycle_schedules WHERE next_date <= $1")
-        .bind(&today)
-        .fetch_all(&mut *tx)
-        .await?
-        .iter()
-        .map(|row| {
-            (row.get::<String, _>(0), row.get::<Option<String>, _>(1), row.get::<String, _>(2), row.get::<i64, _>(3))
-        })
-        .collect();
-
-    let mut created = 0;
-    for (sid, wh_id, class, freq) in &schedules {
-        let oid = uuid::Uuid::new_v4().to_string();
-        let count: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM stock_opname")
-            .fetch_one(&mut *tx).await
-            .unwrap_or(1);
-        let opname_number = format!("OPN-{:04}", count);
-        sqlx::query("INSERT INTO stock_opname (id, opname_number, warehouse_id, status, notes, created_by, created_at, updated_at) VALUES ($1,$2,$3,'draft',$4,'auto',$5,$5)")
-            .bind(&oid).bind(&opname_number).bind(wh_id).bind(format!("Auto-generated cycle count ({})", class)).bind(&now)
-            .execute(&mut *tx).await?;
-
-        let mut mat_builder = QueryBuilder::new("SELECT id, quantity FROM materials WHERE is_active=true");
-        if let Some(ref w) = wh_id {
-            mat_builder.push(" AND warehouse_id = ");
-            mat_builder.push_bind(w);
-        }
-        let materials: Vec<(String, f64)> = mat_builder.build()
-            .fetch_all(&mut *tx)
-            .await?
-            .iter()
-            .map(|row| (row.get::<String, _>(0), row.get::<f64, _>(1)))
-            .collect();
-
-        for (mid, qty) in &materials {
-            let iid = uuid::Uuid::new_v4().to_string();
-            sqlx::query("INSERT INTO stock_opname_items (id, opname_id, material_id, system_qty, physical_qty, difference) VALUES ($1,$2,$3,$4,$5,0)")
-                .bind(&iid).bind(&oid).bind(mid).bind(qty).bind(qty)
-                .execute(&mut *tx).await.ok();
-        }
-
-        sqlx::query("UPDATE cycle_schedules SET next_date=CURRENT_DATE + $1, last_date=$2 WHERE id=$3")
-            .bind(freq).bind(&today).bind(sid)
-            .execute(&mut *tx).await?;
-        created += 1;
-    }
-
-    tx.commit().await.map_err(|e| AppError::Db(format!("commit tx: {}", e)))?;
-    Ok(format!("Created {} opname(s) from cycle schedules", created))
+    let (created, expired) = crate::server::handlers::stock_opname::run_auto_generate(&pool.pool, &user_id).await?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "stock_opname", "auto", &format!("Auto-generated {} task(s), expired {}", created, expired)).await;
+    Ok(format!("Created {} task(s), expired {}", created, expired))
 }
 
 // ── Batch rack transfer (Phase 11) ──

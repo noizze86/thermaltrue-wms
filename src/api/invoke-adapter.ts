@@ -1,5 +1,5 @@
 import { detectApiUrl, addEntry } from "./lan-detector";
-import { isTauriInvokeAvailable, tauriInvoke } from "../lib/tauri";
+import { isTauri, isTauriInvokeAvailable, tauriInvoke } from "../lib/tauri";
 
 const STORAGE_KEY = "wms_api_url";
 
@@ -13,10 +13,21 @@ export function setDetectedBaseUrl(url: string | null) {
 
 function getApiBase(): string {
   if (detectedBaseUrl) return detectedBaseUrl
+
+  if (!import.meta.env.DEV) {
+    const origin = typeof window !== "undefined" ? window.location.origin : undefined
+    if (origin && (origin.startsWith("http://") || origin.startsWith("https://"))) {
+      if (!origin.includes("tauri://") && !origin.includes("://tauri")) {
+        return origin
+      }
+    }
+  }
+
   const stored = localStorage.getItem(STORAGE_KEY)
   if (stored) return stored
   const env = import.meta.env.VITE_API_URL
   if (env) return env
+  if (isTauri() && typeof window !== "undefined") return window.location.origin
   return "http://127.0.0.1:3000"
 }
 
@@ -85,6 +96,8 @@ const ROUTES: Record<string, Route> = {
   create_supplier_rating: { method: "POST", path: "/api/suppliers/ratings", body: true },
   get_supplier_prices: { method: "GET", path: (a) => `/api/suppliers/${a.supplierId}/prices` },
   create_supplier_price: { method: "POST", path: "/api/suppliers/prices", body: true },
+  update_supplier_price: { method: "PUT", path: (a) => `/api/suppliers/prices/${a.id}`, body: true },
+  delete_supplier_price: { method: "DELETE", path: (a) => `/api/suppliers/prices/${a.id}` },
   get_warehouses:      { method: "GET", path: "/api/warehouses" },
   get_warehouse_stats: { method: "GET", path: "/api/warehouses/stats" },
   create_warehouse:    { method: "POST", path: "/api/warehouses", body: true },
@@ -142,6 +155,20 @@ const ROUTES: Record<string, Route> = {
   create_cycle_schedule:   { method: "POST", path: "/api/cycle-schedules", body: true },
   delete_cycle_schedule:   { method: "DELETE", path: (a) => `/api/cycle-schedules/${a.id}` },
   auto_generate_cycle_opname: { method: "POST", path: "/api/cycle-opname/generate" },
+get_cycle_scope_items:  { method: "GET", path: (a) => `/api/cycle-count/scope-items?warehouse_id=${a.warehouseId ?? ""}&category_id=${a.categoryId ?? ""}&rack_id=${a.rackId ?? ""}` },
+get_cycle_task_history:{ method: "GET", path: (a) => `/api/cycle-count/tasks/${a.taskId}/history` },
+get_cycle_zones:       { method: "GET", path: "/api/cycle-count/zones" },
+create_zone_schedule:  { method: "POST", path: "/api/cycle-count/zones", body: true },
+delete_zone_schedule:  { method: "DELETE", path: (a) => `/api/cycle-count/zones/${a.id}` },
+get_cycle_summary:     { method: "GET", path: "/api/cycle-count/report/summary" },
+get_cycle_accuracy:    { method: "GET", path: (a) => `/api/cycle-count/report/accuracy?days=${a.days ?? 30}` },
+get_cycle_by_staff:    { method: "GET", path: "/api/cycle-count/report/by-staff" },
+get_cycle_by_location: { method: "GET", path: "/api/cycle-count/report/by-location" },
+export_cycle_xlsx:     { method: "GET", path: "/api/cycle-count/report/export-xlsx" },
+recount_cycle_task:    { method: "POST", path: (a) => `/api/cycle-count/tasks/${a.taskId}/recount` },
+get_notifications:     { method: "GET", path: "/api/notifications" },
+mark_notification_read:{ method: "POST", path: (a) => `/api/notifications/${a.id}/read` },
+mark_all_notifications_read: { method: "POST", path: "/api/notifications/read-all" },
   transfer_material:       { method: "POST", path: "/api/transfers/material", body: true },
   transfer_materials_bulk: { method: "POST", path: "/api/transfers/bulk", body: true },
   batch_transfer_rack:     { method: "POST", path: "/api/transfers/rack", body: true },
@@ -158,6 +185,7 @@ const ROUTES: Record<string, Route> = {
   get_biggest_losses:      { method: "GET", path: "/api/dashboard/biggest-losses" },
   get_capacity_pressure:   { method: "GET", path: "/api/dashboard/capacity-pressure" },
   get_metrics_latest:      { method: "GET", path: "/api/dashboard/metrics-latest" },
+  get_compute_all:         { method: "GET", path: "/api/dashboard/compute-all" },
   get_cost_summary:        { method: "GET", path: "/api/cost/summary" },
   get_carrying_cost:       { method: "GET", path: "/api/cost/carrying-cost" },
   get_cost_to_serve:       { method: "GET", path: "/api/cost/cost-to-serve" },
@@ -221,6 +249,8 @@ const ROUTES: Record<string, Route> = {
   get_inventory_settings:  { method: "GET", path: "/api/inventory-settings" },
   save_inventory_setting:  { method: "POST", path: "/api/inventory-settings", body: true },
   get_audit_logs:          { method: "GET", path: "/api/audit-logs" },
+  get_email_config:       { method: "GET", path: "/api/email-config" },
+  save_email_config:      { method: "POST", path: "/api/email-config", body: true },
   add_audit_log:           { method: "POST", path: "/api/audit-logs", body: true },
   get_audit_logs_filtered: { method: "GET", path: "/api/audit-logs/filtered" },
   count_audit_logs_filtered: { method: "GET", path: "/api/audit-logs/filtered/count" },
@@ -248,7 +278,7 @@ const ROUTES: Record<string, Route> = {
   generate_picking_list_pdf: { method: "GET", path: "/api/reports/picking-list-pdf" },
   generate_do_pdf:         { method: "GET", path: "/api/reports/do-pdf" },
   generate_count_sheet_pdf:{ method: "GET", path: "/api/reports/count-sheet-pdf" },
-  get_variance_root_cause: { method: "GET", path: (a) => `/api/reports/opname-variance/${a.opnameId}` },
+  get_variance_root_cause: { method: "GET", path: (a) => `/api/reports/opname-root-cause/${a.opnameId}` },
 };
 
 function rawFetch(url: string, options: RequestInit, timeoutMs = 15000): Promise<Response> {
@@ -269,6 +299,11 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
 
   let url = `${getApiBase()}${path}`;
   let body: string | undefined;
+
+  const token = args?.token as string | undefined;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
 
   if (route.method === "GET") {
     const qp = new URLSearchParams();
@@ -328,6 +363,7 @@ async function tryUrl(url: string): Promise<boolean> {
 }
 
 const CANDIDATES = [
+  () => typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:3000",
   () => "http://127.0.0.1:3000",
   () => "http://localhost:3000",
 ];

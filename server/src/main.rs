@@ -141,21 +141,30 @@ fn get_database_url() -> String {
     })
 }
 
+fn env_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 fn ensure_jwt_secret() {
     if std::env::var("JWT_SECRET").is_err() {
         let mut buf = [0u8; 32];
         rand::rngs::OsRng.fill_bytes(&mut buf);
         let secret = hex::encode(buf);
         std::env::set_var("JWT_SECRET", &secret);
-        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(".env") {
+        let env_path = env_dir().join(".env");
+        if let Ok(mut f) = std::fs::OpenOptions::new().append(true).create(true).open(&env_path) {
             writeln!(f, "JWT_SECRET={}", secret).ok();
         }
-        log::info!("Auto-generated JWT_SECRET and saved to .env");
+        log::info!("Auto-generated JWT_SECRET and saved to {:?}", env_path);
     }
 }
 
 fn ensure_env() {
-    let _ = dotenvy::dotenv();
+    let env_path = env_dir().join(".env");
+    let _ = dotenvy::from_path(&env_path);
     ensure_jwt_secret();
 }
 
@@ -194,26 +203,50 @@ async fn serve(pool: DbPool) {
     let port = std::env::var("PORT").unwrap_or_else(|_| if prod { "8000" } else { "3000" }.into());
     let addr = format!("{}:{}", host, port);
 
+    let tls_cert = std::env::var("TLS_CERT_PATH").ok();
+    let tls_key = std::env::var("TLS_KEY_PATH").ok();
+
+    let has_tls = tls_cert.as_ref().and(tls_key.as_ref()).is_some();
+
     log::info!("┌─────────────────────────────────────┐");
     log::info!("│ Thermaltrue WMS API Server          │");
     log::info!("│ Mode:    {}", format_args!("{:<28}", if prod { "PRODUCTION" } else { "DEVELOPMENT" }));
     log::info!("│ Bind:    {:<28}", addr);
+    if has_tls {
+        log::info!("│ TLS:     HTTPS enabled              ");
+    }
     if prod {
         if let Some(local) = get_local_ip() {
-            log::info!("│ Access:  http://{}:{:<21}", local, port);
+            let proto = if has_tls { "https" } else { "http" };
+            log::info!("│ Access:  {}://{}:{:<19}", proto, local, port);
         }
     }
     log::info!("└─────────────────────────────────────┘");
 
-    let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
-        log::error!("Cannot bind to {}: {}", addr, e);
-        std::process::exit(1);
-    });
-
-    axum::serve(listener, app).await.unwrap_or_else(|e| {
-        log::error!("Server error: {}", e);
-        std::process::exit(1);
-    });
+    if has_tls {
+        let cert_path = tls_cert.unwrap();
+        let key_path = tls_key.unwrap();
+        let tls_cfg = axum_server::tls_rustls::RustlsConfig::from_pem_file(&cert_path, &key_path).await.unwrap_or_else(|e| {
+            log::error!("Failed to load TLS config from '{}' / '{}': {}", cert_path, key_path, e);
+            std::process::exit(1);
+        });
+        axum_server::bind_rustls(addr.parse().unwrap(), tls_cfg)
+            .serve(app.into_make_service())
+            .await
+            .unwrap_or_else(|e| {
+                log::error!("Server error: {}", e);
+                std::process::exit(1);
+            });
+    } else {
+        let listener = tokio::net::TcpListener::bind(&addr).await.unwrap_or_else(|e| {
+            log::error!("Cannot bind to {}: {}", addr, e);
+            std::process::exit(1);
+        });
+        axum::serve(listener, app).await.unwrap_or_else(|e| {
+            log::error!("Server error: {}", e);
+            std::process::exit(1);
+        });
+    }
 }
 
 // ── Service management commands ──────────────────────────────────────────

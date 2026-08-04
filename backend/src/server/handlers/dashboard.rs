@@ -122,7 +122,7 @@ async fn persist_dashboard_metrics(
          total_capacity, used_capacity, available_capacity, utilization_pct, \
          avg_daily_inbound, avg_daily_outbound, days_to_full, capacity_status, \
          created_at, updated_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31) \
          ON CONFLICT (warehouse_id, metric_date, metric_hour) DO UPDATE SET \
          health_index=EXCLUDED.health_index, accuracy_rate=EXCLUDED.accuracy_rate, \
          productivity_rate=EXCLUDED.productivity_rate, on_time_shipping_rate=EXCLUDED.on_time_shipping_rate, \
@@ -150,42 +150,37 @@ async fn persist_dashboard_metrics(
     .bind(total_cap).bind(used).bind(available).bind(util_pct)
     .bind(avg_in).bind(avg_out).bind(days_full).bind(cap_status)
     .bind(&now).bind(&now)
-    .execute(pool).await.ok();
+    .execute(pool).await.unwrap_or_else(|e| { log::warn!("persist_dashboard_metrics failed: {}", e); Default::default() });
 }
 
 async fn compute_and_persist_all(
     pool: &sqlx::PgPool, warehouse_id: &str,
 ) -> Result<(serde_json::Value, Vec<serde_json::Value>, serde_json::Value), String> {
     let wh = warehouse_id;
-    let wh_cond = if wh.is_empty() { "TRUE".to_string() } else { format!("AND m.warehouse_id = '{}'", wh.replace('\'', "''")) };
-    let wh_cond_tx = |table: &str| -> String {
-        if wh.is_empty() { String::new() } else { format!(" AND {}.warehouse_id = '{}'", table, wh.replace('\'', "''")) }
-    };
-
-    let accuracy: f64 = sqlx::query_scalar(&format!(
+    let accuracy: f64 = sqlx::query_scalar(
         "SELECT COALESCE((SELECT COUNT(*)::float FROM stock_opname_items WHERE difference=0) / NULLIF((SELECT COUNT(*)::float FROM stock_opname_items),0) * 100, 100.0)"
-    )).fetch_one(pool).await.unwrap_or(100.0);
-    let tx_24h: i64 = sqlx::query_scalar(&format!("SELECT COUNT(*) FROM transactions WHERE created_at::timestamp >= NOW() - INTERVAL '24 hours' AND status NOT IN ('voided','reversed'){}", wh_cond_tx("transactions")))
-        .fetch_one(pool).await.unwrap_or(0);
+    ).fetch_one(pool).await.unwrap_or(100.0);
+    let tx_24h: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE created_at::timestamp >= NOW() - INTERVAL '24 hours' AND status NOT IN ('voided','reversed') AND ($1 = '' OR transactions.warehouse_id = $1)")
+        .bind(wh).fetch_one(pool).await.unwrap_or(0);
     let active_users: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users").fetch_one(pool).await.unwrap_or(1);
     let daily_target = (active_users as f64 * 5.0).max(10.0);
     let productivity = ((tx_24h as f64 / daily_target) * 100.0).min(100.0);
-    let approved: f64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::float FROM transactions WHERE status='approved' AND created_at::timestamp >= NOW() - INTERVAL '30 days'{}", wh_cond_tx("transactions")))
-        .fetch_one(pool).await.unwrap_or(0.0);
-    let total_30d: f64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at::timestamp >= NOW() - INTERVAL '30 days'{}", wh_cond_tx("transactions")))
-        .fetch_one(pool).await.unwrap_or(1.0);
+    let approved: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status='approved' AND created_at::timestamp >= NOW() - INTERVAL '30 days' AND ($1 = '' OR transactions.warehouse_id = $1)")
+        .bind(wh).fetch_one(pool).await.unwrap_or(0.0);
+    let total_30d: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at::timestamp >= NOW() - INTERVAL '30 days' AND ($1 = '' OR transactions.warehouse_id = $1)")
+        .bind(wh).fetch_one(pool).await.unwrap_or(1.0);
     let on_time = if total_30d > 0.0 { (approved / total_30d * 100.0).min(100.0) } else { 100.0 };
 
     let total_capacity: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(max_capacity),0)::float FROM racks")
         .fetch_one(pool).await.unwrap_or(0.0);
-    let used_storage: f64 = sqlx::query_scalar(&format!("SELECT COALESCE(SUM(quantity),0)::float FROM materials WHERE is_active=true {}", wh_cond))
-        .fetch_one(pool).await.unwrap_or(0.0);
+    let used_storage: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity),0)::float FROM materials WHERE is_active=true AND ($1 = '' OR materials.warehouse_id = $1)")
+        .bind(wh).fetch_one(pool).await.unwrap_or(0.0);
     let space_util = if total_capacity > 0.0 { (used_storage / total_capacity * 100.0).min(100.0) } else { 50.0 };
 
-    let total_active: f64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::float FROM materials WHERE is_active=true {}", wh_cond))
-        .fetch_one(pool).await.unwrap_or(1.0);
-    let above_min: f64 = sqlx::query_scalar(&format!("SELECT COUNT(*)::float FROM materials WHERE quantity > min_stock AND is_active=true {}", wh_cond))
-        .fetch_one(pool).await.unwrap_or(0.0);
+    let total_active: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE is_active=true AND ($1 = '' OR materials.warehouse_id = $1)")
+        .bind(wh).fetch_one(pool).await.unwrap_or(1.0);
+    let above_min: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE quantity > min_stock AND is_active=true AND ($1 = '' OR materials.warehouse_id = $1)")
+        .bind(wh).fetch_one(pool).await.unwrap_or(0.0);
     let availability = if total_active > 0.0 { (above_min / total_active * 100.0).min(100.0) } else { 100.0 };
 
     let health = ((accuracy * 0.25 + productivity * 0.20 + on_time * 0.20 + space_util * 0.15 + availability * 0.20) * 100.0).round() / 100.0;
@@ -213,12 +208,12 @@ async fn compute_and_persist_all(
             "stock_availability": {"score": (availability * 100.0).round() / 100.0, "weight": 0.20}
         }});
 
-    let loss_rows = sqlx::query(&format!(
+    let loss_rows = sqlx::query(
         "SELECT m.id, m.name, m.sku, m.quantity, m.price, m.min_stock, \
          COALESCE((SELECT SUM(ABS(soi.difference)) FROM stock_opname_items soi WHERE soi.material_id=m.id),0) as variance_qty, \
          CASE WHEN (SELECT COUNT(*) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days') = 0 THEN 1 ELSE 0 END as is_dead \
-         FROM materials m WHERE m.is_active=true {}"
-        , wh_cond)).fetch_all(pool).await.map_err(|e| e.to_string())?;
+         FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)"
+    ).bind(wh).fetch_all(pool).await.map_err(|e| e.to_string())?;
     let mut losses: Vec<serde_json::Value> = Vec::new();
     for row in &loss_rows {
         let qty: f64 = row.get("quantity");
@@ -246,14 +241,14 @@ async fn compute_and_persist_all(
         loss_items[i] = serde_json::to_string(l).unwrap_or_default();
     }
 
-    let in_out = sqlx::query(&format!(
+    let in_out = sqlx::query(
         "SELECT COALESCE(AVG(daily_in),0) as avg_in, COALESCE(AVG(daily_out),0) as avg_out \
          FROM (SELECT DATE(created_at) as d, \
              SUM(CASE WHEN type='in' THEN quantity ELSE 0 END) as daily_in, \
              SUM(CASE WHEN type='out' THEN quantity ELSE 0 END) as daily_out \
-         FROM transactions WHERE created_at::timestamp >= NOW() - INTERVAL '30 days' AND status NOT IN ('voided','reversed'){} \
+         FROM transactions WHERE created_at::timestamp >= NOW() - INTERVAL '30 days' AND status NOT IN ('voided','reversed') AND ($1 = '' OR transactions.warehouse_id = $1) \
          GROUP BY DATE(created_at)) sub"
-        , wh_cond_tx("transactions"))).fetch_one(pool).await.map_err(|e| e.to_string())?;
+    ).bind(wh).fetch_one(pool).await.map_err(|e| e.to_string())?;
     let avg_in: f64 = in_out.get("avg_in");
     let avg_out: f64 = in_out.get("avg_out");
     let net_flow = avg_in - avg_out;
@@ -733,7 +728,7 @@ pub async fn demand_forecast(
         .bind(&fid).bind(&id).bind(wh_filter).bind(&period).bind("demand")
         .bind(forecast_next).bind(forecast_next * 3.0).bind(forecast_next * 6.0)
         .bind(&now_str).bind(&now_str)
-        .execute(&pool.pool).await.ok();
+        .execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("dashboard forecast insert failed: {}", e); Default::default() });
 
         items.push(json!({"material_id": id, "material_name": row.get::<String,_>("name"),
             "sku": row.get::<String,_>("sku"), "current_qty": row.get::<f64,_>("quantity"),

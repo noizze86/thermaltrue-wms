@@ -15,6 +15,7 @@ pub async fn list(
     Extension(user_id): Extension<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Warehouse>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     use sqlx::QueryBuilder;
@@ -41,6 +42,7 @@ pub async fn stats(
     State(pool): State<Arc<DbPool>>,
     Extension(user_id): Extension<String>,
 ) -> Result<Json<Vec<WarehouseStats>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     use sqlx::QueryBuilder;
@@ -75,6 +77,7 @@ pub async fn create(
         .bind(&id).bind(&wh.name).bind(&wh.code).bind(&wh.location).bind(wh.is_active).bind(wh.capacity).bind(&wh.layout_image).bind(&now)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "warehouse", &id, &format!("{} ({})", wh.name, wh.code)).await;
     Ok(Json(Warehouse { id, name: wh.name, code: wh.code, location: wh.location, is_active: wh.is_active, capacity: wh.capacity, layout_image: wh.layout_image, created_at: now }))
 }
 
@@ -89,6 +92,7 @@ pub async fn update(
         .bind(&wh.name).bind(&wh.code).bind(&wh.location).bind(wh.is_active).bind(wh.capacity).bind(&wh.layout_image).bind(&wh.id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "warehouse", &wh.id, &format!("{} ({})", wh.name, wh.code)).await;
     Ok(Json(()))
 }
 
@@ -98,24 +102,33 @@ pub async fn delete(
     Path(id): Path<String>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "delete_any").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE warehouse_id=$1 AND is_active=true")
         .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     if used > 0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Warehouse is used by {} active material(s)", used)})))); }
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
+    sqlx::query("UPDATE materials SET warehouse_id=NULL, rack_id=NULL WHERE warehouse_id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     sqlx::query("DELETE FROM zones WHERE warehouse_id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+    sqlx::query("DELETE FROM rack_utilization_log WHERE rack_id IN (SELECT id FROM racks WHERE warehouse_id=$1)").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     sqlx::query("DELETE FROM racks WHERE warehouse_id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
+    sqlx::query("DELETE FROM locations WHERE warehouse_id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     sqlx::query("DELETE FROM warehouses WHERE id=$1").bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "warehouse", &id, "Warehouse deleted (with zones & racks)").await;
     Ok(Json(()))
 }
 
 // --- Zones ---
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ZoneListParams { pub warehouse_id: Option<String> }
+
 pub async fn list_zones(
     State(pool): State<Arc<DbPool>>,
-    Query(params): Query<ListParams>,
+    Query(params): Query<ZoneListParams>,
 ) -> Result<Json<Vec<Zone>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let mut builder = sqlx::QueryBuilder::new("SELECT id, warehouse_id, name, code, capacity, created_at FROM zones WHERE 1=1");
-    if let Some(ref w) = params.search { if !w.is_empty() { builder.push(" AND warehouse_id = ").push_bind(w); } }
+    if let Some(ref w) = params.warehouse_id { if !w.is_empty() { builder.push(" AND warehouse_id = ").push_bind(w); } }
     builder.push(" ORDER BY name");
     let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -124,6 +137,7 @@ pub async fn list_zones(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateZoneBody { pub warehouse_id: String, pub name: String, pub code: String, pub capacity: Option<f64> }
 
 pub async fn create_zone(
@@ -140,6 +154,7 @@ pub async fn create_zone(
         .bind(&id).bind(&body.warehouse_id).bind(&body.name).bind(&body.code).bind(cap).bind(&now)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "zone", &id, &format!("{} - {} (warehouse {})", body.name, body.code, body.warehouse_id)).await;
     Ok(Json(Zone { id, warehouse_id: body.warehouse_id, name: body.name, code: body.code, capacity: cap, created_at: now }))
 }
 
@@ -150,6 +165,7 @@ pub async fn delete_zone(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM zones WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "zone", &id, "Zone deleted").await;
     Ok(Json(()))
 }
 
@@ -169,18 +185,20 @@ pub async fn update_zone(
         .bind(&body.name).bind(&body.code).bind(cap).bind(&body.id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "zone", &body.id, &format!("{} - {}", body.name, body.code)).await;
     Ok(Json(()))
 }
 
 // --- Locations ---
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ListLocationsParams { pub warehouse_id: Option<String>, pub parent_id: Option<String> }
 
 pub async fn list_locations(
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<ListLocationsParams>,
 ) -> Result<Json<Vec<crate::models::Location>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let mut builder = sqlx::QueryBuilder::new("SELECT id, parent_id, warehouse_id, type_, code, created_at FROM locations WHERE 1=1");
+    let mut builder = sqlx::QueryBuilder::new("SELECT id, parent_id, warehouse_id, type, code, created_at FROM locations WHERE 1=1");
     if let Some(ref w) = params.warehouse_id { if !w.is_empty() { builder.push(" AND warehouse_id = ").push_bind(w); } }
     if let Some(ref p) = params.parent_id { if !p.is_empty() { builder.push(" AND parent_id = ").push_bind(p); } }
     builder.push(" ORDER BY code");
@@ -207,10 +225,11 @@ pub async fn create_location(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    sqlx::query("INSERT INTO locations (id, parent_id, warehouse_id, type_, code, created_at) VALUES ($1,$2,$3,$4,$5,$6)")
+    sqlx::query("INSERT INTO locations (id, parent_id, warehouse_id, type, code, created_at) VALUES ($1,$2,$3,$4,$5,$6)")
         .bind(&id).bind(&body.parent_id).bind(&body.warehouse_id).bind(&body.r#type).bind(&body.code).bind(&now)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "location", &id, &format!("{} - {} (warehouse {})", body.code, body.r#type, body.warehouse_id)).await;
     Ok(Json(crate::models::Location { id, parent_id: body.parent_id, warehouse_id: body.warehouse_id, type_: body.r#type, code: body.code, created_at: now }))
 }
 
@@ -222,5 +241,6 @@ pub async fn delete_location(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     sqlx::query("DELETE FROM locations WHERE id=$1").bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "location", &id, "Location deleted").await;
     Ok(Json(()))
 }

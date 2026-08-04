@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "cap:dev": "node -e \"require('fs').copyFileSync('scripts/cap-templates/dev.json','src-tauri/capabilities/default.json')\"",
     "cap:prod": "node -e \"require('fs').copyFileSync('scripts/cap-templates/prod.json','src-tauri/capabilities/default.json')\"",
+    "cap:client": "node -e \"require('fs').copyFileSync('scripts/cap-templates/client.json','src-tauri/capabilities/default.json')\"",
     "lint": "oxlint",
     "test": "vitest run",
     "test:watch": "vitest",

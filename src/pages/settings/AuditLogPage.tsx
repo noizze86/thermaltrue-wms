@@ -14,8 +14,8 @@ import { ClipboardList, Filter, Download, Trash2, Eye, FileText } from "lucide-r
 import { LoadingState, ErrorState, EmptyState } from "../../components/ui/data-state"
 import { toast } from "../../hooks/use-toast"
 
-const ACTIONS = ["create", "update", "delete", "login", "logout", "import", "export", "transfer", "adjust"]
-const ENTITIES = ["material", "category", "unit", "supplier", "user", "warehouse", "rack", "transaction", "opname"]
+const ACTIONS = ["create", "update", "delete", "login", "logout", "import", "export", "transfer", "adjust", "upsert"]
+const ENTITIES = ["material", "category", "unit", "supplier", "user", "warehouse", "rack", "transaction", "opname", "role", "transfer_order", "stock_opname", "stock_opname_item", "label_template", "supplier_price", "supplier_rating", "zone", "location", "budget", "app_config", "email_config", "company_profile", "notification_config", "unit_conversion", "material_batch", "material_image", "cycle_schedule", "report_schedule", "abc_weight", "forecast_cache", "login_history", "database_backup", "database_restore"]
 
 export default function AuditLogPage() {
   const { can } = useAuth()

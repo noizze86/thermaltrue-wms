@@ -35,10 +35,12 @@ export default function LabelPrintPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [qrCodes, setQrCodes] = useState<Record<string, string>>({})
+  const [qrLoading, setQrLoading] = useState(false)
   const [barcodeType, setBarcodeType] = useState<BarcodeType>("CODE128")
   const [zplPreview, setZplPreview] = useState<string | null>(null)
   const [templateId, setTemplateId] = useState("default")
   const barcodeRefs = useRef<Record<string, SVGElement | null>>({})
+  const pendingQrRef = useRef<Set<string>>(new Set())
 
   const { data: templates } = useQuery({
     queryKey: ["label_templates"],
@@ -70,11 +72,18 @@ export default function LabelPrintPage() {
   const filtered = useMemo(() => materials || [], [materials])
 
   const loadQr = useCallback(async (id: string, sku: string, name: string) => {
-    if (qrCodes[id]) return
+    if (qrCodes[id] || pendingQrRef.current.has(id)) return
+    pendingQrRef.current.add(id)
+    setQrLoading(true)
     try {
       const url = await generateQrCode(JSON.stringify({ id, sku, name }))
       setQrCodes((prev) => ({ ...prev, [id]: url }))
-    } catch { /* ignore */ }
+    } catch (e) {
+      console.warn(`QR generation failed for ${sku}:`, e)
+    } finally {
+      pendingQrRef.current.delete(id)
+      if (pendingQrRef.current.size === 0) setQrLoading(false)
+    }
   }, [qrCodes])
 
   useEffect(() => {
@@ -82,6 +91,18 @@ export default function LabelPrintPage() {
       if (selected.has(m.id)) loadQr(m.id, m.sku, m.name)
     }
   }, [selected, filtered, loadQr])
+
+  const waitForQr = async () => {
+    if (pendingQrRef.current.size === 0) return
+    await new Promise<void>((resolve) => {
+      const check = () => {
+        if (pendingQrRef.current.size === 0) { resolve(); return }
+        requestAnimationFrame(check)
+      }
+      check()
+    })
+    await new Promise((r) => requestAnimationFrame(r))
+  }
 
   useEffect(() => {
     for (const m of filtered) {
@@ -113,7 +134,10 @@ export default function LabelPrintPage() {
 
   const labels = filtered.filter((m) => selected.has(m.id))
 
-  const print = () => window.print()
+  const print = async () => {
+    await waitForQr()
+    window.print()
+  }
 
   const handleZpl = async (m: { id: string }) => {
     if (zplPreview) { setZplPreview(null); return }
@@ -192,9 +216,9 @@ export default function LabelPrintPage() {
           <div className="grid grid-cols-2 gap-x-2 gap-y-0.5">
             {t.show_qty && <span>Qty: {m.quantity}</span>}
             {t.show_price && <span>Rp {m.price?.toLocaleString()}</span>}
-            {t.show_category && <span>Cat: {m.category_id || "-"}</span>}
-            {t.show_supplier && <span>Sup: {m.supplier_id || "-"}</span>}
-            {t.show_location && <span>Loc: {m.warehouse_id || "-"}</span>}
+            {t.show_category && <span>Cat: {m.category_name || m.category_id || "-"}</span>}
+            {t.show_supplier && <span>Sup: {m.supplier_name || m.supplier_id || "-"}</span>}
+            {t.show_location && <span>Loc: {m.warehouse_name || m.warehouse_id || "-"}</span>}
             {t.show_min_stock && <span>Min: {m.min_stock}</span>}
             {t.show_expiry && <span>Exp: {m.expiry_date || "-"}</span>}
           </div>
@@ -212,9 +236,9 @@ export default function LabelPrintPage() {
             {t.show_name && <p className="truncate"><span className="font-semibold">Name:</span> {m.name}</p>}
             {t.show_qty && <p><span className="font-semibold">Qty:</span> {m.quantity}</p>}
             {t.show_price && <p><span className="font-semibold">Price:</span> Rp {m.price?.toLocaleString()}</p>}
-            {t.show_category && <p className="truncate"><span className="font-semibold">Cat:</span> {m.category_id || "-"}</p>}
-            {t.show_supplier && <p className="truncate"><span className="font-semibold">Sup:</span> {m.supplier_id || "-"}</p>}
-            {t.show_location && <p className="truncate"><span className="font-semibold">Loc:</span> {m.warehouse_id || "-"}</p>}
+            {t.show_category && <p className="truncate"><span className="font-semibold">Cat:</span> {m.category_name || m.category_id || "-"}</p>}
+            {t.show_supplier && <p className="truncate"><span className="font-semibold">Sup:</span> {m.supplier_name || m.supplier_id || "-"}</p>}
+            {t.show_location && <p className="truncate"><span className="font-semibold">Loc:</span> {m.warehouse_name || m.warehouse_id || "-"}</p>}
             {t.show_expiry && <p><span className="font-semibold">Exp:</span> {m.expiry_date || "-"}</p>}
             {t.show_batch && <p><span className="font-semibold">Batch:</span> -</p>}
             {t.show_min_stock && <p><span className="font-semibold">Min:</span> {m.min_stock}</p>}
@@ -248,10 +272,10 @@ export default function LabelPrintPage() {
           <p className="font-semibold leading-tight truncate w-full" style={{ fontSize: fontPx(fs, 7) }}>{COMPANY_NAME}</p>
         )}
         {t.show_category && (
-          <p className="truncate w-full" style={{ fontSize: fontPx(fs, 6) }}>Cat: {m.category_id || "-"}</p>
+          <p className="truncate w-full" style={{ fontSize: fontPx(fs, 6) }}>Cat: {m.category_name || m.category_id || "-"}</p>
         )}
         {t.show_location && (
-          <p className="truncate w-full" style={{ fontSize: fontPx(fs, 6) }}>Loc: {m.warehouse_id || "-"}</p>
+          <p className="truncate w-full" style={{ fontSize: fontPx(fs, 6) }}>Loc: {m.warehouse_name || m.warehouse_id || "-"}</p>
         )}
         <div className="flex gap-1.5 leading-tight" style={{ fontSize: fontPx(fs, 7) }}>
           {t.show_qty && <span>Qty: {m.quantity}</span>}
@@ -271,7 +295,8 @@ export default function LabelPrintPage() {
   if (isError) return <ErrorState message={error?.message || "Failed to load materials"} onRetry={refetch} />
 
   return (
-    <div className="space-y-6">
+    <>
+    <div className="no-print space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-3xl font-bold">Label Printing</h1>
         <div className="flex gap-2 items-center">
@@ -286,8 +311,8 @@ export default function LabelPrintPage() {
           <Select value={barcodeType} onChange={(e) => setBarcodeType(e.target.value as BarcodeType)} className="w-24 h-8 text-xs">
             {BARCODE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
           </Select>
-          <Button variant="outline" size="sm" onClick={print} disabled={labels.length === 0}>
-            <Printer className="h-4 w-4" /> Print ({labels.length})
+          <Button variant="outline" size="sm" onClick={print} disabled={labels.length === 0 || qrLoading}>
+            <Printer className="h-4 w-4" /> {qrLoading ? "Loading QR..." : `Print (${labels.length})`}
           </Button>
         </div>
       </div>
@@ -376,27 +401,23 @@ export default function LabelPrintPage() {
           )}
         </DialogContent>
       </Dialog>
+    </div>
 
       {labels.length > 0 && (
-        <div>
-          <h2 className="text-lg font-semibold mb-3">
-            Print Preview ({labels.length} labels, {currentTmpl?.name || "default"})
-          </h2>
-          <div className="print-only">
-            <div className="grid gap-1 print:gap-1" style={{ gridTemplateColumns: `repeat(${gridCols.cols}, 1fr)` }}>
-              {labels.map((m) => (
-                <div
-                  key={m.id}
-                  className={`border rounded p-1 text-center print:border print:shadow-none print:break-inside-avoid flex flex-col items-center justify-center ${borderClass(currentTmpl?.border_style || "solid")}`}
-                  style={{ minHeight: `${labelH}mm`, minWidth: `${labelW}mm` }}
-                >
-                  {renderLabel(m)}
-                </div>
-              ))}
-            </div>
+        <div className="print-only">
+          <div className="grid gap-1 print:gap-1" style={{ gridTemplateColumns: `repeat(${gridCols.cols}, 1fr)` }}>
+            {labels.map((m) => (
+              <div
+                key={m.id}
+                className={`border rounded p-1 text-center print:border print:shadow-none print:break-inside-avoid flex flex-col items-center justify-center ${borderClass(currentTmpl?.border_style || "solid")}`}
+                style={{ minHeight: `${labelH}mm`, minWidth: `${labelW}mm` }}
+              >
+                {renderLabel(m)}
+              </div>
+            ))}
           </div>
         </div>
       )}
-    </div>
+    </>
   )
 }

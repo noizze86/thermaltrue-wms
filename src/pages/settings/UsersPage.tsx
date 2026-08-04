@@ -1,6 +1,6 @@
 import { useState, useMemo } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { getUsers, createUser, updateUser, deleteUser, changePassword, updateUserPhoto, getUserActivity, getAppConfig, getUserLoginHistory } from "../../api"
+import { getUsers, createUser, updateUser, deleteUser, changePassword, updateUserPhoto, getUserActivity, getAppConfig, getUserLoginHistory, getRoles } from "../../api"
 import type { LoginHistoryEntry } from "../../api"
 import { useAuth } from "../../contexts/AuthContext"
 import { Button } from "../../components/ui/button"
@@ -20,11 +20,17 @@ export default function UsersPage() {
   const { user: currentUser, can } = useAuth()
   const queryClient = useQueryClient()
   const { data: users, isLoading, isError, error, refetch } = useQuery({ queryKey: ["users"], queryFn: getUsers })
+  const { data: roles } = useQuery({ queryKey: ["roles"], queryFn: getRoles })
   const { data: appMinLength } = useQuery({ queryKey: ["app_config", "password_min_length"], queryFn: () => getAppConfig("password_min_length") })
   const { data: appExpiryDays } = useQuery({ queryKey: ["app_config", "password_expiry_days"], queryFn: () => getAppConfig("password_expiry_days") })
 
-  const minLen = Number(appMinLength ?? 8)
-  const expiryDays = Number(appExpiryDays ?? 90)
+  const toNum = (v: unknown, fallback: number) => {
+    if (v == null || v === "") return fallback
+    const n = Number(v)
+    return Number.isFinite(n) ? n : fallback
+  }
+  const minLen = toNum(appMinLength, 8)
+  const expiryDays = toNum(appExpiryDays, 90)
   const isExpiryEnabled = expiryDays > 0
 
   const [showForm, setShowForm] = useState(false)
@@ -261,10 +267,13 @@ export default function UsersPage() {
             <div className="space-y-2">
               <Label>Role</Label>
               <Select value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
-                <option value="admin">Admin</option>
-                <option value="manager">Manager</option>
-                <option value="operator">Operator</option>
-                <option value="viewer">Viewer</option>
+                {(roles || []).length === 0 && <option value="operator">Operator</option>}
+                {(roles || []).map((r) => (
+                  <option key={r.id} value={r.name}>{r.name.charAt(0).toUpperCase() + r.name.slice(1)}</option>
+                ))}
+                {editId && !(roles || []).some((r) => r.name === form.role) && (
+                  <option value={form.role}>{form.role.charAt(0).toUpperCase() + form.role.slice(1)}</option>
+                )}
               </Select>
             </div>
             <Button onClick={() => { if (validate(!!editId)) { if (editId) { updateMut.mutate() } else { createMut.mutate() } } }} className="w-full" disabled={createMut.isPending || updateMut.isPending}>

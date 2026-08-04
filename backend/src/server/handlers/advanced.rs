@@ -67,6 +67,7 @@ pub async fn save_budget(
     .bind(&body.id).bind(&body.category_id).bind(&body.period).bind(body.amount).bind(&now)
     .execute(&pool.pool).await
     .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &_user_id, "upsert", "budget", &body.id, &format!("category {} period {} amount {}", body.category_id, body.period, body.amount)).await;
     Ok(Json(()))
 }
 
@@ -80,6 +81,7 @@ pub async fn delete_budget(
     }
     sqlx::query("DELETE FROM budgets WHERE id=$1").bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &_user_id, "delete", "budget", &id, "Budget deleted").await;
     Ok(Json(()))
 }
 
@@ -111,6 +113,7 @@ pub async fn set_abc_weight(
         .bind(&body.key).bind(body.value)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "abc_weight", &body.key, &format!("{} -> {}", body.key, body.value)).await;
     Ok(Json(()))
 }
 
@@ -158,6 +161,7 @@ pub async fn set_forecast_cache(
     .bind(&id).bind(&body.material_id).bind(&body.model).bind(&body.params).bind(&body.result).bind(body.horizon).bind(&now)
     .execute(&pool.pool).await
     .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "forecast_cache", &id, &format!("material {} model {} horizon {}", body.material_id, body.model, body.horizon)).await;
     Ok(Json(()))
 }
 
@@ -173,6 +177,7 @@ pub async fn delete_forecast_cache(
         .bind(&params.material_id).bind(&params.model)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "forecast_cache", &params.material_id, &format!("model {}", params.model)).await;
     Ok(Json(()))
 }
 
@@ -226,6 +231,7 @@ pub async fn clear_login_history(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_users").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "login_history", "all", "Login history cleared").await;
     sqlx::query("DELETE FROM login_history")
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;

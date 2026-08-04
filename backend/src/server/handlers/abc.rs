@@ -64,7 +64,7 @@ async fn persist_abc_classification(
     .bind(qty).bind(price).bind(inv_value)
     .bind(prev_class).bind(days_since)
     .bind(&now).bind(&now)
-    .execute(pool).await.ok();
+    .execute(pool).await.unwrap_or_else(|e| { log::warn!("persist_abc_classification failed: {}", e); Default::default() });
 }
 
 pub async fn abc_classify(
@@ -184,7 +184,7 @@ pub async fn abc_classify(
         // Propagate abc_class and xyz_class to material_metrics
         sqlx::query(
             "UPDATE material_metrics SET abc_class=$1, abc_score=$2 WHERE material_id=$3 AND period_start=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD')"
-        ).bind(abc).bind(composite).bind(&id).execute(&pool.pool).await.ok();
+        ).bind(abc).bind(composite).bind(&id).execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("abc_classify update material_metrics failed: {}", e); Default::default() });
     }
 
     let mut class_a = Vec::new();

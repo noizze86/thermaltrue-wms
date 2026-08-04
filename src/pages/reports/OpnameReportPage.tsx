@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query"
-import { getStockOpnames, getStockOpnameItems, getWarehouses, getMaterials, exportOpnameXlsx, generateReportPdf, getOpnameVariance, approveOpnameAdjustment } from "../../api"
+import { getStockOpnames, getStockOpnameItems, getWarehouses, getMaterials, exportOpnameXlsx, generateReportPdf, getOpnameVariance, approveOpnameAdjustment, getCycleSummary, getCycleAccuracy, getCycleByStaff, getCycleByLocation, exportCycleXlsx } from "../../api"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
 import { Badge } from "../../components/ui/badge"
@@ -7,8 +7,8 @@ import { formatDate } from "../../lib/utils"
 import { Button } from "../../components/ui/button"
 import { toast } from "../../hooks/use-toast"
 import { useState } from "react"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts"
-import { FileDown, FileText, AlertTriangle, CheckCircle2, ClipboardCheck, ThumbsUp, ThumbsDown, BarChart3, Search } from "lucide-react"
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from "recharts"
+import { FileDown, FileText, AlertTriangle, CheckCircle2, ClipboardCheck, ThumbsUp, ThumbsDown, BarChart3, Search, LayoutGrid, UserCheck, Target } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 import { useNavigate } from "react-router-dom"
 
@@ -21,6 +21,10 @@ export default function OpnameReportPage() {
   const { data: warehouses } = useQuery({ queryKey: ["warehouses"], queryFn: () => getWarehouses() })
   const { data: materials } = useQuery({ queryKey: ["materials"], queryFn: () => getMaterials() })
   const { data: variance } = useQuery({ queryKey: ["opname_variance", selectedId], queryFn: () => getOpnameVariance(selectedId!), enabled: !!selectedId })
+  const { data: cycleSummary } = useQuery({ queryKey: ["cycle_summary"], queryFn: getCycleSummary })
+  const { data: cycleAccuracy } = useQuery({ queryKey: ["cycle_accuracy"], queryFn: () => getCycleAccuracy(30) })
+  const { data: cycleStaff } = useQuery({ queryKey: ["cycle_staff"], queryFn: getCycleByStaff })
+  const { data: cycleLocation } = useQuery({ queryKey: ["cycle_location"], queryFn: getCycleByLocation })
 
   const completed = opnames?.filter((so) => so.status === "completed") || []
   const allItems = items || []
@@ -62,11 +66,76 @@ export default function OpnameReportPage() {
     } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
   }
 
+  const exportCycle = async () => {
+    try {
+      const data = await exportCycleXlsx()
+      const blob = new Blob([new Uint8Array(data)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+      const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `cycle_count_report.xlsx`; a.click(); URL.revokeObjectURL(url)
+      toast({ title: "Exported", description: "Cycle count XLSX downloaded" })
+    } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
+  }
+
   if (isLoading) return <LoadingState text="Loading..." />
   if (isError) return <ErrorState message={error?.message} onRetry={refetch} />
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold">Stock Opname Report</h1>
+      <div className="flex items-center justify-between flex-wrap gap-2">
+        <h1 className="text-3xl font-bold">Stock Opname Report</h1>
+        <Button variant="outline" size="sm" onClick={exportCycle}><FileDown className="h-4 w-4" /> Export Cycle Count</Button>
+      </div>
+
+      <Card>
+        <CardHeader className="flex items-center justify-between flex-wrap gap-2">
+          <CardTitle className="flex items-center gap-2"><Target className="h-5 w-5" /> Cycle Count Analytics</CardTitle>
+          <div className="flex gap-2 flex-wrap">
+            {Object.entries(cycleSummary?.byStatus || {}).map(([s, c]) => (
+              <Badge key={s} variant={s === "completed" ? "default" : "secondary"}>{s}: {c}</Badge>
+            ))}
+          </div>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="grid gap-4 md:grid-cols-4">
+            <Card><CardContent className="pt-6"><div className="text-2xl font-bold">{cycleSummary?.totalTasks ?? 0}</div><div className="text-sm text-muted-foreground">Total Tasks</div></CardContent></Card>
+            <Card><CardContent className="pt-6"><div className="text-2xl font-bold text-amber-600">{cycleSummary?.openTasks ?? 0}</div><div className="text-sm text-muted-foreground">Open Tasks</div></CardContent></Card>
+            <Card><CardContent className="pt-6"><div className="text-2xl font-bold text-red-600">{(cycleSummary?.totalDiscrepancy ?? 0).toFixed(1)}</div><div className="text-sm text-muted-foreground">Total Discrepancy</div></CardContent></Card>
+            <Card><CardContent className="pt-6"><div className="text-2xl font-bold text-green-600">{(cycleSummary?.avgAccuracy ?? 0).toFixed(1)}%</div><div className="text-sm text-muted-foreground">Avg Accuracy</div></CardContent></Card>
+          </div>
+          <div className="grid gap-4 md:grid-cols-2">
+            <Card>
+              <CardHeader><CardTitle className="text-sm">Accuracy Trend (30d)</CardTitle></CardHeader>
+              <CardContent>
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={cycleAccuracy || []}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" fontSize={9} />
+                    <YAxis domain={[0, 100]} />
+                    <Tooltip formatter={(v: unknown) => `${Number(v).toFixed(1)}%`} />
+                    <Line type="monotone" dataKey="accuracy" stroke="#16a34a" strokeWidth={2} dot={false} />
+                  </LineChart>
+                </ResponsiveContainer>
+              </CardContent>
+            </Card>
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between"><CardTitle className="text-sm flex items-center gap-2"><LayoutGrid className="h-4 w-4" /> Discrepancy by Location</CardTitle></CardHeader>
+              <CardContent>
+                {cycleLocation && cycleLocation.length > 0 ? (
+                  <Table><TableHeader><TableRow><TableHead>Location</TableHead><TableHead className="text-right">Items</TableHead><TableHead className="text-right">Diff</TableHead></TableRow></TableHeader>
+                  <TableBody>{cycleLocation.map((r) => (<TableRow key={r.location}><TableCell className="text-xs">{r.location}</TableCell><TableCell className="text-right">{r.items}</TableCell><TableCell className="text-right text-red-600">{r.total_diff.toFixed(1)}</TableCell></TableRow>))}</TableBody></Table>
+                ) : <p className="text-sm text-muted-foreground text-center py-4">No data</p>}
+              </CardContent>
+            </Card>
+          </div>
+          <Card>
+            <CardHeader className="flex flex-row items-center justify-between"><CardTitle className="text-sm flex items-center gap-2"><UserCheck className="h-4 w-4" /> Discrepancy by Staff</CardTitle></CardHeader>
+            <CardContent>
+              {cycleStaff && cycleStaff.length > 0 ? (
+                <Table><TableHeader><TableRow><TableHead>Staff</TableHead><TableHead className="text-right">Actions</TableHead><TableHead className="text-right">Total Diff</TableHead></TableRow></TableHeader>
+                <TableBody>{cycleStaff.map((r) => (<TableRow key={r.user_id}><TableCell className="text-xs">{r.name || r.user_id.slice(0, 8)}</TableCell><TableCell className="text-right">{r.actions}</TableCell><TableCell className="text-right text-red-600">{r.total_diff.toFixed(1)}</TableCell></TableRow>))}</TableBody></Table>
+              ) : <p className="text-sm text-muted-foreground text-center py-4">No approval activity yet</p>}
+            </CardContent>
+          </Card>
+        </CardContent>
+      </Card>
 
       <div className="grid gap-4 md:grid-cols-4">
         <Card><CardHeader className="flex flex-row items-center justify-between pb-2"><CardTitle className="text-sm font-medium">Completed</CardTitle><ClipboardCheck className="h-5 w-5 text-green-600" /></CardHeader><CardContent><div className="text-2xl font-bold">{completed.length}</div></CardContent></Card>

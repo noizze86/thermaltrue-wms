@@ -129,7 +129,7 @@ async fn persist_forecast(
     .bind(mape).bind(mae).bind(rmse)
     .bind(seasonal).bind(trend).bind(is_seasonal).bind(recommendations)
     .bind(&now).bind(&now)
-    .execute(pool).await.ok();
+    .execute(pool).await.unwrap_or_else(|e| { log::warn!("persist_forecast failed: {}", e); Default::default() });
 }
 
 pub async fn forecast_generate(
@@ -303,13 +303,19 @@ pub async fn forecast_summary(
          COUNT(*) FILTER (WHERE is_seasonal=TRUE) as seasonal_cnt, \
          COALESCE(AVG(mape),0) as avg_mape \
          FROM forecast_metrics WHERE period=$1 AND forecast_model='best'"
-    ).bind(&period).fetch_one(&pool.pool).await {
-        Ok(r) => r,
-        Err(_) => {
-            sqlx::query(
+    ).bind(&period).fetch_optional(&pool.pool).await {
+        Ok(Some(r)) => r,
+        Ok(None) | Err(_) => {
+            match sqlx::query(
                 "SELECT 0::bigint as total, 0::bigint as forecasted, 0::bigint as trend_up, \
                  0::bigint as trend_down, 0::bigint as seasonal_cnt, 0::double precision as avg_mape"
-            ).fetch_one(&pool.pool).await.unwrap()
+            ).fetch_optional(&pool.pool).await {
+                Ok(Some(r)) => r,
+                _ => {
+                    log::error!("Forecast summary fallback query failed");
+                    return Ok(Json(json!({"total_materials":0,"forecasted":0,"trend_up":0,"trend_down":0,"seasonal_count":0,"avg_mape":0.0})));
+                }
+            }
         }
     };
 

@@ -3,7 +3,7 @@ use axum::{Json, extract::{State, Query, Path}, Extension};
 use serde::Deserialize;
 use serde_json::json;
 use crate::db_pool::DbPool;
-use crate::models::{CompanyProfile, NotificationConfig, Role, AppConfig, AuditLog};
+use crate::models::{CompanyProfile, EmailConfig, NotificationConfig, Role, AppConfig, AuditLog};
 use crate::validate;
 use sqlx::Row;
 
@@ -54,6 +54,7 @@ pub async fn save_company_profile(
             .execute(&pool.pool).await
             .map_err(|e| crate::server::server_error(e))?;
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "company_profile", "1", &format!("company_name={} phone={} email={}", body.company_name, body.phone, body.email)).await;
     Ok(Json(()))
 }
 
@@ -95,6 +96,63 @@ pub async fn save_notification_config(
             .execute(&pool.pool).await
             .map_err(|e| crate::server::server_error(e))?;
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "notification_config", &body.config_key, &format!("{} -> {}", body.config_key, body.config_value)).await;
+    Ok(Json(()))
+}
+
+// ── Email Config ──
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SaveEmailConfigBody {
+    pub smtp_host: String,
+    pub smtp_port: i32,
+    pub smtp_user: String,
+    pub smtp_pass: String,
+    pub sender_name: String,
+    pub sender_email: String,
+    pub use_tls: bool,
+}
+
+pub async fn get_email_config(
+    State(pool): State<Arc<DbPool>>,
+) -> Result<Json<Option<EmailConfig>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let row = sqlx::query("SELECT id, smtp_host, smtp_port, smtp_user, smtp_pass, sender_name, sender_email, use_tls FROM email_config LIMIT 1")
+        .fetch_optional(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    match row {
+        Some(r) => Ok(Json(Some(EmailConfig {
+            id: r.get(0), smtp_host: r.get(1), smtp_port: r.get(2),
+            smtp_user: r.get(3), smtp_pass: r.get(4),
+            sender_name: r.get(5), sender_email: r.get(6), use_tls: r.get(7),
+        }))),
+        None => Ok(Json(None)),
+    }
+}
+
+pub async fn save_email_config(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Json(body): Json<SaveEmailConfigBody>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let existing: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM email_config")
+        .fetch_one(&pool.pool).await.unwrap_or(false);
+    if existing {
+        sqlx::query("UPDATE email_config SET smtp_host=$1, smtp_port=$2, smtp_user=$3, smtp_pass=$4, sender_name=$5, sender_email=$6, use_tls=$7")
+            .bind(&body.smtp_host).bind(&body.smtp_port).bind(&body.smtp_user).bind(&body.smtp_pass)
+            .bind(&body.sender_name).bind(&body.sender_email).bind(&body.use_tls)
+            .execute(&pool.pool).await
+            .map_err(|e| crate::server::server_error(e))?;
+    } else {
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO email_config (id, smtp_host, smtp_port, smtp_user, smtp_pass, sender_name, sender_email, use_tls) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
+            .bind(&id).bind(&body.smtp_host).bind(&body.smtp_port).bind(&body.smtp_user)
+            .bind(&body.smtp_pass).bind(&body.sender_name).bind(&body.sender_email).bind(&body.use_tls)
+            .execute(&pool.pool).await
+            .map_err(|e| crate::server::server_error(e))?;
+    }
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "email_config", "1", &format!("smtp_host={} sender_email={}", body.smtp_host, body.sender_email)).await;
     Ok(Json(()))
 }
 
@@ -135,6 +193,7 @@ pub async fn create_role(
         .bind(&id).bind(&body.name).bind(&body.description).bind(&body.permissions)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &_user_id, "create", "role", &id, &format!("{} - {}", body.name, body.permissions)).await;
     Ok(Json(Role { id, name: body.name, description: body.description, permissions: body.permissions, is_system: false, created_at: now }))
 }
 
@@ -146,10 +205,11 @@ pub async fn update_role(
     if !validate::check_user_permission(&pool.pool, &_user_id, "manage_users").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    sqlx::query("UPDATE roles SET name=$1, description=$2, permissions=$3 WHERE id=$4 AND is_system=false")
+    sqlx::query("UPDATE roles SET name=$1, description=$2, permissions=$3 WHERE id=$4")
         .bind(&body.name).bind(&body.description).bind(&body.permissions).bind(&body.id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &_user_id, "update", "role", &body.id, &format!("{} - {}", body.name, body.permissions)).await;
     Ok(Json(()))
 }
 
@@ -164,6 +224,7 @@ pub async fn delete_role(
     sqlx::query("DELETE FROM roles WHERE id=$1 AND is_system=false")
         .bind(&id).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &_user_id, "delete", "role", &id, "Role deleted").await;
     Ok(Json(()))
 }
 
@@ -205,6 +266,7 @@ pub async fn set_app_config(
         .bind(&body.key).bind(&body.value)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "app_config", &body.key, &format!("{} -> {}", body.key, body.value)).await;
     Ok(Json(()))
 }
 
@@ -225,6 +287,7 @@ pub async fn get_inventory_settings(
 pub struct SaveInventorySettingBody { pub key: String, pub value: String }
 
 pub async fn save_inventory_setting(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<SaveInventorySettingBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
@@ -233,6 +296,7 @@ pub async fn save_inventory_setting(
         .bind(&key).bind(&body.value)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "app_config", &key, &format!("{} -> {}", key, body.value)).await;
     Ok(Json(()))
 }
 
@@ -258,6 +322,7 @@ pub async fn db_stats(
 pub struct AuditLogQuery { pub limit: Option<i64>, pub offset: Option<i64>, pub user_id: Option<String>, pub entity: Option<String> }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditLogFilteredQuery {
     pub limit: Option<i64>,
     pub offset: Option<i64>,
@@ -269,9 +334,11 @@ pub struct AuditLogFilteredQuery {
 }
 
 pub async fn list_audit_logs(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<AuditLogQuery>,
 ) -> Result<Json<Vec<AuditLog>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let limit_val = params.limit.unwrap_or(200);
     let offset_val = params.offset.unwrap_or(0);
     let mut builder = sqlx::QueryBuilder::new(
@@ -292,9 +359,11 @@ pub async fn list_audit_logs(
 }
 
 pub async fn filtered_audit_logs(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<AuditLogFilteredQuery>,
 ) -> Result<Json<Vec<AuditLog>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let limit_val = params.limit.unwrap_or(200);
     let offset_val = params.offset.unwrap_or(0);
     let mut builder = sqlx::QueryBuilder::new(
@@ -303,8 +372,8 @@ pub async fn filtered_audit_logs(
     if let Some(ref a) = params.action { builder.push(" AND action = ").push_bind(a); }
     if let Some(ref e) = params.entity { builder.push(" AND entity = ").push_bind(e); }
     if let Some(ref u) = params.user_id { builder.push(" AND user_id = ").push_bind(u); }
-    if let Some(ref d) = params.date_start { builder.push(" AND created_at >= ").push_bind(d); }
-    if let Some(ref d) = params.date_end { builder.push(" AND created_at < (").push_bind(d); builder.push("::date + interval '1 day')"); }
+    if let Some(ref d) = params.date_start { builder.push(" AND created_at::timestamp >= ").push_bind(d); builder.push("::timestamp"); }
+    if let Some(ref d) = params.date_end { builder.push(" AND created_at::timestamp < (").push_bind(d); builder.push("::date + interval '1 day')"); }
     builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit_val);
     builder.push(" OFFSET ").push_bind(offset_val);
     let rows = builder.build().fetch_all(&pool.pool).await
@@ -318,17 +387,19 @@ pub async fn filtered_audit_logs(
 }
 
 pub async fn count_filtered_audit_logs(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<AuditLogFilteredQuery>,
 ) -> Result<Json<i64>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT COUNT(*) FROM audit_log WHERE 1=1"
     );
     if let Some(ref a) = params.action { builder.push(" AND action = ").push_bind(a); }
     if let Some(ref e) = params.entity { builder.push(" AND entity = ").push_bind(e); }
     if let Some(ref u) = params.user_id { builder.push(" AND user_id = ").push_bind(u); }
-    if let Some(ref d) = params.date_start { builder.push(" AND created_at >= ").push_bind(d); }
-    if let Some(ref d) = params.date_end { builder.push(" AND created_at < (").push_bind(d); builder.push("::date + interval '1 day')"); }
+    if let Some(ref d) = params.date_start { builder.push(" AND created_at::timestamp >= ").push_bind(d); builder.push("::timestamp"); }
+    if let Some(ref d) = params.date_end { builder.push(" AND created_at::timestamp < (").push_bind(d); builder.push("::date + interval '1 day')"); }
     let count: i64 = builder.build().fetch_one(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?
         .get(0);
@@ -338,6 +409,7 @@ pub async fn count_filtered_audit_logs(
 // ── Type B gaps ──
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AddAuditLogBody { pub user_id: Option<String>, pub action: String, pub entity: String, pub entity_id: Option<String>, pub details: String }
 
 pub async fn add_audit_log(
@@ -371,6 +443,7 @@ pub async fn purge_old_audit_logs(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ExportAuditCsvQuery { pub action: Option<String>, pub entity: Option<String>, pub user_id: Option<String>, pub date_start: Option<String>, pub date_end: Option<String>, pub limit: Option<i64> }
 
 pub async fn export_audit_csv_filtered(
@@ -386,8 +459,8 @@ pub async fn export_audit_csv_filtered(
     if let Some(ref a) = params.action { builder.push(" AND a.action = ").push_bind(a); }
     if let Some(ref e) = params.entity { builder.push(" AND a.entity = ").push_bind(e); }
     if let Some(ref u) = params.user_id { builder.push(" AND a.user_id = ").push_bind(u); }
-    if let Some(ref d) = params.date_start { builder.push(" AND a.created_at >= ").push_bind(d); }
-    if let Some(ref d) = params.date_end { builder.push(" AND a.created_at < (").push_bind(d); builder.push("::date + interval '1 day')"); }
+    if let Some(ref d) = params.date_start { builder.push(" AND a.created_at::timestamp >= ").push_bind(d); builder.push("::timestamp"); }
+    if let Some(ref d) = params.date_end { builder.push(" AND a.created_at::timestamp < (").push_bind(d); builder.push("::date + interval '1 day')"); }
     builder.push(" ORDER BY a.created_at DESC LIMIT ").push_bind(limit_val);
     let rows = builder.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let mut csv = String::from("ID,User ID,Username,Action,Entity,Entity ID,Details,Created At\n");
@@ -424,6 +497,7 @@ pub async fn delete_app_config(
     sqlx::query("DELETE FROM app_config WHERE key=$1")
         .bind(&key).execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "app_config", &key, "App config deleted").await;
     Ok(Json(()))
 }
 
@@ -444,10 +518,12 @@ pub async fn backup_database(
     if !output.status.success() {
         return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("pg_dump: {}", String::from_utf8_lossy(&output.stderr))}))));
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "export", "database_backup", &backup_path, "Database backup created").await;
     Ok(Json(json!(backup_path)))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RestoreDatabaseBody { pub backup_path: String }
 
 pub async fn restore_database(
@@ -464,6 +540,7 @@ pub async fn restore_database(
     if !output.status.success() {
         return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("psql restore: {}", String::from_utf8_lossy(&output.stderr))}))));
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "import", "database_restore", &body.backup_path, "Database restored from backup").await;
     Ok(Json(json!("Database restored successfully")))
 }
 
@@ -484,6 +561,7 @@ pub async fn generate_qr_code(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CloneRoleBody { pub source_role_id: String, pub new_name: String, pub new_description: String }
 
 pub async fn clone_role(
@@ -503,6 +581,7 @@ pub async fn clone_role(
         .bind(&new_id).bind(&body.new_name).bind(&body.new_description).bind(&source_permissions)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "role", &new_id, &format!("Cloned from {} as {}", body.source_role_id, body.new_name)).await;
     Ok(Json(Role { id: new_id, name: body.new_name, description: body.new_description, permissions: source_permissions, is_system: false, created_at: now }))
 }
 

@@ -77,7 +77,7 @@ pub async fn login(pool: State<'_, DbPool>, req: LoginRequest) -> Result<AuthRes
 
     sqlx::query("UPDATE users SET last_login_at=NOW() WHERE id=$1")
         .bind(&user.id)
-        .execute(&pool.pool).await.ok();
+        .execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("auth login last_login update failed: {}", e); Default::default() });
 
     if !bcrypt::verify(&req.password, &user.password_hash).map_err(|e| AppError::Internal(e.to_string()))? {
         let ip = LOCAL_IP.to_string();

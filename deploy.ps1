@@ -1,23 +1,37 @@
-# Deploy script - run as Administrator
-Write-Host "=== Deploying Thermaltrue ==="
+Write-Host "=== Thermaltrue Deploy ===" -ForegroundColor Cyan
 
-# Stop service
-sc.exe stop ThermaltrueServer
-Start-Sleep -Seconds 2
+Write-Host "[1/4] Building release binary..." -ForegroundColor Yellow
+$result = & cargo build --release -p server 2>&1
+$exitCode = $LASTEXITCODE
+if ($exitCode -ne 0) {
+    $result | ForEach-Object { Write-Host $_ -ForegroundColor Red }
+    exit 1
+}
+Write-Host "  OK" -ForegroundColor Green
 
-# Kill lingering process
-Get-Process -Name server -ErrorAction SilentlyContinue | Stop-Process -Force
+$src = "C:\test wms\thermaltrue\target\release\server.exe"
+$dst = "C:\Program Files\Thermaltrue\server.exe"
+$envSrc = "C:\test wms\thermaltrue\.env"
+$envDst = "C:\Program Files\Thermaltrue\.env"
 
-# Copy server.exe
-Copy-Item -LiteralPath "C:\test wms\thermaltrue\target\release\server.exe" -Destination "C:\Program Files\Thermaltrue\server.exe" -Force
+Write-Host "[2/4] Copying new binary..." -ForegroundColor Yellow
+Copy-Item $src "$dst.new" -Force
+Write-Host "  OK" -ForegroundColor Green
 
-# Copy frontend dist
-Remove-Item -LiteralPath "C:\Program Files\Thermaltrue\dist" -Recurse -Force -ErrorAction SilentlyContinue
-Copy-Item -LiteralPath "C:\test wms\thermaltrue\dist" -Destination "C:\Program Files\Thermaltrue\dist" -Recurse -Force
+Write-Host "[3/5] Copying .env..." -ForegroundColor Yellow
+Copy-Item $envSrc $envDst -Force
+Write-Host "  OK" -ForegroundColor Green
 
-# Start service
-sc.exe start ThermaltrueServer
+Write-Host "[4/5] Swapping files..." -ForegroundColor Yellow
+Remove-Item "$dst.old" -Force -ErrorAction SilentlyContinue
+Rename-Item $dst "$dst.old" -Force
+Rename-Item "$dst.new" $dst -Force
+Write-Host "  OK" -ForegroundColor Green
 
-Write-Host "=== Deploy complete ==="
-Start-Sleep -Seconds 3
-Get-Service ThermaltrueServer | Format-Table Name, Status
+Write-Host "[5/5] Restarting service..." -ForegroundColor Yellow
+Restart-Service -Name ThermaltrueServer -Force -ErrorAction SilentlyContinue
+if ($?) { Write-Host "  Service restarted" -ForegroundColor Green }
+else { Write-Host "  Service restart failed, reboot needed" -ForegroundColor Yellow }
+
+Write-Host "=== Deploy complete! ===" -ForegroundColor Cyan
+Get-ChildItem "C:\Program Files\Thermaltrue\server.exe*" | Select-Object Name, Length, LastWriteTime

@@ -1,13 +1,13 @@
 import { useState } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { getWarehouses, getMaterials, getRacks, getRackOccupancy, getDashboardKpi, getWarehouseStats, getPendingTransactions, getThroughputMetrics, getPickerActivity, getSlottingSuggestions, batchTransferRack } from "../../api"
+import { getWarehouses, getMaterials, getRacks, getRackOccupancy, getDashboardKpi, getWarehouseStats, getPendingTransactions, getThroughputMetrics, getPickerActivity, getSlottingSuggestions, batchTransferRack, getCycleSummary } from "../../api"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
 import { Badge } from "../../components/ui/badge"
 import { Button } from "../../components/ui/button"
 import { Label } from "../../components/ui/label"
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog"
-import { Warehouse, Package, Layers, BarChart3, AlertTriangle, ArrowLeftRight, Users, Move, Map as MapIcon } from "lucide-react"
+import { Warehouse, Package, Layers, BarChart3, AlertTriangle, ArrowLeftRight, Users, Move, Map as MapIcon, Target } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 import { useNavigate } from "react-router-dom"
 import { toast } from "../../hooks/use-toast"
@@ -30,6 +30,7 @@ export default function WarehouseDashboardPage() {
   const { data: throughput } = useQuery({ queryKey: ["throughput"], queryFn: getThroughputMetrics })
   const { data: pickerActivity } = useQuery({ queryKey: ["picker_activity"], queryFn: getPickerActivity })
   const { data: slotting } = useQuery({ queryKey: ["slotting"], queryFn: getSlottingSuggestions })
+  const { data: cycleSummary } = useQuery({ queryKey: ["cycle_summary"], queryFn: getCycleSummary })
 
   const batchTransferMut = useMutation({
     mutationFn: () => batchTransferRack(batchSourceRackId, batchDestWhId, batchDestRackId || undefined),
@@ -90,6 +91,16 @@ export default function WarehouseDashboardPage() {
             <div className="w-full h-2 rounded-full bg-muted mt-1 overflow-hidden">
               <div className={`h-full rounded-full ${getUtilizationClass(overallUtilization)}`} style={{ width: `${overallUtilization}%` }} />
             </div>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium">Cycle Accuracy</CardTitle>
+            <Target className="h-5 w-5 text-green-600" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-green-600">{(cycleSummary?.avgAccuracy || 0).toFixed(1)}%</div>
+            <p className="text-xs text-muted-foreground">{cycleSummary?.openTasks || 0} open tasks</p>
           </CardContent>
         </Card>
       </div>

@@ -22,6 +22,7 @@ pub struct TransferOrderCreateBody { pub from_warehouse_id: String, pub to_wareh
 pub struct TransferOrderStatusBody { pub status: String }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct BatchRackBody { pub source_rack_id: String, pub dest_warehouse_id: String, pub dest_rack_id: Option<String> }
 
 pub async fn transfer_material(
@@ -42,24 +43,24 @@ pub async fn transfer_material(
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM transactions WHERE type='transfer'")
         .fetch_one(&mut *db_tx).await.unwrap_or(1);
     let txn_number = format!("TRF-{:04}", count);
-    sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, notes, user_id, created_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8)")
+    sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, notes, user_id, created_at, updated_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_number).bind(&body.material_id).bind(&body.from_warehouse_id).bind(-body.quantity)
-        .bind(format!("Transfer to {}", body.to_warehouse_id)).bind(&user_id).bind(&now)
+        .bind(format!("Transfer to {}", body.to_warehouse_id)).bind(&user_id).bind(&now).bind(&now)
         .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     let count2: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM transactions WHERE type='transfer'")
         .fetch_one(&mut *db_tx).await.unwrap_or(1);
     let txn_number2 = format!("TRF-{:04}", count2 + 1);
-    sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, notes, user_id, created_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9)")
+    sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, notes, user_id, created_at, updated_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9,$10)")
         .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_number2).bind(&body.material_id).bind(&body.to_warehouse_id).bind(&body.rack_id)
-        .bind(body.quantity).bind(format!("Transfer from {}", body.from_warehouse_id)).bind(&user_id).bind(&now)
+        .bind(body.quantity).bind(format!("Transfer from {}", body.from_warehouse_id)).bind(&user_id).bind(&now).bind(&now)
         .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     sqlx::query("UPDATE materials SET warehouse_id=$1, rack_id=$2 WHERE id=$3")
         .bind(&body.to_warehouse_id).bind(&body.rack_id).bind(&body.material_id)
         .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "transfer", "material", &body.material_id, &format!("qty {} from {} to {}", body.quantity, body.from_warehouse_id, body.to_warehouse_id)).await;
     Ok(Json(()))
 }
-
 pub async fn transfer_bulk(
     Extension(_user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
@@ -83,15 +84,15 @@ pub async fn transfer_bulk(
             continue;
         }
         let txn_number = format!("TRF-{:04}", count);
-        sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, notes, user_id, created_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8)")
+        sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, notes, user_id, created_at, updated_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9)")
             .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_number).bind(material_id).bind(from_wh).bind(-quantity)
-            .bind(format!("Bulk transfer to {}", to_wh)).bind(&user_id).bind(&now)
+            .bind(format!("Bulk transfer to {}", to_wh)).bind(&user_id).bind(&now).bind(&now)
             .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         count += 1;
         let txn_number2 = format!("TRF-{:04}", count);
-        sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, notes, user_id, created_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9)")
+        sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, notes, user_id, created_at, updated_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9,$10)")
             .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_number2).bind(material_id).bind(to_wh).bind(rack_id)
-            .bind(quantity).bind(format!("Bulk transfer from {}", from_wh)).bind(&user_id).bind(&now)
+            .bind(quantity).bind(format!("Bulk transfer from {}", from_wh)).bind(&user_id).bind(&now).bind(&now)
             .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         count += 1;
         sqlx::query("UPDATE materials SET warehouse_id=$1, rack_id=$2 WHERE id=$3")
@@ -101,6 +102,7 @@ pub async fn transfer_bulk(
     }
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     let msg = if errors.is_empty() { format!("{} material(s) transferred", tx_count) } else { format!("{} transferred, {} errors: {}", tx_count, errors.len(), errors.join("\n")) };
+    crate::server::handlers::audit(&pool.pool, &user_id, "transfer", "material", "bulk", &msg).await;
     Ok(Json(json!(msg)))
 }
 
@@ -113,25 +115,25 @@ pub async fn batch_transfer_rack(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
-    let materials: Vec<(String, String, f64)> = sqlx::query("SELECT id, name, quantity FROM materials WHERE rack_id=$1 AND is_active=true")
+    let materials: Vec<(String, String, f64, String)> = sqlx::query("SELECT id, name, quantity, warehouse_id FROM materials WHERE rack_id=$1 AND is_active=true")
         .bind(&body.source_rack_id).fetch_all(&mut *db_tx).await
         .map_err(|e| crate::server::server_error(e))?
-        .iter().map(|row| (row.get::<String,_>(0), row.get::<String,_>(1), row.get::<f64,_>(2))).collect();
+        .iter().map(|row| (row.get::<String,_>(0), row.get::<String,_>(1), row.get::<f64,_>(2), row.get::<String,_>(3))).collect();
     if materials.is_empty() { return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"No active materials in source rack"})))); }
     let mut count: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM transactions WHERE type='transfer'").fetch_one(&mut *db_tx).await.unwrap_or(1);
     let mut tx_count = 0;
-    for (mid, _name, qty) in &materials {
+    for (mid, _name, qty, src_wh) in &materials {
         if *qty <= 0.0 { continue; }
         let txn_number = format!("TRF-{:04}", count);
-        sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, notes, user_id, created_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8)")
-            .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_number).bind(mid).bind("").bind(-qty)
-            .bind(format!("Batch rack transfer to {}", body.dest_warehouse_id)).bind(&user_id).bind(&now)
+        sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, notes, user_id, created_at, updated_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9)")
+            .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_number).bind(mid).bind(src_wh).bind(-qty)
+            .bind(format!("Batch rack transfer to {}", body.dest_warehouse_id)).bind(&user_id).bind(&now).bind(&now)
             .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         count += 1;
         let txn_number2 = format!("TRF-{:04}", count);
-        sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, notes, user_id, created_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9)")
+        sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, rack_id, quantity, notes, user_id, created_at, updated_at) VALUES ($1,$2,'transfer',$3,$4,$5,$6,$7,$8,$9,$10)")
             .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_number2).bind(mid).bind(&body.dest_warehouse_id).bind(&body.dest_rack_id)
-            .bind(qty).bind(format!("Batch rack transfer from rack {}", body.source_rack_id)).bind(&user_id).bind(&now)
+            .bind(qty).bind(format!("Batch rack transfer from rack {}", body.source_rack_id)).bind(&user_id).bind(&now).bind(&now)
             .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         count += 1;
         sqlx::query("UPDATE materials SET warehouse_id=$1, rack_id=$2 WHERE id=$3")
@@ -140,6 +142,7 @@ pub async fn batch_transfer_rack(
         tx_count += 1;
     }
     db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "transfer", "rack", &body.source_rack_id, &format!("batch to warehouse {} rack {:?} - {} material(s)", body.dest_warehouse_id, body.dest_rack_id, tx_count)).await;
     Ok(Json(json!(format!("Transferred {} material(s)", tx_count))))
 }
 
@@ -185,6 +188,7 @@ pub async fn create_transfer_order(
             .bind(item.get("quantity").and_then(|v| v.as_f64()).unwrap_or(0.0)).bind(&now)
             .execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "transfer_order", &id, &format!("{} - {} items from {} to {}", txn, body.items.len(), body.from_warehouse_id, body.to_warehouse_id)).await;
     Ok(Json(json!({"id": id, "transfer_number": txn, "from_warehouse_id": body.from_warehouse_id, "to_warehouse_id": body.to_warehouse_id, "status": "draft", "notes": body.notes, "created_by": user_id, "approved_by": null, "created_at": now, "updated_at": now})))
 }
 
@@ -214,14 +218,15 @@ pub async fn update_transfer_order_status(
                 .bind(qty).bind(&mat_id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
             sqlx::query("UPDATE materials SET quantity = COALESCE(quantity,0) + $1, warehouse_id=$2 WHERE id=$3")
                 .bind(qty).bind(&to_wh).bind(&mat_id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
-            sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, price, reference, notes, user_id, status, created_at) VALUES ($1,$2,'transfer',$3,$4,$5,0,$6,$7,$8,'approved',$9)")
-                .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_num).bind(&mat_id).bind(&to_wh).bind(qty).bind(&id).bind(format!("Transfer Order: {}", id)).bind(&user_id).bind(&now)
+            sqlx::query("INSERT INTO transactions (id, transaction_number, type, material_id, warehouse_id, quantity, price, reference, notes, user_id, status, created_at, updated_at) VALUES ($1,$2,'transfer',$3,$4,$5,0,$6,$7,$8,'approved',$9,$10)")
+                .bind(uuid::Uuid::new_v4().to_string()).bind(&txn_num).bind(&mat_id).bind(&to_wh).bind(qty).bind(&id).bind(format!("Transfer Order: {}", id)).bind(&user_id).bind(&now).bind(&now)
                 .execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         }
         sqlx::query("UPDATE transfer_orders SET approved_by=$1 WHERE id=$2")
             .bind(&user_id).bind(&id).execute(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
         db_tx.commit().await.map_err(|e| crate::server::server_error(e))?;
     }
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "transfer_order", &id, &format!("status -> {}", body.status)).await;
     Ok(Json(()))
 }
 

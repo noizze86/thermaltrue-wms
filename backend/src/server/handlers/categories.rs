@@ -15,7 +15,7 @@ pub async fn list(
     State(pool): State<Arc<DbPool>>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Category>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_materials").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let rows = sqlx::query(
         "SELECT id, name, description, parent_id, icon, color, created_at FROM categories WHERE ($1::text IS NULL OR name ILIKE '%' || $1 || '%') ORDER BY name"
     )
@@ -51,6 +51,7 @@ pub async fn tree(
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct CreateBody { pub name: String, pub description: String, pub parent_id: Option<String>, pub icon: String, pub color: String }
 
 pub async fn create(
@@ -66,10 +67,12 @@ pub async fn create(
         .execute(&pool.pool)
         .await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "create", "category", &id, &body.name).await;
     Ok(Json(()))
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct UpdateBody { pub id: String, pub name: String, pub description: String, pub parent_id: Option<String>, pub icon: String, pub color: String }
 
 pub async fn update(
@@ -83,6 +86,7 @@ pub async fn update(
         .execute(&pool.pool)
         .await
         .map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "category", &body.id, &body.name).await;
     Ok(Json(()))
 }
 
@@ -95,7 +99,8 @@ pub async fn delete(
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE category_id=$1 AND is_active=true")
         .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     if used > 0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Category is used by {} active material(s)", used)})))); }
-    sqlx::query("UPDATE categories SET parent_id=NULL WHERE parent_id=$1").bind(&id).execute(&pool.pool).await.ok();
+    sqlx::query("UPDATE categories SET parent_id=NULL WHERE parent_id=$1").bind(&id).execute(&pool.pool).await.unwrap_or_else(|e| { log::warn!("categories delete reset parent failed: {}", e); Default::default() });
     sqlx::query("DELETE FROM categories WHERE id=$1").bind(&id).execute(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "delete", "category", &id, "Category deleted").await;
     Ok(Json(()))
 }

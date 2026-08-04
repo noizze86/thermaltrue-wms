@@ -9,6 +9,7 @@ rust-version = "1.77.2"
 [dependencies]
 backend = { path = "../backend", features = ["server"] }
 axum = "0.7"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 tokio = { version = "1", features = ["full"] }
 dotenvy = "0.15"
 windows-service = "0.7"
@@ -17,4 +18,5 @@ log-panics = "2"
 env_logger = "0.11"
 rand = "0.8"
 hex = "0.4"
+
 

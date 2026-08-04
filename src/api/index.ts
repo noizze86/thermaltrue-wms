@@ -11,9 +11,9 @@ export class AppError extends Error {
 
 async function invokeAuth<T>(cmd: string, args?: Record<string, unknown>): Promise<T> {
   const token = localStorage.getItem("wms_token");
-  if (!token) throw new AppError("Auth", "Not authenticated");
+  const finalArgs = token ? { ...args, token } : (args || {});
   try {
-    return await invoke<T>(cmd, { ...args, token });
+    return await invoke<T>(cmd, finalArgs);
   } catch (e: unknown) {
     console.error(`[invokeAuth] ${cmd} failed:`, e);
     const err = e as { type?: string; message?: string };
@@ -57,6 +57,7 @@ export interface Material {
   unit_id: string | null;
   unit_name: string | null;
   supplier_id: string | null;
+  supplier_name: string | null;
   warehouse_id: string | null;
   warehouse_name: string | null;
   rack_id: string | null;
@@ -256,6 +257,13 @@ export interface StockOpname {
   created_by: string | null;
   created_at: string;
   updated_at: string;
+  cycle_mode?: string;
+  deadline?: string;
+  blind_mode?: boolean;
+  tolerance_pct?: number;
+  assigned_to?: string;
+  zone_id?: string;
+  recount_of?: string;
 }
 
 export interface StockOpnameItem {
@@ -266,6 +274,42 @@ export interface StockOpnameItem {
   physical_qty: number;
   difference: number;
   notes: string;
+  cycle_round?: number;
+  approved_status?: string;
+  reviewer_id?: string;
+  reviewed_at?: string;
+  remark?: string;
+}
+
+export interface CycleScopeItem {
+  id: string;
+  sku: string;
+  name: string;
+  quantity: number;
+  min_stock: number | null;
+  rack_id: string;
+  category_id: string;
+}
+
+export interface CycleHistoryEntry {
+  id: string;
+  task_id: string;
+  material_id: string;
+  action: string;
+  before_qty: number;
+  after_qty: number;
+  changed_by: string;
+  created_at: string;
+}
+
+export interface CycleZone {
+  id: string;
+  zone_id: string;
+  warehouse_id: string | null;
+  assign_mode: string;
+  last_date: string;
+  next_date: string;
+  created_at: string;
 }
 
 export interface Category {
@@ -475,7 +519,7 @@ export interface Location {
 export const getLocations = (warehouse_id?: string, parent_id?: string | null) =>
   invokeAuth<Location[]>("get_locations", { warehouseId: warehouse_id, parentId: parent_id });
 export const createLocation = (warehouse_id: string, parent_id: string | null, type_: string, code: string) =>
-  invokeAuth<Location>("create_location", { warehouseId: warehouse_id, parentId: parent_id, type_: type_, code });
+  invokeAuth<Location>("create_location", { warehouseId: warehouse_id, parentId: parent_id, type: type_, code });
 export const deleteLocation = (id: string) => invokeAuth<void>("delete_location", { id });
 
 // Stock Opname
@@ -571,6 +615,9 @@ export interface DashboardMetricsLatest {
   updated_at: string;
 }
 export const getMetricsLatest = () => invokeAuth<DashboardMetricsLatest>("get_metrics_latest");
+export const getComputeAll = (wh?: string) => invokeAuth<Record<string, unknown>>("get_compute_all", wh ? { warehouseId: wh } : undefined);
+export const getDemandForecast = (wh?: string) => invokeAuth<Record<string, unknown>[]>("get_demand_forecast", wh ? { warehouseId: wh } : undefined);
+export const getReorderSuggestions = (wh?: string) => invokeAuth<Record<string, unknown>[]>("get_reorder_suggestions", wh ? { warehouseId: wh } : undefined);
 
 // Fase 6 — Cost Analysis
 export interface CostSummary {
@@ -743,7 +790,7 @@ export const getTxByUser = (date_start?: string, date_end?: string) => invokeAut
 export const getDailyTrend = (date_start: string, date_end: string) => invokeAuth<DailyTrend[]>("get_daily_trend", { dateStart: date_start, dateEnd: date_end });
 export const getTxDateComparison = (a_start: string, a_end: string, b_start: string, b_end: string) => invokeAuth<DailyTrend[]>("get_tx_date_comparison", { aStart: a_start, aEnd: a_end, bStart: b_start, bEnd: b_end });
 export const getOpnameVariance = (opname_id: string) => invokeAuth<OpnameVariance[]>("get_opname_variance", { opnameId: opname_id });
-export const approveOpnameAdjustment = (opname_id: string, approved: boolean) => invokeAuth<void>("approve_opname_adjustment", { opnameId: opname_id, approved });
+export const approveOpnameAdjustment = (opname_id: string, approved: boolean, itemIds?: string[]) => invokeAuth<any>("approve_opname_adjustment", { opnameId: opname_id, approved, itemIds: itemIds ?? [] });
 export const exportOpnameXlsx = (opname_id: string) => invokeAuth<number[]>("export_opname_xlsx", { opnameId: opname_id });
 export const getReportSchedules = () => invokeAuth<ReportSchedule[]>("get_report_schedules");
 export const saveReportSchedule = (schedule: ReportSchedule) => invokeAuth<void>("save_report_schedule", { schedule });
@@ -831,12 +878,32 @@ export const backupDatabase = () => invokeAuth<string>("backup_database");
 export const restoreDatabase = (backup_path: string) =>
   invokeAuth<string>("restore_database", { backupPath: backup_path });
 export const getDbStats = () => invokeAuth<Record<string, number>>("get_db_stats");
-export const getAppConfig = (key: string) => invokeAuth<string>("get_app_config", { key });
+export const getAppConfig = async (key: string): Promise<string> => {
+  const res = await invokeAuth<unknown>("get_app_config", { key })
+  if (Array.isArray(res)) {
+    const first = res[0] as { value?: unknown } | undefined
+    return first?.value == null ? "" : String(first.value)
+  }
+  return res == null ? "" : String(res)
+};
 export const setAppConfig = (key: string, value: string) =>
   invokeAuth<void>("set_app_config", { key, value });
 export const getNotificationConfig = () => invokeAuth<NotificationConfig[]>("get_notification_config");
 export const setNotificationConfig = (config_key: string, config_value: string) =>
   invokeAuth<void>("set_notification_config", { configKey: config_key, configValue: config_value });
+export interface EmailConfig {
+  id: string;
+  smtpHost: string;
+  smtpPort: number;
+  smtpUser: string;
+  smtpPass: string;
+  senderName: string;
+  senderEmail: string;
+  useTls: boolean;
+}
+export const getEmailConfig = () => invokeAuth<EmailConfig | null>("get_email_config");
+export const saveEmailConfig = (cfg: Omit<EmailConfig, "id">) =>
+  invokeAuth<void>("save_email_config", cfg);
 export const generateQrCode = (data: string) => invokeAuth<string>("generate_qr_code", { data });
 
 // Roles / RBAC
@@ -1010,8 +1077,37 @@ export const getTransferItems = (transfer_id: string) => invokeAuth<{ id: string
 export const getCycleSchedules = () => invokeAuth<CycleSchedule[]>("get_cycle_schedules");
 export const createCycleSchedule = (warehouse_id: string | null, class_: string, frequency_days: number) => invokeAuth<CycleSchedule>("create_cycle_schedule", { warehouseId: warehouse_id, class: class_, frequencyDays: frequency_days });
 export const deleteCycleSchedule = (id: string) => invokeAuth<void>("delete_cycle_schedule", { id });
-export const getOpnameConfig = () => invokeAuth<{ blind_count_mode: boolean; auto_adjust_threshold: number }>("get_opname_config");
+export const getCycleScopeItems = (warehouse_id?: string | null, category_id?: string | null, rack_id?: string | null) =>
+  invokeAuth<CycleScopeItem[]>("get_cycle_scope_items", { warehouseId: warehouse_id ?? null, categoryId: category_id ?? null, rackId: rack_id ?? null });
+export const getCycleTaskHistory = (task_id: string) =>
+  invokeAuth<CycleHistoryEntry[]>("get_cycle_task_history", { taskId: task_id });
+export const getCycleZones = () => invokeAuth<CycleZone[]>("get_cycle_zones");
+export const createZoneSchedule = (zone_id: string, warehouse_id: string | null, assign_mode: string) =>
+  invokeAuth<CycleZone>("create_zone_schedule", { zoneId: zone_id, warehouseId: warehouse_id, assignMode: assign_mode });
+export const deleteZoneSchedule = (id: string) => invokeAuth<void>("delete_zone_schedule", { id });
+export const getOpnameConfig = () => invokeAuth<{ blind_count_mode: boolean; auto_adjust_threshold: number; cycle_low_stock_trigger?: boolean }>("get_opname_config");
 export const setOpnameConfig = (key: string, value: string) => invokeAuth<void>("set_opname_config", { key, value });
+
+// ── Cycle Count Reports (Fase 3) ──
+export interface CycleSummary {
+  totalTasks: number; openTasks: number; totalDiscrepancy: number; avgAccuracy: number;
+  byStatus: Record<string, number>;
+}
+export interface CycleAccuracyPoint { date: string; accuracy: number; count: number }
+export interface CycleByStaffRow { user_id: string; name: string | null; actions: number; total_diff: number }
+export interface CycleByLocationRow { location: string; items: number; total_diff: number }
+export const getCycleSummary = () => invokeAuth<CycleSummary>("get_cycle_summary");
+export const getCycleAccuracy = (days?: number) => invokeAuth<CycleAccuracyPoint[]>("get_cycle_accuracy", { days: days ?? 30 });
+export const getCycleByStaff = () => invokeAuth<CycleByStaffRow[]>("get_cycle_by_staff");
+export const getCycleByLocation = () => invokeAuth<CycleByLocationRow[]>("get_cycle_by_location");
+export const exportCycleXlsx = () => invokeAuth<number[]>("export_cycle_xlsx");
+
+// ── Cycle Count Recount + In-App Notifications (Fase 4) ──
+export const recountCycleTask = (task_id: string) => invokeAuth<StockOpname>("recount_cycle_task", { taskId: task_id });
+export interface AppNotification { id: string; user_id: string; title: string; message: string; type: string; is_read: boolean; created_at: string }
+export const getNotifications = () => invokeAuth<AppNotification[]>("get_notifications");
+export const markNotificationRead = (id: string) => invokeAuth<void>("mark_notification_read", { id });
+export const markAllNotificationsRead = () => invokeAuth<void>("mark_all_notifications_read");
 
 // ── Phase 9A — Budgets ──
 export const getBudgets = () => invokeAuth<Budget[]>("get_budgets");

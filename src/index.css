@@ -121,3 +121,12 @@ body {
   .sidebar-mobile { display: none; }
   .sidebar-desktop { display: block; }
 }
+
+@media print {
+  .no-print, .no-print * {
+    display: none !important;
+  }
+  .print-only {
+    display: block !important;
+  }
+}

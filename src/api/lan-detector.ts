@@ -92,34 +92,34 @@ function generateIPRange(base: string, start: number, end: number): string[] {
 const COMMON_SUBNETS: [string, number, number][] = [
   ["192.168.0", 100, 120],
   ["192.168.1", 100, 120],
+  ["192.168.43", 1, 254],
   ["192.168.100", 100, 120],
   ["10.0.0", 100, 120],
   ["10.0.1", 100, 120],
   ["172.16.0", 100, 120],
 ]
 
-async function tryProbe(url: string, signal: AbortSignal): Promise<boolean> {
+async function tryProbe(url: string, timeoutMs: number): Promise<boolean> {
   try {
-    const res = await fetch(`${url}/api/health`, { signal, method: "GET" })
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), timeoutMs)
+    const res = await fetch(`${url}/api/health`, { signal: controller.signal, method: "GET" })
+    clearTimeout(timer)
     return res.ok
   } catch {
     return false
   }
 }
 
-export async function scanSubnetBrowser(port: number = 3000, timeoutPerProbe: number = 2000, scheme: string = "http"): Promise<string | null> {
+export async function scanSubnetBrowser(port: number = 3000, timeoutPerProbe: number = 1500, scheme: string = "http"): Promise<string | null> {
   const ips = COMMON_SUBNETS.flatMap(([base, s, e]) => generateIPRange(base, s, e))
   const baseUrl = (ip: string) => `${scheme}://${ip}:${port}`
 
-  for (let i = 0; i < ips.length; i += 6) {
-    const batch = ips.slice(i, i + 6)
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), timeoutPerProbe)
-
+  for (let i = 0; i < ips.length; i += 15) {
+    const batch = ips.slice(i, i + 15)
     const results = await Promise.allSettled(
-      batch.map(ip => tryProbe(baseUrl(ip), controller.signal))
+      batch.map(ip => tryProbe(baseUrl(ip), timeoutPerProbe))
     )
-    clearTimeout(timer)
 
     for (let j = 0; j < results.length; j++) {
       const r = results[j]

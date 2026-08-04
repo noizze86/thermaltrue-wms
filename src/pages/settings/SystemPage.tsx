@@ -56,8 +56,9 @@ export default function SystemPage() {
   }, [notifications])
 
   useEffect(() => {
-    if (backupInterval) {
-      setBackupIntervalDays(Number(backupInterval))
+    if (backupInterval != null && backupInterval !== "") {
+      const n = Number(backupInterval)
+      setBackupIntervalDays(Number.isFinite(n) ? n : 7)
     }
   }, [backupInterval])
 
