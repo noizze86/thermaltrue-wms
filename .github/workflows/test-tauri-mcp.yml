@@ -76,11 +76,16 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "failed to create local user $pgUser" }
           $pgScript = Join-Path $env:GITHUB_WORKSPACE "tests\pg-start.cjs"
           if (-not (Test-Path $pgScript)) { throw "pg-start.cjs not found at $pgScript" }
+          New-Item -ItemType Directory -Path "C:\ProgramData\pg-embed" -Force | Out-Null
           $sec = ConvertTo-SecureString $pgPass -AsPlainText -Force
           $cred = New-Object System.Management.Automation.PSCredential(".\$pgUser", $sec)
-          $node = Start-Process -FilePath "node" -ArgumentList $pgScript -Credential $cred -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -WindowStyle Hidden -PassThru
+          $node = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "node `"$pgScript`" 1> C:\ProgramData\pg-embed\stdout.log 2> C:\ProgramData\pg-embed\stderr.log" -Credential $cred -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -WindowStyle Hidden -PassThru
           Start-Sleep -Seconds 5
-          if ($node.HasExited) { throw "node pg process exited early (code $($node.ExitCode))" }
+          if ($node.HasExited) {
+            Get-Content "C:\ProgramData\pg-embed\stderr.log" -Tail 30 -ErrorAction SilentlyContinue
+            Get-Content "C:\ProgramData\pg-embed\pg-embed.log" -Tail 40 -ErrorAction SilentlyContinue
+            throw "node pg process exited early (code $($node.ExitCode))"
+          }
           $ok = $false
           for ($i = 0; $i -lt 180; $i++) {
             Start-Sleep -Seconds 1
@@ -93,6 +98,7 @@ jobs:
             if ($ok) { break }
           }
           if (-not $ok) {
+            Get-Content "C:\ProgramData\pg-embed\stderr.log" -Tail 30 -ErrorAction SilentlyContinue
             Get-Content "C:\ProgramData\pg-embed\pg-embed.log" -Tail 40 -ErrorAction SilentlyContinue
             throw "PostgreSQL (embedded) did not start on port 5432"
           }
