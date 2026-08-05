@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
+import fs from "fs";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -25,32 +26,45 @@ export class TauriMcpClient {
   private connected = false;
   private appPath: string;
   private projectRoot: string;
+  private serverEntry: string;
   private host?: string;
   private port?: number;
 
   constructor(opts: TauriMcpClientOptions = {}) {
     this.appPath = opts.appPath || "";
     this.projectRoot = opts.projectRoot || process.cwd();
+    this.serverEntry = opts.serverPath || "";
     this.host = opts.host;
     this.port = opts.port;
   }
 
+  private resolveServerEntry(): string {
+    if (this.serverEntry && fs.existsSync(this.serverEntry)) return this.serverEntry;
+    const candidates = [
+      path.join(this.projectRoot, "node_modules", "@hypothesi", "tauri-mcp-server", "dist", "index.js"),
+      path.join(this.projectRoot, "..", "node_modules", "@hypothesi", "tauri-mcp-server", "dist", "index.js"),
+    ];
+    for (const c of candidates) {
+      if (fs.existsSync(c)) return c;
+    }
+    throw new Error(
+      "tauri-mcp-server not found in local node_modules. Run `npm install` in tests/ and pin a version."
+    );
+  }
+
   async connect(): Promise<void> {
-    const args = [];
+    const entry = this.resolveServerEntry();
+    const args = [entry];
     if (this.appPath) args.push("--app-path", this.appPath);
     if (this.host) args.push("--host", this.host);
     if (this.port) args.push("--port", String(this.port));
 
     return new Promise((resolve, reject) => {
       try {
-        this.process = spawn("npx", [
-          "-y",
-          "@hypothesi/tauri-mcp-server",
-          ...args,
-        ], {
+        this.process = spawn(process.execPath, args, {
           cwd: this.projectRoot,
           stdio: ["pipe", "pipe", "pipe"],
-          shell: true,
+          shell: false,
         });
 
         let resolved = false;
@@ -163,6 +177,11 @@ export class TauriMcpClient {
     throw new Error(`Tool call '${name}' failed after ${maxRetries} retries`);
   }
 
+  private textOf(result: McpToolResult): string {
+    const item = result.content.find(c => c.type === "text");
+    return item?.text || JSON.stringify(result.content);
+  }
+
   async startSession(host?: string, port?: number): Promise<void> {
     const args: Record<string, unknown> = { action: "start" };
     if (host) args.host = host;
@@ -179,47 +198,71 @@ export class TauriMcpClient {
   }
 
   async screenshot(): Promise<string> {
-    const result = await this.callTool("screenshot_desktop", {});
+    const result = await this.callTool("webview_screenshot", { format: "png" });
     const item = result.content.find(c => c.type === "image" || c.type === "resource");
     if (item && "data" in item) return item.data as string;
-    if (item && "text" in item) return item.text as string;
-    return "";
+    return this.textOf(result);
   }
 
-  async click(x: number, y: number, button = "left"): Promise<void> {
-    await this.callTool("click_mouse", { x, y, button });
+  async click(x: number, y: number): Promise<void> {
+    await this.callTool("webview_interact", { action: "click", x, y });
   }
 
   async clickElement(text: string): Promise<void> {
-    const pos = await this.findElement(text);
-    await this.click(pos.x + 5, pos.y + 5);
+    const result = await this.callTool("webview_interact", { action: "click", strategy: "text", selector: text });
+    const out = this.textOf(result);
+    if (/not found|no element|failed|error/i.test(out)) {
+      const dom = await this.inspectDom();
+      throw new Error(`clickElement("${text}") failed: ${out}. DOM snippet: ${dom.slice(0, 1500)}`);
+    }
   }
 
   async fillField(label: string, text: string): Promise<void> {
-    const pos = await this.findElement(label);
-    await this.click(pos.x + 100, pos.y + 24);
-    await this.sleep(300);
-    await this.type(text);
-  }
-
-  async findElement(text: string): Promise<{ x: number; y: number }> {
-    const dom = await this.inspectDom();
-    const regex = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
-    const lines = dom.split("\n");
-    for (const line of lines) {
-      if (regex.test(line)) {
-        const match = line.match(/(?:x|left|"x"):\s*(\d+)/i);
-        const matchY = line.match(/(?:y|top|"y"):\s*(\d+)/i);
-        if (match && matchY) {
-          return { x: parseInt(match[1]), y: parseInt(matchY[1]) };
+    const script = `(() => {
+      const labelText = ${JSON.stringify(label)};
+      const value = ${JSON.stringify(text)};
+      let target = null;
+      for (const lab of document.querySelectorAll('label')) {
+        if (lab.textContent.trim().toLowerCase() === labelText.toLowerCase()) {
+          if (lab.htmlFor) target = document.getElementById(lab.htmlFor);
+          if (!target) target = lab.parentElement ? lab.parentElement.querySelector('input,select,textarea') : null;
+          break;
         }
       }
+      if (!target) target = document.querySelector('input[placeholder="' + labelText + '"]');
+      if (!target) return { ok: false, reason: 'no target for label ' + labelText };
+      const proto = target.tagName === 'SELECT' ? HTMLSelectElement.prototype :
+        target.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      setter.call(target, value);
+      target.dispatchEvent(new Event('input', { bubbles: true }));
+      target.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true };
+    })()`;
+    const result = await this.callTool("webview_execute_js", { script });
+    const out = this.textOf(result);
+    if (!/"ok"\s*:\s*true/.test(out)) {
+      const dom = await this.inspectDom();
+      throw new Error(`fillField("${label}") failed: ${out}. DOM snippet: ${dom.slice(0, 1500)}`);
     }
-    throw new Error(`Element with text "${text}" not found in DOM. DOM snippet: ${dom.slice(0, 1500)}`);
   }
 
   async type(text: string): Promise<void> {
-    await this.callTool("type_text", { text });
+    const script = `(() => {
+      const el = document.activeElement;
+      if (!el || (el.tagName !== 'INPUT' && el.tagName !== 'TEXTAREA')) return { ok: false, reason: 'no focused input' };
+      const proto = el.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+      const setter = Object.getOwnPropertyDescriptor(proto, 'value').set;
+      setter.call(el, ${JSON.stringify(text)});
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+      return { ok: true };
+    })()`;
+    const result = await this.callTool("webview_execute_js", { script });
+    const out = this.textOf(result);
+    if (!/"ok"\s*:\s*true/.test(out)) {
+      throw new Error(`type() failed: ${out}`);
+    }
   }
 
   async typeInto(x: number, y: number, text: string): Promise<void> {
@@ -229,33 +272,12 @@ export class TauriMcpClient {
   }
 
   async scroll(deltaX = 0, deltaY = 200): Promise<void> {
-    await this.callTool("scroll_mouse", { deltaX, deltaY });
+    await this.callTool("webview_interact", { action: "scroll", scrollX: deltaX, scrollY: deltaY });
   }
 
   async inspectDom(): Promise<string> {
-    const result = await this.callTool("inspect_dom", {});
-    const item = result.content.find(c => c.type === "text" || c.type === "string");
-    return item?.text || JSON.stringify(result.content);
-  }
-
-  async monitorIpc(filter?: string): Promise<void> {
-    await this.callTool("monitor_ipc_calls", filter ? { filter } : {});
-  }
-
-  async getIpcLogs(): Promise<string> {
-    const result = await this.callTool("get_ipc_logs", {});
-    const item = result.content.find(c => c.type === "text");
-    return item?.text || "";
-  }
-
-  async streamConsoleLogs(): Promise<void> {
-    await this.callTool("stream_console_logs", {});
-  }
-
-  async getConsoleLogs(): Promise<string> {
-    const result = await this.callTool("get_console_logs", {});
-    const item = result.content.find(c => c.type === "text");
-    return item?.text || "";
+    const result = await this.callTool("webview_dom_snapshot", { type: "accessibility" });
+    return this.textOf(result);
   }
 
   async waitForDomText(text: string, timeout = 10000): Promise<boolean> {
@@ -316,14 +338,14 @@ export async function teardownTest(client: TauriMcpClient): Promise<void> {
   await client.disconnect();
 }
 
-export async function login(client: TauriMcpClient, username = "admin", password = "admin123"): Promise<void> {
+export async function login(
+  client: TauriMcpClient,
+  username = "admin",
+  password = process.env.E2E_ADMIN_PASSWORD || "admin123"
+): Promise<void> {
   await client.waitForDomTextOrThrow("Sign In", 15000);
-  await client.clickElement("Username");
-  await client.sleep(300);
-  await client.type(username);
-  await client.clickElement("Password");
-  await client.sleep(300);
-  await client.type(password);
+  await client.fillField("Username", username);
+  await client.fillField("Password", password);
   await client.clickElement("Sign In");
   await client.waitForDomTextOrThrow("Dashboard", 15000);
 }

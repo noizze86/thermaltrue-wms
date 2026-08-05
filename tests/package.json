@@ -16,7 +16,7 @@
     "test:all": "npx tsx runner.ts"
   },
   "dependencies": {
-    "@hypothesi/tauri-mcp-server": "latest",
+    "@hypothesi/tauri-mcp-server": "0.12.0",
     "tsx": "^4.19.0"
   },
   "devDependencies": {
