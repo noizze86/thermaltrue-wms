@@ -41,8 +41,8 @@ export class TauriMcpClient {
   private resolveServerEntry(): string {
     if (this.serverEntry && fs.existsSync(this.serverEntry)) return this.serverEntry;
     const candidates = [
+      path.join(__dirname, "..", "node_modules", "@hypothesi", "tauri-mcp-server", "dist", "index.js"),
       path.join(this.projectRoot, "node_modules", "@hypothesi", "tauri-mcp-server", "dist", "index.js"),
-      path.join(this.projectRoot, "..", "node_modules", "@hypothesi", "tauri-mcp-server", "dist", "index.js"),
     ];
     for (const c of candidates) {
       if (fs.existsSync(c)) return c;
