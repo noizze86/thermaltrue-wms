@@ -288,7 +288,10 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
         ;
     #[cfg(debug_assertions)]
     {
-        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+        let bridge = tauri_plugin_mcp_bridge::Builder::new()
+            .bind_address("127.0.0.1")
+            .build();
+        builder = builder.plugin(bridge);
     }
     builder
         .setup(|app| {

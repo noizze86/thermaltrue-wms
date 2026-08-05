@@ -179,14 +179,17 @@ jobs:
         working-directory: tests
         run: |
           $ErrorActionPreference = "Continue"
-          node -e "const net=require('net'); const s=net.connect(9223,'127.0.0.1',()=>{console.log('TCP 127.0.0.1:9223 CONNECT OK'); s.destroy();}); s.on('error',e=>{console.log('TCP ERROR: '+e.message); process.exit(1);}); setTimeout(()=>{console.log('TCP TIMEOUT'); process.exit(2);},5000);"
-          $tcp = $LASTEXITCODE
-          Write-Host "TCP test exit: $tcp"
-          node -e "const WebSocket=require('ws'); const ws=new WebSocket('ws://127.0.0.1:9223'); ws.on('open',()=>{console.log('WS OPEN OK'); process.exit(0);}); ws.on('error',e=>{console.log('WS ERROR: '+e.message); process.exit(1);}); ws.on('close',c=>console.log('WS CLOSE: '+c)); setTimeout(()=>{console.log('WS TIMEOUT'); process.exit(2);},8000);"
-          $wsCode = $LASTEXITCODE
-          Write-Host "WS test exit: $wsCode"
+          Write-Host "--- netstat 9223 ---"
+          netstat -ano | findstr ":9223"
+          Write-Host "--- Get-NetTCPConnection 9223 ---"
+          Get-NetTCPConnection -LocalPort 9223 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,State,OwningProcess
+          node -e "const net=require('net'); const s=net.connect(9223,'127.0.0.1',()=>{console.log('TCP 127.0.0.1 OK'); s.destroy();}); s.on('error',e=>{console.log('TCP 127.0.0.1 ERROR: '+e.message);}); setTimeout(()=>{console.log('TCP 127.0.0.1 TIMEOUT');},5000);"
+          node -e "const net=require('net'); const s=net.connect(9223,'0.0.0.0',()=>{console.log('TCP 0.0.0.0 OK'); s.destroy();}); s.on('error',e=>{console.log('TCP 0.0.0.0 ERROR: '+e.message);}); setTimeout(()=>{console.log('TCP 0.0.0.0 TIMEOUT');},5000);"
+          node -e "const net=require('net'); const s=net.connect(9223,'::1',()=>{console.log('TCP ::1 OK'); s.destroy();}); s.on('error',e=>{console.log('TCP ::1 ERROR: '+e.message);}); setTimeout(()=>{console.log('TCP ::1 TIMEOUT');},5000);"
+          node -e "const WebSocket=require('ws'); const ws=new WebSocket('ws://127.0.0.1:9223'); ws.on('open',()=>{console.log('WS OPEN OK'); process.exit(0);}); ws.on('error',e=>{console.log('WS ERROR: '+e.message);}); setTimeout(()=>{console.log('WS TIMEOUT'); process.exit(2);},8000);"
           $appProc = Get-Process -Name app -ErrorAction SilentlyContinue
           if ($appProc) { Write-Host "app process alive: $($appProc.Id -join ',')" } else { Write-Host "WARNING: app process NOT alive" }
+          Write-Host "Verify step finished (non-fatal)"
 
       - name: Run E2E tests
         working-directory: tests
