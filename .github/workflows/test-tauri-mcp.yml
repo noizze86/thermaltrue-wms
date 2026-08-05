@@ -15,7 +15,7 @@ env:
   TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
   DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/thermaltrue?sslmode=disable
   DEFAULT_ADMIN_PASSWORD: admin123
-  TAURI_APP_PATH: ${{ github.workspace }}\src-tauri\target\debug\app.exe
+  TAURI_APP_PATH: ${{ github.workspace }}\target\debug\app.exe
 
 jobs:
   test-e2e:
@@ -41,6 +41,7 @@ jobs:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
+            target
             src-tauri/target
           key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
@@ -144,7 +145,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $app = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\debug\app.exe"
+          $app = Join-Path $env:GITHUB_WORKSPACE "target\debug\app.exe"
           if (-not (Test-Path $app)) { throw "app.exe not found at $app" }
           Start-Process -FilePath $app -RedirectStandardOutput (Join-Path $env:TEMP "app.out.log") -RedirectStandardError (Join-Path $env:TEMP "app.err.log") -WindowStyle Hidden
           Start-Sleep -Seconds 10
