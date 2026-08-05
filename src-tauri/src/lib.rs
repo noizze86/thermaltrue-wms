@@ -277,7 +277,7 @@ async fn open_in_browser(url: String) -> Result<(), String> {
 fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
     let _ = dotenvy::dotenv();
     startup_log("Tauri app starting...");
-    tauri::Builder::default()
+    let mut builder = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_process::init())
@@ -285,7 +285,12 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
         .plugin(tauri_plugin_updater::Builder::default().build())
         .plugin(tauri_plugin_notification::init())
         // barcode-scanner v2 uses auto-registration via permissions
-
+        ;
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    }
+    builder
         .setup(|app| {
             startup_log("Tauri setup hook started...");
             let is_client_only = std::env::args().any(|a| a == "--client-only");

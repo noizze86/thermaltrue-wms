@@ -472,6 +472,8 @@ pub struct ApproveItemBody {
 pub struct AuditLog {
     pub id: String,
     pub user_id: Option<String>,
+    #[serde(default)]
+    pub username: Option<String>,
     pub action: String,
     pub entity: String,
     pub entity_id: Option<String>,

@@ -281,6 +281,7 @@ export function getClient(): TauriMcpClient {
   if (!sharedClient) {
     sharedClient = new TauriMcpClient({
       projectRoot: path.resolve(__dirname, "../.."),
+      appPath: process.env.TAURI_APP_PATH || path.resolve(__dirname, "../../src-tauri/target/debug/app.exe"),
     });
   }
   return sharedClient;

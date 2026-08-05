@@ -488,7 +488,7 @@ pub async fn create_supplier_price(db: State<'_, DbPool>, token: String, supplie
 pub async fn get_audit_logs(db: State<'_, DbPool>, token: String) -> Result<Vec<AuditLog>, AppError> {
     let user_id = db.verify_token(&token)?;
     if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
-    let rows = sqlx::query("SELECT id, user_id, action, entity, entity_id, details, created_at FROM audit_log ORDER BY created_at DESC LIMIT 200")
+    let rows = sqlx::query("SELECT a.id, a.user_id, a.action, a.entity, a.entity_id, a.details, a.created_at, COALESCE(u.username,'System') AS username FROM audit_log a LEFT JOIN users u ON u.id=a.user_id ORDER BY a.created_at DESC LIMIT 200")
         .fetch_all(&db.pool)
         .await?;
     let list = rows.iter().map(|row| {
@@ -496,6 +496,7 @@ pub async fn get_audit_logs(db: State<'_, DbPool>, token: String) -> Result<Vec<
             id: row.get(0), user_id: row.get::<Option<String>, _>(1), action: row.get(2),
             entity: row.get(3), entity_id: row.get::<Option<String>, _>(4),
             details: row.get(5), created_at: row.get(6),
+            username: row.get::<Option<String>, _>(7),
         })
     }).collect::<Result<Vec<_>, _>>()?;
     Ok(list)
@@ -511,30 +512,30 @@ pub async fn get_audit_logs_filtered(
     if !validate::check_user_permission(&db.pool, &current_user, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
     let limit_val = limit.unwrap_or(200);
     let mut builder = sqlx::QueryBuilder::new(
-        "SELECT id, user_id, action, entity, entity_id, details, created_at FROM audit_log WHERE 1=1"
+        "SELECT a.id, a.user_id, a.action, a.entity, a.entity_id, a.details, a.created_at, COALESCE(u.username,'System') AS username FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE 1=1"
     );
     if let Some(ref a) = action {
-        builder.push(" AND action = ");
+        builder.push(" AND a.action = ");
         builder.push_bind(a.as_str());
     }
     if let Some(ref e) = entity {
-        builder.push(" AND entity = ");
+        builder.push(" AND a.entity = ");
         builder.push_bind(e.as_str());
     }
     if let Some(ref u) = user_id {
-        builder.push(" AND user_id = ");
+        builder.push(" AND a.user_id = ");
         builder.push_bind(u.as_str());
     }
     if let Some(ref d) = date_start {
-        builder.push(" AND created_at >= ");
+        builder.push(" AND a.created_at >= ");
         builder.push_bind(d.as_str());
     }
     if let Some(ref d) = date_end {
-        builder.push(" AND created_at < (");
+        builder.push(" AND a.created_at < (");
         builder.push_bind(d.as_str());
         builder.push("::date + interval '1 day')");
     }
-    builder.push(" ORDER BY created_at DESC LIMIT ");
+    builder.push(" ORDER BY a.created_at DESC LIMIT ");
     builder.push_bind(limit_val);
 
     let rows = builder.build().fetch_all(&db.pool).await?;
@@ -543,6 +544,7 @@ pub async fn get_audit_logs_filtered(
             id: row.get(0), user_id: row.get::<Option<String>, _>(1), action: row.get(2),
             entity: row.get(3), entity_id: row.get::<Option<String>, _>(4),
             details: row.get(5), created_at: row.get(6),
+            username: row.get::<Option<String>, _>(7),
         })
     }).collect::<Result<Vec<_>, _>>()?;
     Ok(list)

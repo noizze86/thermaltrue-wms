@@ -170,7 +170,7 @@ export const resources: Resource[] = [
     icon: "ClipboardList",
     columns: [
       { key: "created_at", label: "Date", type: "date" },
-      { key: "user_id", label: "User", type: "text" },
+      { key: "username", label: "User", type: "text" },
       { key: "action", label: "Action", type: "text" },
       { key: "entity", label: "Entity", type: "text" },
       { key: "details", label: "Details", type: "text" },

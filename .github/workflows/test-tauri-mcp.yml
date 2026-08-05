@@ -13,6 +13,9 @@ permissions:
 env:
   TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
   TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
+  DATABASE_URL: postgresql://postgres@127.0.0.1:5432/thermaltrue?sslmode=disable
+  DEFAULT_ADMIN_PASSWORD: admin123
+  TAURI_APP_PATH: ${{ github.workspace }}\src-tauri\target\debug\app.exe
 
 jobs:
   test-e2e:
@@ -39,7 +42,7 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             src-tauri/target
-          key: ${{ runner.os }}-cargo-${{ hashFiles('src-tauri/Cargo.lock') }}
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
 
       - name: Install frontend dependencies
         run: npm ci
@@ -47,28 +50,81 @@ jobs:
       - name: Build frontend
         run: npm run build
 
-      - name: Build Tauri app (dev mode)
-        run: npx tauri build --bundles none
+      - name: Build Tauri app (debug, no bundle)
+        run: npx tauri build --debug --no-bundle
         env:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
+      - name: Setup PostgreSQL (portable)
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $pgUrl = "https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64-binaries.zip"
+          $zip = Join-Path $env:TEMP "pg.zip"
+          $pgRoot = Join-Path $env:TEMP "pg"
+          $pgData = Join-Path $env:TEMP "pgdata"
+          Invoke-WebRequest -Uri $pgUrl -OutFile $zip
+          if (Test-Path $pgRoot) { Remove-Item $pgRoot -Recurse -Force }
+          Expand-Archive -LiteralPath $zip -DestinationPath $pgRoot
+          $pgBinDir = Get-ChildItem -Path $pgRoot -Recurse -Directory | Where-Object { Test-Path (Join-Path $_.FullName "initdb.exe") } | Select-Object -First 1
+          if (-not $pgBinDir) { throw "initdb.exe not found in extracted archive" }
+          $pgBin = $pgBinDir.FullName
+          if (Test-Path $pgData) { Remove-Item $pgData -Recurse -Force }
+          & (Join-Path $pgBin "initdb.exe") -D $pgData -U postgres --auth=trust -E UTF8 | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "initdb failed" }
+          & (Join-Path $pgBin "pg_ctl.exe") -D $pgData -o "-p 5432 -c listen_addresses=127.0.0.1" -l (Join-Path $env:TEMP "pg.log") start | Out-Null
+          if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:TEMP "pg.log") -Tail 20; throw "pg_ctl start failed" }
+          Start-Sleep -Seconds 3
+          & (Join-Path $pgBin "createdb.exe") -h 127.0.0.1 -p 5432 -U postgres thermaltrue
+          if ($LASTEXITCODE -ne 0) { throw "createdb failed" }
+          Write-Host "PostgreSQL ready"
+
+      - name: Build and start backend server
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo build --release -p server
+          if ($LASTEXITCODE -ne 0) { throw "server build failed" }
+          $env:PORT = "3000"
+          $env:DATABASE_URL = "postgresql://postgres@127.0.0.1:5432/thermaltrue?sslmode=disable"
+          $env:DEFAULT_ADMIN_PASSWORD = "admin123"
+          Start-Process -FilePath (Join-Path $env:GITHUB_WORKSPACE "target\release\server.exe") -ArgumentList "run" -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput (Join-Path $env:TEMP "server.out.log") -RedirectStandardError (Join-Path $env:TEMP "server.err.log") -WindowStyle Hidden
+          $ok = $false
+          for ($i = 0; $i -lt 90; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $r = Invoke-RestMethod -Uri "http://127.0.0.1:3000/api/health/db" -TimeoutSec 3
+              if ($r.status -eq "ok") { $ok = $true; break }
+            } catch {}
+          }
+          if (-not $ok) {
+            Get-Content (Join-Path $env:TEMP "server.err.log") -Tail 30 -ErrorAction SilentlyContinue
+            throw "Backend server did not become healthy on port 3000"
+          }
+          Write-Host "Backend server healthy on port 3000"
+
+      - name: Start Tauri app
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $app = Join-Path $env:GITHUB_WORKSPACE "src-tauri\target\debug\app.exe"
+          if (-not (Test-Path $app)) { throw "app.exe not found at $app" }
+          Start-Process -FilePath $app -RedirectStandardOutput (Join-Path $env:TEMP "app.out.log") -RedirectStandardError (Join-Path $env:TEMP "app.err.log") -WindowStyle Hidden
+          Start-Sleep -Seconds 10
+          Write-Host "Tauri app started"
+
       - name: Install test dependencies
         working-directory: tests
         run: npm ci
-
-      - name: Start backend server
-        run: |
-          # Start the HTTP backend server for test data
-          # (Assuming it's already running or built separately)
-          echo "Backend server should be running on port 3000"
 
       - name: Run E2E tests
         working-directory: tests
         run: npm run test:all
         timeout-minutes: 30
         env:
-          DATABASE_URL: ${{ secrets.DATABASE_URL || '' }}
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          TAURI_APP_PATH: ${{ env.TAURI_APP_PATH }}
 
       - name: Upload test reports
         if: always()

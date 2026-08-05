@@ -342,11 +342,11 @@ pub async fn list_audit_logs(
     let limit_val = params.limit.unwrap_or(200);
     let offset_val = params.offset.unwrap_or(0);
     let mut builder = sqlx::QueryBuilder::new(
-        "SELECT id, user_id, action, entity, entity_id, details, created_at FROM audit_log WHERE 1=1"
+        "SELECT a.id, a.user_id, a.action, a.entity, a.entity_id, a.details, a.created_at, COALESCE(u.username,'System') AS username FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE 1=1"
     );
-    if let Some(ref u) = params.user_id { builder.push(" AND user_id = ").push_bind(u); }
-    if let Some(ref e) = params.entity { builder.push(" AND entity = ").push_bind(e); }
-    builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit_val);
+    if let Some(ref u) = params.user_id { builder.push(" AND a.user_id = ").push_bind(u); }
+    if let Some(ref e) = params.entity { builder.push(" AND a.entity = ").push_bind(e); }
+    builder.push(" ORDER BY a.created_at DESC LIMIT ").push_bind(limit_val);
     builder.push(" OFFSET ").push_bind(offset_val);
     let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -354,6 +354,7 @@ pub async fn list_audit_logs(
         id: row.get(0), user_id: row.get::<Option<String>, _>(1), action: row.get(2),
         entity: row.get(3), entity_id: row.get::<Option<String>, _>(4),
         details: row.get(5), created_at: row.get(6),
+        username: row.get::<Option<String>, _>(7),
     }).collect();
     Ok(Json(list))
 }
@@ -367,14 +368,14 @@ pub async fn filtered_audit_logs(
     let limit_val = params.limit.unwrap_or(200);
     let offset_val = params.offset.unwrap_or(0);
     let mut builder = sqlx::QueryBuilder::new(
-        "SELECT id, user_id, action, entity, entity_id, details, created_at FROM audit_log WHERE 1=1"
+        "SELECT a.id, a.user_id, a.action, a.entity, a.entity_id, a.details, a.created_at, COALESCE(u.username,'System') AS username FROM audit_log a LEFT JOIN users u ON u.id=a.user_id WHERE 1=1"
     );
-    if let Some(ref a) = params.action { builder.push(" AND action = ").push_bind(a); }
-    if let Some(ref e) = params.entity { builder.push(" AND entity = ").push_bind(e); }
-    if let Some(ref u) = params.user_id { builder.push(" AND user_id = ").push_bind(u); }
-    if let Some(ref d) = params.date_start { builder.push(" AND created_at::timestamp >= ").push_bind(d); builder.push("::timestamp"); }
-    if let Some(ref d) = params.date_end { builder.push(" AND created_at::timestamp < (").push_bind(d); builder.push("::date + interval '1 day')"); }
-    builder.push(" ORDER BY created_at DESC LIMIT ").push_bind(limit_val);
+    if let Some(ref a) = params.action { builder.push(" AND a.action = ").push_bind(a); }
+    if let Some(ref e) = params.entity { builder.push(" AND a.entity = ").push_bind(e); }
+    if let Some(ref u) = params.user_id { builder.push(" AND a.user_id = ").push_bind(u); }
+    if let Some(ref d) = params.date_start { builder.push(" AND a.created_at::timestamp >= ").push_bind(d); builder.push("::timestamp"); }
+    if let Some(ref d) = params.date_end { builder.push(" AND a.created_at::timestamp < (").push_bind(d); builder.push("::date + interval '1 day')"); }
+    builder.push(" ORDER BY a.created_at DESC LIMIT ").push_bind(limit_val);
     builder.push(" OFFSET ").push_bind(offset_val);
     let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -382,6 +383,7 @@ pub async fn filtered_audit_logs(
         id: row.get(0), user_id: row.get::<Option<String>, _>(1), action: row.get(2),
         entity: row.get(3), entity_id: row.get::<Option<String>, _>(4),
         details: row.get(5), created_at: row.get(6),
+        username: row.get::<Option<String>, _>(7),
     }).collect();
     Ok(Json(list))
 }
