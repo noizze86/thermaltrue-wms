@@ -70,12 +70,18 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
+          $pgUser = "pguser"
+          $pgPass = "ThermalPG#2026"
+          net user $pgUser $pgPass /add | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "failed to create local user $pgUser" }
           $pgScript = Join-Path $env:GITHUB_WORKSPACE "tests\pg-start.cjs"
-          if (-not (Test-Path $pgScript)) { throw "pg-start.js not found at $pgScript" }
-          Start-Process -FilePath "node" -ArgumentList $pgScript -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -RedirectStandardOutput (Join-Path $env:TEMP "pg.out.log") -RedirectStandardError (Join-Path $env:TEMP "pg.err.log") -WindowStyle Hidden
+          if (-not (Test-Path $pgScript)) { throw "pg-start.cjs not found at $pgScript" }
+          $sec = ConvertTo-SecureString $pgPass -AsPlainText -Force
+          $cred = New-Object System.Management.Automation.PSCredential(".\$pgUser", $sec)
+          Start-Process -FilePath "node" -ArgumentList $pgScript -Credential $cred -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -WindowStyle Hidden
           $ok = $false
-          for ($i = 0; $i -lt 120; $i++) {
-            Start-Sleep -Milliseconds 1000
+          for ($i = 0; $i -lt 180; $i++) {
+            Start-Sleep -Seconds 1
             try {
               $c = New-Object System.Net.Sockets.TcpClient
               $r = $c.BeginConnect("127.0.0.1", 5432, $null, $null)
@@ -85,14 +91,15 @@ jobs:
             if ($ok) { break }
           }
           if (-not $ok) {
-            Get-Content (Join-Path $env:TEMP "pg.out.log") -Tail 15 -ErrorAction SilentlyContinue
-            Get-Content (Join-Path $env:TEMP "pg.err.log") -Tail 30 -ErrorAction SilentlyContinue
+            Get-Content "C:\Users\$pgUser\AppData\Local\Temp\pg-embed.log" -Tail 40 -ErrorAction SilentlyContinue
             throw "PostgreSQL (embedded) did not start on port 5432"
           }
           Write-Host "PostgreSQL ready (embedded)"
 
       - name: Build and start backend server
         shell: pwsh
+        env:
+          RUSTFLAGS: ""
         run: |
           $ErrorActionPreference = "Stop"
           cargo build --release -p server
