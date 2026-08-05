@@ -78,7 +78,9 @@ jobs:
           if (-not (Test-Path $pgScript)) { throw "pg-start.cjs not found at $pgScript" }
           $sec = ConvertTo-SecureString $pgPass -AsPlainText -Force
           $cred = New-Object System.Management.Automation.PSCredential(".\$pgUser", $sec)
-          Start-Process -FilePath "node" -ArgumentList $pgScript -Credential $cred -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -WindowStyle Hidden
+          $node = Start-Process -FilePath "node" -ArgumentList $pgScript -Credential $cred -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -WindowStyle Hidden -PassThru
+          Start-Sleep -Seconds 5
+          if ($node.HasExited) { throw "node pg process exited early (code $($node.ExitCode))" }
           $ok = $false
           for ($i = 0; $i -lt 180; $i++) {
             Start-Sleep -Seconds 1
@@ -91,7 +93,7 @@ jobs:
             if ($ok) { break }
           }
           if (-not $ok) {
-            Get-Content "C:\Users\$pgUser\AppData\Local\Temp\pg-embed.log" -Tail 40 -ErrorAction SilentlyContinue
+            Get-Content "C:\ProgramData\pg-embed\pg-embed.log" -Tail 40 -ErrorAction SilentlyContinue
             throw "PostgreSQL (embedded) did not start on port 5432"
           }
           Write-Host "PostgreSQL ready (embedded)"
