@@ -321,7 +321,7 @@ export function getClient(): TauriMcpClient {
 export async function setupTest(): Promise<TauriMcpClient> {
   const client = getClient();
   await client.connect();
-  await client.startSession(undefined, parseInt(process.env.MCP_BRIDGE_PORT || "9223", 10));
+  await client.startSession("127.0.0.1", parseInt(process.env.MCP_BRIDGE_PORT || "9223", 10));
   await client.sleep(1000);
   return client;
 }
