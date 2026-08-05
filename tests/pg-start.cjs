@@ -37,6 +37,7 @@ process.on("unhandledRejection", (e) => {
     password: "postgres",
     port: 5432,
     persistent: true,
+    initdbFlags: ["--encoding=UTF8", "--locale=C"],
   });
   log("initialising...");
   await pg.initialise();
