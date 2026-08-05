@@ -1,5 +1,8 @@
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
+import { fileURLToPath } from "url";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 interface McpToolResult {
   content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
@@ -281,7 +284,7 @@ export function getClient(): TauriMcpClient {
   if (!sharedClient) {
     sharedClient = new TauriMcpClient({
       projectRoot: path.resolve(__dirname, "../.."),
-      appPath: process.env.TAURI_APP_PATH || path.resolve(__dirname, "../../src-tauri/target/debug/app.exe"),
+      appPath: process.env.TAURI_APP_PATH || path.resolve(__dirname, "../../target/debug/app.exe"),
     });
   }
   return sharedClient;
