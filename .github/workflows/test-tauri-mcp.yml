@@ -147,8 +147,31 @@ jobs:
           $ErrorActionPreference = "Stop"
           $app = Join-Path $env:GITHUB_WORKSPACE "target\debug\app.exe"
           if (-not (Test-Path $app)) { throw "app.exe not found at $app" }
-          Start-Process -FilePath $app -RedirectStandardOutput (Join-Path $env:TEMP "app.out.log") -RedirectStandardError (Join-Path $env:TEMP "app.err.log") -WindowStyle Hidden
+          $logDir = Join-Path $env:GITHUB_WORKSPACE "tests\results"
+          New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+          $p = Start-Process -FilePath $app -RedirectStandardOutput (Join-Path $logDir "app.out.log") -RedirectStandardError (Join-Path $logDir "app.err.log") -WindowStyle Hidden -PassThru
           Start-Sleep -Seconds 10
+          $alive = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
+          if ($alive) {
+            Write-Host "Tauri app alive (PID $($p.Id))"
+          } else {
+            Write-Host "WARNING: Tauri app process exited (code $($p.ExitCode))"
+          }
+          $listener = $null
+          for ($i = 0; $i -lt 20; $i++) {
+            $listener = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 9223 -and $_.LocalPort -le 9422 }
+            if ($listener) { break }
+            Start-Sleep -Seconds 1
+          }
+          if ($listener) {
+            $listener | ForEach-Object { Write-Host "MCP bridge listening on port $($_.LocalPort) (pid $($_.OwningProcess))" }
+          } else {
+            Write-Host "WARNING: no MCP bridge listener on ports 9223-9422"
+            Write-Host "--- app.err.log tail ---"
+            Get-Content (Join-Path $logDir "app.err.log") -Tail 40 -ErrorAction SilentlyContinue
+            Write-Host "--- app.out.log tail ---"
+            Get-Content (Join-Path $logDir "app.out.log") -Tail 40 -ErrorAction SilentlyContinue
+          }
           Write-Host "Tauri app started"
 
       - name: Run E2E tests

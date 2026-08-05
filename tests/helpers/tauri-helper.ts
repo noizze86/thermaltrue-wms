@@ -1,6 +1,5 @@
 import { spawn, type ChildProcess } from "child_process";
 import path from "path";
-import fs from "fs";
 import { fileURLToPath } from "url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -38,33 +37,22 @@ export class TauriMcpClient {
     this.port = opts.port;
   }
 
-  private resolveServerEntry(): string {
-    if (this.serverEntry && fs.existsSync(this.serverEntry)) return this.serverEntry;
-    const candidates = [
-      path.join(__dirname, "..", "node_modules", "@hypothesi", "tauri-mcp-server", "dist", "index.js"),
-      path.join(this.projectRoot, "node_modules", "@hypothesi", "tauri-mcp-server", "dist", "index.js"),
-    ];
-    for (const c of candidates) {
-      if (fs.existsSync(c)) return c;
-    }
-    throw new Error(
-      "tauri-mcp-server not found in local node_modules. Run `npm install` in tests/ and pin a version."
-    );
-  }
-
   async connect(): Promise<void> {
-    const entry = this.resolveServerEntry();
-    const args = [entry];
+    const args = [];
     if (this.appPath) args.push("--app-path", this.appPath);
     if (this.host) args.push("--host", this.host);
     if (this.port) args.push("--port", String(this.port));
 
     return new Promise((resolve, reject) => {
       try {
-        this.process = spawn(process.execPath, args, {
+        this.process = spawn("npx", [
+          "-y",
+          "@hypothesi/tauri-mcp-server@0.12.0",
+          ...args,
+        ], {
           cwd: this.projectRoot,
           stdio: ["pipe", "pipe", "pipe"],
-          shell: false,
+          shell: true,
         });
 
         let resolved = false;
