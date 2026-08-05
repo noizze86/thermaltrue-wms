@@ -77,6 +77,11 @@ jobs:
           $pgScript = Join-Path $env:GITHUB_WORKSPACE "tests\pg-start.cjs"
           if (-not (Test-Path $pgScript)) { throw "pg-start.cjs not found at $pgScript" }
           New-Item -ItemType Directory -Path "C:\ProgramData\pg-embed" -Force | Out-Null
+          icacls "C:\ProgramData\pg-embed" /grant "${pgUser}:(OI)(CI)F" | Out-Null
+          if ($LASTEXITCODE -ne 0) { throw "icacls grant failed" }
+          New-Item -ItemType Directory -Path "C:\ProgramData\pg-embed\tmp" -Force | Out-Null
+          $env:TEMP = "C:\ProgramData\pg-embed\tmp"
+          $env:TMP = "C:\ProgramData\pg-embed\tmp"
           $sec = ConvertTo-SecureString $pgPass -AsPlainText -Force
           $cred = New-Object System.Management.Automation.PSCredential(".\$pgUser", $sec)
           $node = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "node `"$pgScript`" 1> C:\ProgramData\pg-embed\stdout.log 2> C:\ProgramData\pg-embed\stderr.log" -Credential $cred -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -WindowStyle Hidden -PassThru
