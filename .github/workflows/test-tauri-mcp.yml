@@ -13,7 +13,7 @@ permissions:
 env:
   TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
   TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
-  DATABASE_URL: postgresql://postgres@127.0.0.1:5432/thermaltrue?sslmode=disable
+  DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/thermaltrue?sslmode=disable
   DEFAULT_ADMIN_PASSWORD: admin123
   TAURI_APP_PATH: ${{ github.workspace }}\src-tauri\target\debug\app.exe
 
@@ -56,29 +56,40 @@ jobs:
           TAURI_PRIVATE_KEY: ${{ secrets.TAURI_PRIVATE_KEY }}
           TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
 
-      - name: Setup PostgreSQL (portable)
+      - name: Cache tests dependencies
+        uses: actions/cache@v4
+        with:
+          path: tests/node_modules
+          key: ${{ runner.os }}-tests-${{ hashFiles('tests/package-lock.json') }}
+
+      - name: Install test dependencies
+        working-directory: tests
+        run: npm ci
+
+      - name: Setup PostgreSQL (embedded)
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $pgUrl = "https://get.enterprisedb.com/postgresql/postgresql-16.4-1-windows-x64-binaries.zip"
-          $zip = Join-Path $env:TEMP "pg.zip"
-          $pgRoot = Join-Path $env:TEMP "pg"
-          $pgData = Join-Path $env:TEMP "pgdata"
-          Invoke-WebRequest -Uri $pgUrl -OutFile $zip
-          if (Test-Path $pgRoot) { Remove-Item $pgRoot -Recurse -Force }
-          Expand-Archive -LiteralPath $zip -DestinationPath $pgRoot
-          $pgBinDir = Get-ChildItem -Path $pgRoot -Recurse -Directory | Where-Object { Test-Path (Join-Path $_.FullName "initdb.exe") } | Select-Object -First 1
-          if (-not $pgBinDir) { throw "initdb.exe not found in extracted archive" }
-          $pgBin = $pgBinDir.FullName
-          if (Test-Path $pgData) { Remove-Item $pgData -Recurse -Force }
-          & (Join-Path $pgBin "initdb.exe") -D $pgData -U postgres --auth=trust -E UTF8 | Out-Null
-          if ($LASTEXITCODE -ne 0) { throw "initdb failed" }
-          & (Join-Path $pgBin "pg_ctl.exe") -D $pgData -o "-p 5432 -c listen_addresses=127.0.0.1" -l (Join-Path $env:TEMP "pg.log") start | Out-Null
-          if ($LASTEXITCODE -ne 0) { Get-Content (Join-Path $env:TEMP "pg.log") -Tail 20; throw "pg_ctl start failed" }
-          Start-Sleep -Seconds 3
-          & (Join-Path $pgBin "createdb.exe") -h 127.0.0.1 -p 5432 -U postgres thermaltrue
-          if ($LASTEXITCODE -ne 0) { throw "createdb failed" }
-          Write-Host "PostgreSQL ready"
+          $pgScript = Join-Path $env:GITHUB_WORKSPACE "tests\pg-start.js"
+          if (-not (Test-Path $pgScript)) { throw "pg-start.js not found at $pgScript" }
+          Start-Process -FilePath "node" -ArgumentList $pgScript -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -RedirectStandardOutput (Join-Path $env:TEMP "pg.out.log") -RedirectStandardError (Join-Path $env:TEMP "pg.err.log") -WindowStyle Hidden
+          $ok = $false
+          for ($i = 0; $i -lt 120; $i++) {
+            Start-Sleep -Milliseconds 1000
+            try {
+              $c = New-Object System.Net.Sockets.TcpClient
+              $r = $c.BeginConnect("127.0.0.1", 5432, $null, $null)
+              if ($r.AsyncWaitHandle.WaitOne(1000)) { $c.EndConnect($r); $ok = $true }
+              $c.Close()
+            } catch {}
+            if ($ok) { break }
+          }
+          if (-not $ok) {
+            Get-Content (Join-Path $env:TEMP "pg.out.log") -Tail 15 -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $env:TEMP "pg.err.log") -Tail 30 -ErrorAction SilentlyContinue
+            throw "PostgreSQL (embedded) did not start on port 5432"
+          }
+          Write-Host "PostgreSQL ready (embedded)"
 
       - name: Build and start backend server
         shell: pwsh
@@ -87,7 +98,7 @@ jobs:
           cargo build --release -p server
           if ($LASTEXITCODE -ne 0) { throw "server build failed" }
           $env:PORT = "3000"
-          $env:DATABASE_URL = "postgresql://postgres@127.0.0.1:5432/thermaltrue?sslmode=disable"
+          $env:DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/thermaltrue?sslmode=disable"
           $env:DEFAULT_ADMIN_PASSWORD = "admin123"
           Start-Process -FilePath (Join-Path $env:GITHUB_WORKSPACE "target\release\server.exe") -ArgumentList "run" -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput (Join-Path $env:TEMP "server.out.log") -RedirectStandardError (Join-Path $env:TEMP "server.err.log") -WindowStyle Hidden
           $ok = $false
@@ -113,10 +124,6 @@ jobs:
           Start-Process -FilePath $app -RedirectStandardOutput (Join-Path $env:TEMP "app.out.log") -RedirectStandardError (Join-Path $env:TEMP "app.err.log") -WindowStyle Hidden
           Start-Sleep -Seconds 10
           Write-Host "Tauri app started"
-
-      - name: Install test dependencies
-        working-directory: tests
-        run: npm ci
 
       - name: Run E2E tests
         working-directory: tests
