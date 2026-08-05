@@ -186,7 +186,11 @@ export class TauriMcpClient {
     const args: Record<string, unknown> = { action: "start" };
     if (host) args.host = host;
     if (port) args.port = port;
-    await this.callToolWithRetry("driver_session", args, 5);
+    const result = await this.callToolWithRetry("driver_session", args, 5);
+    const out = this.textOf(result);
+    if (/Session start failed/i.test(out)) {
+      throw new Error(`driver_session start failed: ${out}`);
+    }
   }
 
   async endSession(): Promise<void> {
@@ -329,7 +333,7 @@ export function getClient(): TauriMcpClient {
 export async function setupTest(): Promise<TauriMcpClient> {
   const client = getClient();
   await client.connect();
-  await client.startSession();
+  await client.startSession(undefined, parseInt(process.env.MCP_BRIDGE_PORT || "9223", 10));
   await client.sleep(1000);
   return client;
 }

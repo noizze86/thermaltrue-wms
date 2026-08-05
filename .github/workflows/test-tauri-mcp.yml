@@ -158,6 +158,7 @@ jobs:
         env:
           DATABASE_URL: ${{ env.DATABASE_URL }}
           TAURI_APP_PATH: ${{ env.TAURI_APP_PATH }}
+          MCP_BRIDGE_PORT: "9223"
 
       - name: Upload test reports
         if: always()
