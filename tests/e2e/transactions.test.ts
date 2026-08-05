@@ -1,10 +1,11 @@
-import { setupTest, teardownTest, navigateTo } from "../helpers/tauri-helper";
+import { setupTest, teardownTest, navigateTo, login } from "../helpers/tauri-helper";
 
 async function testTransactions() {
   console.log("🧪 Transactions Test Suite");
   let passed = 0;
   let failed = 0;
   const client = await setupTest();
+  await login(client);
 
   try {
     // TC-TX-01: Navigate to Goods In page

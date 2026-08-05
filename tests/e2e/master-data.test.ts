@@ -1,4 +1,4 @@
-import { setupTest, teardownTest, navigateTo } from "../helpers/tauri-helper";
+import { setupTest, teardownTest, navigateTo, login } from "../helpers/tauri-helper";
 import { testData } from "../fixtures/data";
 
 async function testMasterData() {
@@ -6,6 +6,7 @@ async function testMasterData() {
   let passed = 0;
   let failed = 0;
   const client = await setupTest();
+  await login(client);
 
   try {
     // TC-MD-01: Create material

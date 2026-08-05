@@ -1,4 +1,4 @@
-import { setupTest, teardownTest, navigateTo } from "../helpers/tauri-helper";
+import { setupTest, teardownTest, navigateTo, login } from "../helpers/tauri-helper";
 
 async function testDashboard() {
   console.log("🧪 Dashboard Test Suite");
@@ -6,6 +6,7 @@ async function testDashboard() {
   let failed = 0;
 
   const client = await setupTest();
+  await login(client);
   try {
     await navigateTo(client, "Dashboard");
     await client.waitForDomTextOrThrow("Dashboard", 10000);
