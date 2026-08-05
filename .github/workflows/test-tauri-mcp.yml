@@ -82,6 +82,11 @@ jobs:
           New-Item -ItemType Directory -Path "C:\ProgramData\pg-embed\tmp" -Force | Out-Null
           $env:TEMP = "C:\ProgramData\pg-embed\tmp"
           $env:TMP = "C:\ProgramData\pg-embed\tmp"
+          $native = Join-Path $env:GITHUB_WORKSPACE "tests\node_modules\@embedded-postgres\windows-x64\native"
+          if (Test-Path $native) {
+            icacls $native /grant "${pgUser}:(OI)(CI)F" /T | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw "icacls native grant failed" }
+          }
           $sec = ConvertTo-SecureString $pgPass -AsPlainText -Force
           $cred = New-Object System.Management.Automation.PSCredential(".\$pgUser", $sec)
           $node = Start-Process -FilePath "cmd.exe" -ArgumentList "/c", "node `"$pgScript`" 1> C:\ProgramData\pg-embed\stdout.log 2> C:\ProgramData\pg-embed\stderr.log" -Credential $cred -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -WindowStyle Hidden -PassThru
