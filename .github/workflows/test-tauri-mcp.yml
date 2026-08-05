@@ -70,7 +70,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $pgScript = Join-Path $env:GITHUB_WORKSPACE "tests\pg-start.js"
+          $pgScript = Join-Path $env:GITHUB_WORKSPACE "tests\pg-start.cjs"
           if (-not (Test-Path $pgScript)) { throw "pg-start.js not found at $pgScript" }
           Start-Process -FilePath "node" -ArgumentList $pgScript -WorkingDirectory (Join-Path $env:GITHUB_WORKSPACE "tests") -RedirectStandardOutput (Join-Path $env:TEMP "pg.out.log") -RedirectStandardError (Join-Path $env:TEMP "pg.err.log") -WindowStyle Hidden
           $ok = $false
