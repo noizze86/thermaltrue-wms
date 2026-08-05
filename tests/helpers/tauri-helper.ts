@@ -191,6 +191,18 @@ export class TauriMcpClient {
   }
 
   async clickElement(text: string): Promise<void> {
+    const pos = await this.findElement(text);
+    await this.click(pos.x + 5, pos.y + 5);
+  }
+
+  async fillField(label: string, text: string): Promise<void> {
+    const pos = await this.findElement(label);
+    await this.click(pos.x + 100, pos.y + 24);
+    await this.sleep(300);
+    await this.type(text);
+  }
+
+  async findElement(text: string): Promise<{ x: number; y: number }> {
     const dom = await this.inspectDom();
     const regex = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
     const lines = dom.split("\n");
@@ -199,12 +211,11 @@ export class TauriMcpClient {
         const match = line.match(/(?:x|left|"x"):\s*(\d+)/i);
         const matchY = line.match(/(?:y|top|"y"):\s*(\d+)/i);
         if (match && matchY) {
-          await this.click(parseInt(match[1]) + 5, parseInt(matchY[1]) + 5);
-          return;
+          return { x: parseInt(match[1]), y: parseInt(matchY[1]) };
         }
       }
     }
-    throw new Error(`Element with text "${text}" not found in DOM`);
+    throw new Error(`Element with text "${text}" not found in DOM. DOM snippet: ${dom.slice(0, 1500)}`);
   }
 
   async type(text: string): Promise<void> {
@@ -260,7 +271,10 @@ export class TauriMcpClient {
   async waitForDomTextOrThrow(text: string, timeout = 10000): Promise<void> {
     const found = await this.waitForDomText(text, timeout);
     if (!found) {
-      throw new Error(`Timeout waiting for "${text}" to appear in DOM (${timeout}ms)`);
+      const dom = await this.inspectDom();
+      throw new Error(
+        `Timeout waiting for "${text}" to appear in DOM (${timeout}ms). DOM snippet: ${dom.slice(0, 1500)}`
+      );
     }
   }
 
@@ -303,14 +317,42 @@ export async function teardownTest(client: TauriMcpClient): Promise<void> {
 }
 
 export async function login(client: TauriMcpClient, username = "admin", password = "admin123"): Promise<void> {
-  await client.waitForDomTextOrThrow("Login", 15000);
-  await client.typeInto(200, 300, username);
-  await client.typeInto(200, 350, password);
-  await client.click(200, 400);
-  await client.sleep(2000);
+  await client.waitForDomTextOrThrow("Sign In", 15000);
+  await client.clickElement("Username");
+  await client.sleep(300);
+  await client.type(username);
+  await client.clickElement("Password");
+  await client.sleep(300);
+  await client.type(password);
+  await client.clickElement("Sign In");
+  await client.waitForDomTextOrThrow("Dashboard", 15000);
 }
 
 export async function navigateTo(client: TauriMcpClient, label: string): Promise<void> {
-  await client.clickElement(label);
+  const target = LABEL_ALIASES[label] || label;
+  const dom = await client.inspectDom();
+  if (!dom.toLowerCase().includes(target.toLowerCase())) {
+    const parent = Object.keys(MENU_PARENTS).find(k => MENU_PARENTS[k].includes(target));
+    if (parent) {
+      try {
+        await client.clickElement(parent);
+        await client.sleep(800);
+      } catch {
+        // parent expansion failed — fall through and attempt direct click
+      }
+    }
+  }
+  await client.clickElement(target);
   await client.sleep(2000);
 }
+
+const MENU_PARENTS: Record<string, string[]> = {
+  Materials: ["Master Data", "Stock Management", "QR Generator", "Label Printing"],
+  Transactions: ["Goods In", "Goods Out", "History"],
+  Analysis: ["Analysis Dashboard", "Material Analysis", "Consumption", "Cost Analysis", "ABC Analysis", "Forecaster"],
+  Warehouse: ["Warehouse Dashboard", "Warehouses", "Rack/Bin", "Transfer", "Stock Opname"],
+  Reports: ["Material Summary", "Stock Report", "Transaction Report", "Opname Report", "Multi-Warehouse", "Pivot Report"],
+  Settings: ["My Profile", "System", "Users", "Categories", "Units", "Suppliers", "Audit Log", "Roles", "Label Templates", "Inventory Settings", "Email Config", "API Settings", "Network Test", "Update Test"],
+};
+
+const LABEL_ALIASES: Record<string, string> = { "System Settings": "System" };

@@ -19,12 +19,12 @@ async function testMasterData() {
     await client.waitForDomTextOrThrow("Add Material", 5000);
 
     // Fill SKU
-    await client.typeInto(250, 300, testData.material.sku);
-    await client.typeInto(250, 340, testData.material.name);
-    await client.typeInto(250, 580, String(testData.material.quantity));
-    await client.typeInto(250, 620, String(testData.material.price));
-    await client.typeInto(250, 660, String(testData.material.minStock));
-    await client.typeInto(250, 700, String(testData.material.maxStock));
+    await client.fillField("SKU", testData.material.sku);
+    await client.fillField("Name", testData.material.name);
+    await client.fillField("Quantity", String(testData.material.quantity));
+    await client.fillField("Price", String(testData.material.price));
+    await client.fillField("Min Stock", String(testData.material.minStock));
+    await client.fillField("Max Stock", String(testData.material.maxStock));
 
     await client.clickElement("Create");
     await client.sleep(3000);
