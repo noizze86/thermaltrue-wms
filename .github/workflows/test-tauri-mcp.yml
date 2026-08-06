@@ -185,6 +185,27 @@ jobs:
           $targetAddr = if ($listener[0].LocalAddress -in @("::", "0.0.0.0")) { "127.0.0.1" } else { $listener[0].LocalAddress }
           node -e "const net=require('net'); const s=net.connect(9223,'$targetAddr',()=>{console.log('TCP handshake OK at $targetAddr'); s.destroy();}); s.on('error',e=>{console.log('TCP handshake FAIL at ${targetAddr}: '+e.message);}); setTimeout(()=>{},3000);"
 
+      - name: Verify app & bridge alive before tests
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $logDir = Join-Path $env:GITHUB_WORKSPACE "tests\results"
+          $app = Get-Process -Name app -ErrorAction SilentlyContinue
+          if (-not $app) {
+            Write-Host "=== app.err.log tail ==="
+            Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
+            Write-Host "=== app.out.log tail ==="
+            Get-Content (Join-Path $logDir "app.out.log") -Tail 40 -ErrorAction SilentlyContinue
+            throw "app.exe not alive before E2E (died after start step)"
+          }
+          $listener = Get-NetTCPConnection -State Listen -LocalPort 9223 -ErrorAction SilentlyContinue
+          if (-not $listener) {
+            Write-Host "=== app.err.log tail ==="
+            Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
+            throw "bridge port 9223 not listening before E2E"
+          }
+          Write-Host "app alive (PID $($app.Id -join ',')), bridge 9223 listening"
+
       - name: Run E2E tests
         working-directory: tests
         run: npm run test:all

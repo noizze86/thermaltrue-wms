@@ -360,6 +360,11 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             }
             // Tunggu server sehat (periksa URL target), lalu pastikan window ada di URL server
             // (auto-recover jika load awal gagal karena server belum aktif)
+            // Mode MCP_E2E: lewati seluruh blok ini (health check block_on dapat membuat
+            // app berhenti lanjut di CI; webview tetap memuat URL config secara default).
+            if std::env::var("MCP_E2E").is_ok() {
+                startup_log("ensure_server_running: MCP_E2E mode, melewati health-wait & window navigation");
+            } else {
             let target_url = app.config().app.windows.iter()
                 .find(|w| w.label == "main")
                 .and_then(|w| match &w.url {
@@ -428,6 +433,7 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             } else if let Some(window) = app.get_webview_window("main") {
                 let url = window.url().map(|u| u.to_string()).unwrap_or_default();
                 startup_log(&format!("Main window URL: {}", url));
+            }
             }
             if cfg!(debug_assertions) {
                 app.handle().plugin(
