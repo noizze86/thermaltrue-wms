@@ -230,6 +230,8 @@ pub async fn import_csv(
     for (i, record) in records.iter().enumerate() {
         let sku = record.get(0).unwrap_or("").trim();
         let name = record.get(1).unwrap_or("").trim();
+        // Lewati baris header (mis. "SKU,Name,...") supaya tidak ter-import sebagai data
+        if i == 0 && sku.eq_ignore_ascii_case("sku") { continue; }
         if sku.is_empty() || name.is_empty() { errors.push(format!("Row {}: SKU and Name required", i+1)); continue; }
         let id = uuid::Uuid::new_v4().to_string();
         let qty: f64 = record.get(2).unwrap_or("0").trim().parse().unwrap_or(0.0);

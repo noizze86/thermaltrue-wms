@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getMaterials, getCategories, getUnits, getSuppliers, getWarehouses, getExpiringMaterials, getMomKpis, getReportSchedules, saveReportSchedule, deleteReportSchedule, exportReportCsv, generateReportPdf, runReportSchedule } from "../../api"
+import { binaryBytes } from "../../lib/binary"
 import { Select } from "../../components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
@@ -69,7 +70,7 @@ export default function ReportSummaryPage() {
   }
 
   const handleExportCsv = async () => { try { const csv = await exportReportCsv("materials"); const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "material_summary.csv"; a.click(); URL.revokeObjectURL(url); toast({ title: "Exported" }) } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) } }
-  const handleExportPdf = async () => { try { const data = await generateReportPdf("materials"); const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "material_summary.pdf"; a.click(); URL.revokeObjectURL(url); toast({ title: "Exported" }) } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) } }
+  const handleExportPdf = async () => { try { const data = await generateReportPdf("materials"); const blob = new Blob([binaryBytes(data)], { type: "application/pdf" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "material_summary.pdf"; a.click(); URL.revokeObjectURL(url); toast({ title: "Exported" }) } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) } }
 
   return (
     <div className="space-y-6">

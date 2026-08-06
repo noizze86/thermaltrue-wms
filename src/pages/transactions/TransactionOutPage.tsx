@@ -8,6 +8,7 @@ import {
   generateDoPdf, generatePickingListPdf, getMaterialBySku,
 } from "../../api"
 import type { Transaction, MaterialBatch, SalesOrderWithCount, SoItem, TransactionItem } from "../../api"
+import { binaryBytes } from "../../lib/binary"
 import { useAuth } from "../../contexts/AuthContext"
 import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
@@ -565,7 +566,7 @@ export default function TransactionOutPage() {
                 <Button variant="outline" onClick={async () => {
                   try {
                     const data = await generateDoPdf(detailTx.id)
-                    const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" })
+                    const blob = new Blob([binaryBytes(data)], { type: "application/pdf" })
                     const url = URL.createObjectURL(blob)
                     const a = document.createElement("a"); a.href = url; a.download = `DO-${detailTx.transaction_number}.pdf`; a.click()
                     URL.revokeObjectURL(url)
@@ -576,7 +577,7 @@ export default function TransactionOutPage() {
                 <Button variant="outline" onClick={async () => {
                   try {
                     const data = await generatePickingListPdf(detailTx.id)
-                    const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" })
+                    const blob = new Blob([binaryBytes(data)], { type: "application/pdf" })
                     const url = URL.createObjectURL(blob)
                     const a = document.createElement("a"); a.href = url; a.download = `picking-${detailTx.transaction_number}.pdf`; a.click()
                     URL.revokeObjectURL(url)

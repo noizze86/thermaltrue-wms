@@ -4,6 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/ca
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
 import { Badge } from "../../components/ui/badge"
 import { formatDate } from "../../lib/utils"
+import { binaryBytes } from "../../lib/binary"
 import { Button } from "../../components/ui/button"
 import { toast } from "../../hooks/use-toast"
 import { useState } from "react"
@@ -42,7 +43,7 @@ export default function OpnameReportPage() {
   const exportXlsx = async (id: string) => {
     try {
       const data = await exportOpnameXlsx(id)
-      const blob = new Blob([new Uint8Array(data)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+      const blob = new Blob([binaryBytes(data)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
       const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `opname_${id.slice(0, 8)}.xlsx`; a.click(); URL.revokeObjectURL(url)
       toast({ title: "Exported", description: "XLSX downloaded" })
     } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
@@ -51,7 +52,7 @@ export default function OpnameReportPage() {
   const exportFormalPdf = async (id: string) => {
     try {
       const data = await generateReportPdf("opname")
-      const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" })
+      const blob = new Blob([binaryBytes(data)], { type: "application/pdf" })
       const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `opname_${id.slice(0, 8)}.pdf`; a.click(); URL.revokeObjectURL(url)
       toast({ title: "Exported", description: "Formal PDF downloaded" })
     } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
@@ -69,7 +70,7 @@ export default function OpnameReportPage() {
   const exportCycle = async () => {
     try {
       const data = await exportCycleXlsx()
-      const blob = new Blob([new Uint8Array(data)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+      const blob = new Blob([binaryBytes(data)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
       const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `cycle_count_report.xlsx`; a.click(); URL.revokeObjectURL(url)
       toast({ title: "Exported", description: "Cycle count XLSX downloaded" })
     } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) }

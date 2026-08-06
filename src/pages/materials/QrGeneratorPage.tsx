@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react"
 import { getMaterials, generateQrCode, getCompanyProfile, generateQrZip } from "../../api"
+import { zipDataUrl } from "../../lib/binary"
 import { useQuery } from "@tanstack/react-query"
 import { Button } from "../../components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -149,7 +150,7 @@ export default function QrGeneratorPage() {
       const dataUrls = generatedQrs.map((q) => q.sku)
       const zipB64 = await generateQrZip(dataUrls)
       const a = document.createElement("a")
-      a.href = zipB64
+      a.href = zipDataUrl(zipB64)
       a.download = `qrcodes-${Date.now()}.zip`
       a.click()
       toast({ title: "ZIP Ready", description: `Downloaded ${generatedQrs.length} QR codes` })

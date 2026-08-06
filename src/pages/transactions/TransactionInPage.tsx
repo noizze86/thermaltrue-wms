@@ -10,6 +10,7 @@ import {
   generateReceiptPdf,
 } from "../../api"
 import type { Transaction, PurchaseOrder } from "../../api"
+import { binaryBytes } from "../../lib/binary"
 import { useAuth } from "../../contexts/AuthContext"
 import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
@@ -610,7 +611,7 @@ export default function TransactionInPage() {
                 <Button variant="outline" onClick={async () => {
                   try {
                     const data = await generateReceiptPdf(detailTx.id)
-                    const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" })
+                    const blob = new Blob([binaryBytes(data)], { type: "application/pdf" })
                     const url = URL.createObjectURL(blob)
                     const a = document.createElement("a"); a.href = url; a.download = `receipt-${detailTx.transaction_number}.pdf`; a.click()
                     URL.revokeObjectURL(url)

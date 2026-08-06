@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { getMaterials, getCategories, getWarehouses, getExpiringMaterials, getAgingReport, getStockMovement, getCategoryValueSummary, exportReportCsv, generateReportPdf } from "../../api"
+import { binaryBytes } from "../../lib/binary"
 import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -54,7 +55,7 @@ export default function StockReportPage() {
   const lowStockCount = allMaterials?.filter((m) => m.quantity <= m.min_stock && m.min_stock > 0).length || 0
 
   const handleCsv = async () => { try { const csv = await exportReportCsv("materials"); const blob = new Blob([csv], { type: "text/csv" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "stock_report.csv"; a.click(); URL.revokeObjectURL(url); toast({ title: "Exported" }) } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) } }
-  const handlePdf = async () => { try { const data = await generateReportPdf("stock"); const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "stock_report.pdf"; a.click(); URL.revokeObjectURL(url); toast({ title: "Exported" }) } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) } }
+  const handlePdf = async () => { try { const data = await generateReportPdf("stock"); const blob = new Blob([binaryBytes(data)], { type: "application/pdf" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "stock_report.pdf"; a.click(); URL.revokeObjectURL(url); toast({ title: "Exported" }) } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) } }
 
   if (isLoading) return <LoadingState text="Loading stock report..." />
   if (isError) return <ErrorState message={error?.message} onRetry={refetch} />

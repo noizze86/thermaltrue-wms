@@ -25,6 +25,7 @@ import { formatCurrency } from "../../lib/utils"
 import { toast } from "../../hooks/use-toast"
 import { z } from "zod"
 import { Search, Plus, Pencil, Trash2, QrCode, Download, Upload, History, Image, LayoutGrid, Table2, Settings2, Layers, Camera, FileSpreadsheet } from "lucide-react"
+import { binaryBytes } from "../../lib/binary"
 import JsBarcode from "jsbarcode"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 
@@ -101,6 +102,8 @@ export default function StockPage() {
   const [bulkUpdates, setBulkUpdates] = useState<Record<string, string>>({})
   const [csvPreview, setCsvPreview] = useState<{ headers: string[]; rows: string[][] } | null>(null)
   const [pendingXlsxBase64, setPendingXlsxBase64] = useState<string | null>(null)
+  const [importCsvFullText, setImportCsvFullText] = useState<string>("")
+  const [importCsvTotalRows, setImportCsvTotalRows] = useState(0)
   const [activeTab, setActiveTab] = useState<"list" | "batches" | "gallery" | "timeline" | "valuation">("list")
   const [batchForm, setBatchForm] = useState({ material_id: "", batch_no: "", qty: 0, expiry_date: "", received_at: new Date().toISOString().slice(0, 10) })
   const [imageFiles, setImageFiles] = useState<File[]>([])
@@ -208,7 +211,7 @@ export default function StockPage() {
   })
   const importMut = useMutation({
     mutationFn: (csv: string) => importMaterialsCsv(csv),
-    onSuccess: (msg) => { queryClient.invalidateQueries({ queryKey: ["materials"] }); toast({ title: "Import Result", description: msg }) },
+    onSuccess: (res) => { queryClient.invalidateQueries({ queryKey: ["materials"] }); const msg = res && typeof res === "object" ? `${res.imported} row(s) imported, ${(res.errors || []).length} error(s)` : String(res); toast({ title: "Import CSV Result", description: msg }) },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   })
   const createBatchMut = useMutation({
@@ -237,7 +240,7 @@ export default function StockPage() {
   })
   const importXlsxMut = useMutation({
     mutationFn: (data: string) => importMaterialsXlsx(data),
-    onSuccess: (msg) => { queryClient.invalidateQueries({ queryKey: ["materials"] }); toast({ title: "XLSX Import", description: msg }) },
+    onSuccess: (res) => { queryClient.invalidateQueries({ queryKey: ["materials"] }); const msg = res && typeof res === "object" ? `${res.imported} row(s) imported, ${(res.errors || []).length} error(s)` : String(res); toast({ title: "XLSX Import Result", description: msg }) },
     onError: (e: Error) => toast({ title: "Error", description: e.message, variant: "destructive" }),
   })
 
@@ -275,7 +278,7 @@ export default function StockPage() {
   const handleExportXlsx = async () => {
     try {
       const data = await exportStockXlsx()
-      const blob = new Blob([new Uint8Array(data)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
+      const blob = new Blob([binaryBytes(data)], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url; a.download = "materials.xlsx"; a.click()
@@ -295,8 +298,7 @@ export default function StockPage() {
       if (result) {
         const base64 = result.split(",")[1]
         try {
-          const previewJson = await previewImportXlsx(base64)
-          const previewRows = JSON.parse(previewJson) as string[][]
+          const previewRows = await previewImportXlsx(base64)
           if (previewRows.length > 1) {
             setCsvPreview({ headers: previewRows[0] || [], rows: previewRows.slice(1) })
             setPendingXlsxBase64(base64)
@@ -348,6 +350,8 @@ export default function StockPage() {
         parseCsvLine(line).map((c) => c.replace(/^"|"$/g, ""))
       )
       setCsvPreview({ headers, rows })
+      setImportCsvFullText(lines.slice(1).join("\n"))
+      setImportCsvTotalRows(lines.length - 1)
     }
     reader.readAsText(file)
     e.target.value = ""
@@ -1044,13 +1048,13 @@ export default function StockPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={!!csvPreview} onOpenChange={(v) => { if (!v) { setCsvPreview(null); setPendingXlsxBase64(null) } }}>
+      <Dialog open={!!csvPreview} onOpenChange={(v) => { if (!v) { setCsvPreview(null); setPendingXlsxBase64(null); setImportCsvFullText(""); setImportCsvTotalRows(0) } }}>
         <DialogContent className="max-w-2xl">
           <DialogHeader><DialogTitle>{pendingXlsxBase64 ? "XLSX" : "CSV"} Preview</DialogTitle></DialogHeader>
           {csvPreview && (
             <div className="space-y-4">
               <p className="text-sm text-muted-foreground">
-                Found {csvPreview.headers.length} columns, {csvPreview.rows.length}+ rows (showing first {csvPreview.rows.length})
+                Found {csvPreview.headers.length} columns, {pendingXlsxBase64 ? csvPreview.rows.length : importCsvTotalRows} rows (showing first {csvPreview.rows.length})
               </p>
               <div className="overflow-x-auto rounded-md border">
                 <table className="w-full text-xs">
@@ -1069,17 +1073,16 @@ export default function StockPage() {
                 </table>
               </div>
               <div className="flex justify-end gap-2">
-                <Button variant="outline" onClick={() => { setCsvPreview(null); setPendingXlsxBase64(null) }}>Cancel</Button>
+                <Button variant="outline" onClick={() => { setCsvPreview(null); setPendingXlsxBase64(null); setImportCsvFullText(""); setImportCsvTotalRows(0) }}>Cancel</Button>
                 <Button onClick={() => {
                   if (pendingXlsxBase64) {
                     importXlsxMut.mutate(pendingXlsxBase64)
                   } else {
-                    const text = [csvPreview.headers.join(","), ...csvPreview.rows.map((r) => r.join(","))].join("\n")
-                    importMut.mutate(text)
+                    importMut.mutate(importCsvFullText)
                   }
-                  setCsvPreview(null); setPendingXlsxBase64(null)
+                  setCsvPreview(null); setPendingXlsxBase64(null); setImportCsvFullText(""); setImportCsvTotalRows(0)
                 }} disabled={importMut.isPending || importXlsxMut.isPending}>
-                  <Upload className="h-4 w-4" /> Import {csvPreview.rows.length} rows
+                  <Upload className="h-4 w-4" /> Import {pendingXlsxBase64 ? csvPreview.rows.length : importCsvTotalRows} rows
                 </Button>
               </div>
             </div>

@@ -7,6 +7,7 @@ import {
   generateReceiptPdf, generateDoPdf, deleteTransaction, deleteTransactionsBulk,
 } from "../../api"
 import type { Transaction, TransactionItem, TransactionAttachment } from "../../api"
+import { binaryBytes } from "../../lib/binary"
 import { Input } from "../../components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
@@ -163,7 +164,7 @@ export default function TransactionHistoryPage() {
         typeFilter: typeFilter !== "all" ? typeFilter : undefined,
         statusFilter: statusFilter !== "all" ? statusFilter : undefined,
       })
-      const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" })
+      const blob = new Blob([binaryBytes(data)], { type: "application/pdf" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a"); a.href = url; a.download = `transactions_${Date.now()}.pdf`; a.click()
       URL.revokeObjectURL(url)
@@ -411,14 +412,14 @@ export default function TransactionHistoryPage() {
               <div className="flex gap-2 pt-2">
                 {detailTx.type === "in" && (
                   <Button variant="outline" size="sm" className="flex-1" onClick={async () => {
-                    try { const data = await generateReceiptPdf(detailTx.id); const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `receipt-${detailTx.transaction_number}.pdf`; a.click(); URL.revokeObjectURL(url) } catch (e) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
+                    try { const data = await generateReceiptPdf(detailTx.id); const blob = new Blob([binaryBytes(data)], { type: "application/pdf" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `receipt-${detailTx.transaction_number}.pdf`; a.click(); URL.revokeObjectURL(url) } catch (e) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
                   }}>
                     <FileText className="h-4 w-4" /> PDF Receipt
                   </Button>
                 )}
                 {detailTx.type === "out" && (
                   <Button variant="outline" size="sm" className="flex-1" onClick={async () => {
-                    try { const data = await generateDoPdf(detailTx.id); const blob = new Blob([new Uint8Array(data)], { type: "application/pdf" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `DO-${detailTx.transaction_number}.pdf`; a.click(); URL.revokeObjectURL(url) } catch (e) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
+                    try { const data = await generateDoPdf(detailTx.id); const blob = new Blob([binaryBytes(data)], { type: "application/pdf" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = `DO-${detailTx.transaction_number}.pdf`; a.click(); URL.revokeObjectURL(url) } catch (e) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
                   }}>
                     <FileText className="h-4 w-4" /> PDF DO
                   </Button>

@@ -64,6 +64,7 @@ pub async fn export_pdf(
     let stk_data: Vec<(String,String,String,f64,f64)>;
     let opn_data: Vec<(String,f64,f64,f64,String)>;
     let tx_data: Vec<(String,String,String,f64,String,String,String)>;
+    let mut aud_data: Vec<(String,String,String,String,String,String)> = Vec::new();
     match q.report_type.as_str() {
         "materials" => {
             let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
@@ -99,7 +100,16 @@ pub async fn export_pdf(
             mat_data = Vec::new(); stk_data = Vec::new(); opn_data = Vec::new();
             tx_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4),r.get(5),r.get(6))).collect();
         }
-        _ => { mat_data = Vec::new(); stk_data = Vec::new(); opn_data = Vec::new(); tx_data = Vec::new(); }
+        "audit_log_filtered" => {
+            let mut qb = sqlx::QueryBuilder::new("SELECT a.id, COALESCE(u.username,'System'), a.action, a.entity, a.details, a.created_at FROM audit_log a LEFT JOIN users u ON a.user_id=u.id WHERE 1=1");
+            if let Some(ref ds) = q.date_start { if !ds.is_empty() { qb.push(" AND a.created_at::timestamp >= ").push_bind(format!("{} 00:00:00", ds)); } }
+            if let Some(ref de) = q.date_end { if !de.is_empty() { qb.push(" AND a.created_at::timestamp < (").push_bind(de); qb.push("::date + interval '1 day')"); } }
+            qb.push(" ORDER BY a.created_at DESC LIMIT 500");
+            let rows = qb.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            mat_data = Vec::new(); stk_data = Vec::new(); opn_data = Vec::new(); tx_data = Vec::new();
+            aud_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4),r.get(5))).collect();
+        }
+        _ => { mat_data = Vec::new(); stk_data = Vec::new(); opn_data = Vec::new(); tx_data = Vec::new(); aud_data = Vec::new(); }
     }
     let b64 = tokio::task::spawn_blocking(move || -> Result<String, String> {
         use printpdf::*;
@@ -129,6 +139,10 @@ pub async fn export_pdf(
             "transactions" => {
                 cl.use_text("Number | Type | Material | Qty | Ref | Status | Date",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
                 for (nu,tp,mt,qt,rf,st,dt) in &tx_data { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}|{}|{}",nu,tp,mt,qt,rf,st,dt),7.0,Mm(20.0),Mm(y),&fr); y-=4.5; }
+            }
+            "audit_log_filtered" => {
+                cl.use_text("Time | User | Action | Entity | Details",8.0,Mm(20.0),Mm(y),&fb); y-=6.0;
+                for (id,un,ac,en,de,dt) in &aud_data { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}|{}",dt,un,ac,en,de.replace('\n'," "),id),6.0,Mm(20.0),Mm(y),&fr); y-=4.0; }
             }
             _ => {}
         }

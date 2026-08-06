@@ -2,6 +2,7 @@ import { useState } from "react"
 import { z } from "zod"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
 import { getStockOpnames, createStockOpname, updateStockOpnameStatus, getStockOpnameItems, saveStockOpnameItem, getWarehouses, getMaterials, getRacks, generateReportPdf, getCycleSchedules, createCycleSchedule, deleteCycleSchedule, getOpnameConfig, setOpnameConfig, autoGenerateCycleOpname, generateCountSheetPdf, getCycleScopeItems, approveOpnameAdjustment, getCycleTaskHistory, getCategories, getCycleZones, createZoneSchedule, deleteZoneSchedule, getZones, recountCycleTask, type CycleHistoryEntry } from "../../api"
+import { binaryBytes } from "../../lib/binary"
 import { useAuth } from "../../contexts/AuthContext"
 import { Button } from "../../components/ui/button"
 import { Input } from "../../components/ui/input"
@@ -205,7 +206,7 @@ export default function StockOpnamePage() {
       if (!data?.warehouse_id) { toast({ title: "Error", description: "No warehouse selected", variant: "destructive" }); return }
       const whId = data.warehouse_id
       const bytes = await generateCountSheetPdf(whId)
-      const blob = new Blob([new Uint8Array(bytes)], { type: "application/pdf" })
+      const blob = new Blob([binaryBytes(bytes)], { type: "application/pdf" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url; a.download = `count_sheet_${selectedOpnameData?.opname_number || whId}.pdf`; a.click()
@@ -259,7 +260,7 @@ export default function StockOpnamePage() {
   const handleExportPdf = async () => {
     try {
       const bytes = await generateReportPdf("opname")
-      const blob = new Blob([new Uint8Array(bytes)], { type: "application/pdf" })
+      const blob = new Blob([binaryBytes(bytes)], { type: "application/pdf" })
       const url = URL.createObjectURL(blob)
       const a = document.createElement("a")
       a.href = url; a.download = `opname_report_${selectedOpname?.slice(0, 8) || "all"}.pdf`; a.click()

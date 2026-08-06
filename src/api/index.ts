@@ -47,6 +47,12 @@ export interface AuthResponse {
   password_expired?: boolean;
 }
 
+export interface ImportResult {
+  imported: number;
+  errors: string[];
+  total: number;
+}
+
 export interface Material {
   id: string;
   sku: string;
@@ -468,7 +474,7 @@ export const updateMaterial = (material: Material) => invokeAuth<Material>("upda
 export const deleteMaterial = (id: string) => invokeAuth<void>("delete_material", { id });
 export const deleteMaterialsBulk = (ids: string[]) => invokeAuth<string>("delete_materials_bulk", { ids });
 export const updateMaterialsBulk = (ids: string[], updates: Record<string, unknown>) => invokeAuth<void>("update_materials_bulk", { ids, updates });
-export const importMaterialsCsv = (csvContent: string) => invokeAuth<string>("import_materials_csv", { csvContent });
+export const importMaterialsCsv = (csvContent: string) => invokeAuth<ImportResult>("import_materials_csv", { csvContent });
 export const getMaterialsLowStock = () => invokeAuth<Material[]>("get_materials_low_stock");
 export const getMaterialBySku = (sku: string) => invokeAuth<Material>("get_material_by_sku", { sku });
 export const getExpiringMaterials = (days: number) => invokeAuth<Material[]>("get_expiring_materials", { days });
@@ -969,8 +975,8 @@ export interface StockValuation {
   count: number;
 }
 export const getStockValuation = () => invokeAuth<StockValuation[]>("get_stock_valuation");
-export const importMaterialsXlsx = (xlsxBase64: string) => invokeAuth<string>("import_materials_xlsx", { xlsxBase64 });
-export const exportStockXlsx = () => invokeAuth<number[]>("export_stock_xlsx");
+export const importMaterialsXlsx = (xlsxBase64: string) => invokeAuth<ImportResult>("import_materials_xlsx", { xlsxBase64 });
+export const exportStockXlsx = () => invokeAuth<string>("export_stock_xlsx");
 export const generateZpl = (material_id: string, template_id: string) => invokeAuth<string>("generate_zpl", { materialId: material_id, templateId: template_id });
 export interface StockTimelineEntry { id: string; transaction_number: string; type_: string; quantity: number; qty_before: number; qty_after: number; reference: string; notes: string; user_name: string; created_at: string; }
 export const getStockTimeline = (material_id: string) => invokeAuth<StockTimelineEntry[]>("get_stock_timeline", { materialId: material_id });
@@ -1246,7 +1252,7 @@ export const getMultiWarehouseComparison = () => invokeAuth<WarehouseComparisonI
 export const getPivotReport = (row_field: string, col_field: string, value_field: string, agg_function: string, date_start?: string, date_end?: string) =>
   invokeAuth<{ columns: string[]; rows: Record<string, unknown>[]; rowField: string; colField: string; valueField: string; aggFunction: string }>("get_pivot_report", { rowField: row_field, colField: col_field, valueField: value_field, aggFunction: agg_function, dateStart: date_start, dateEnd: date_end });
 export const getVarianceRootCause = (opname_id: string) => invokeAuth<Record<string, unknown>[]>("get_variance_root_cause", { opnameId: opname_id });
-export const previewImportXlsx = (base64: string) => invokeAuth<string>("preview_import_xlsx", { xlsxBase64: base64 });
+export const previewImportXlsx = async (base64: string) => { const res = await invokeAuth<{ preview: string[][] }>("preview_import_xlsx", { xlsxBase64: base64 }); return res?.preview ?? [] };
 export const generateReceiptPdf = (tx_id: string) => invokeAuth<number[]>("generate_receipt_pdf", { txId: tx_id });
 export const generatePickingListPdf = (tx_id: string) => invokeAuth<number[]>("generate_picking_list_pdf", { txId: tx_id });
 export const generateDoPdf = (tx_id: string) => invokeAuth<number[]>("generate_do_pdf", { txId: tx_id });
