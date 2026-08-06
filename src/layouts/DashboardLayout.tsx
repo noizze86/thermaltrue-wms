@@ -303,7 +303,7 @@ export default function DashboardLayout() {
       <main className={cn("flex-1 overflow-y-auto bg-muted/30", isMobile && "pb-16")}>
         {/* Mobile header */}
         {isMobile && (
-          <div className="sticky top-0 z-20 flex items-center gap-2 border-b bg-background px-4 py-3">
+          <div className="sticky top-0 z-20 flex items-center gap-2 border-b bg-background px-4 py-3 no-print">
             <button onClick={() => setMobileOpen(true)} className="rounded-md p-1 hover:bg-accent">
               <Menu className="h-5 w-5" />
             </button>
@@ -324,7 +324,7 @@ export default function DashboardLayout() {
 
       {/* Mobile bottom nav */}
       {isMobile && (
-        <nav className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background flex items-center justify-around py-1 pb-2">
+        <nav className="fixed bottom-0 left-0 right-0 z-40 border-t bg-background flex items-center justify-around py-1 pb-2 no-print">
           {bottomNavItems
             .filter((item) => {
               if (item.to === "/dashboard") return can("view_dashboard")

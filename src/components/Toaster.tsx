@@ -22,7 +22,7 @@ export function Toaster() {
           <ToastClose />
         </Toast>
       ))}
-      <ToastViewport />
+      <ToastViewport className="no-print" />
     </ToastProvider>
   )
 }

@@ -64,6 +64,11 @@ export default function LabelPrintPage() {
     return () => clearTimeout(t)
   }, [search])
 
+  useEffect(() => {
+    document.body.classList.add("label-print-page")
+    return () => document.body.classList.remove("label-print-page")
+  }, [])
+
   const { data: materials, isLoading, isError, error, refetch } = useQuery({
     queryKey: ["materials", debouncedSearch],
     queryFn: () => getMaterials(debouncedSearch || undefined),
@@ -296,6 +301,19 @@ export default function LabelPrintPage() {
 
   return (
     <>
+    <style>{`
+      @media print {
+        body.label-print-page { background: #ffffff !important; }
+        body.label-print-page .h-screen,
+        body.label-print-page main,
+        body.label-print-page .overflow-y-auto {
+          height: auto !important;
+          max-height: none !important;
+          overflow: visible !important;
+        }
+        .print-only { display: block !important; }
+      }
+    `}</style>
     <div className="no-print space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-3xl font-bold">Label Printing</h1>
