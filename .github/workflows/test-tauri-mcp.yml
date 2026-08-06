@@ -143,53 +143,47 @@ jobs:
 
       - name: Start Tauri app
         shell: pwsh
+        env:
+          MCP_E2E: "true"
         run: |
           $ErrorActionPreference = "Stop"
           $app = Join-Path $env:GITHUB_WORKSPACE "target\debug\app.exe"
           if (-not (Test-Path $app)) { throw "app.exe not found at $app" }
+          $relServer = Join-Path $env:GITHUB_WORKSPACE "target\release\server.exe"
+          $dbgServer = Join-Path $env:GITHUB_WORKSPACE "target\debug\server.exe"
+          if ((Test-Path $relServer) -and (-not (Test-Path $dbgServer))) {
+            Copy-Item $relServer $dbgServer -Force
+            Write-Host "copied release server.exe next to app.exe (for ensure_server_running)"
+          }
           $logDir = Join-Path $env:GITHUB_WORKSPACE "tests\results"
           New-Item -ItemType Directory -Path $logDir -Force | Out-Null
           $p = Start-Process -FilePath $app -RedirectStandardOutput (Join-Path $logDir "app.out.log") -RedirectStandardError (Join-Path $logDir "app.err.log") -WindowStyle Hidden -PassThru
           Start-Sleep -Seconds 10
           $alive = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
-          if ($alive) {
-            Write-Host "Tauri app alive (PID $($p.Id))"
-          } else {
-            Write-Host "WARNING: Tauri app process exited (code $($p.ExitCode))"
+          if (-not $alive) {
+            Write-Host "=== app.err.log tail (app exited) ==="
+            Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
+            Write-Host "=== app.out.log tail ==="
+            Get-Content (Join-Path $logDir "app.out.log") -Tail 60 -ErrorAction SilentlyContinue
+            throw "Tauri app exited early (code $($p.ExitCode)) before MCP bridge could start"
           }
+          Write-Host "Tauri app alive (PID $($p.Id))"
           $listener = $null
           for ($i = 0; $i -lt 20; $i++) {
             $listener = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 9223 -and $_.LocalPort -le 9422 }
             if ($listener) { break }
             Start-Sleep -Seconds 1
           }
-          if ($listener) {
-            $listener | ForEach-Object { Write-Host "MCP bridge listening on port $($_.LocalPort) (pid $($_.OwningProcess))" }
-          } else {
-            Write-Host "WARNING: no MCP bridge listener on ports 9223-9422"
-            Write-Host "--- app.err.log tail ---"
-            Get-Content (Join-Path $logDir "app.err.log") -Tail 40 -ErrorAction SilentlyContinue
-            Write-Host "--- app.out.log tail ---"
-            Get-Content (Join-Path $logDir "app.out.log") -Tail 40 -ErrorAction SilentlyContinue
+          if (-not $listener) {
+            Write-Host "=== app.err.log tail (no bridge listener) ==="
+            Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
+            Write-Host "=== app.out.log tail ==="
+            Get-Content (Join-Path $logDir "app.out.log") -Tail 60 -ErrorAction SilentlyContinue
+            throw "MCP bridge did not start on ports 9223-9422"
           }
-          Write-Host "Tauri app started"
-
-      - name: Verify bridge WS handshake
-        shell: pwsh
-        working-directory: tests
-        run: |
-          $ErrorActionPreference = "Continue"
-          Write-Host "--- netstat 9223 ---"
-          netstat -ano | findstr ":9223"
-          Write-Host "--- Get-NetTCPConnection 9223 ---"
-          Get-NetTCPConnection -LocalPort 9223 -State Listen -ErrorAction SilentlyContinue | Select-Object LocalAddress,LocalPort,State,OwningProcess
-          node -e "const net=require('net'); const s=net.connect(9223,'127.0.0.1',()=>{console.log('TCP 127.0.0.1 OK'); s.destroy();}); s.on('error',e=>{console.log('TCP 127.0.0.1 ERROR: '+e.message);}); setTimeout(()=>{console.log('TCP 127.0.0.1 TIMEOUT');},5000);"
-          node -e "const net=require('net'); const s=net.connect(9223,'0.0.0.0',()=>{console.log('TCP 0.0.0.0 OK'); s.destroy();}); s.on('error',e=>{console.log('TCP 0.0.0.0 ERROR: '+e.message);}); setTimeout(()=>{console.log('TCP 0.0.0.0 TIMEOUT');},5000);"
-          node -e "const net=require('net'); const s=net.connect(9223,'::1',()=>{console.log('TCP ::1 OK'); s.destroy();}); s.on('error',e=>{console.log('TCP ::1 ERROR: '+e.message);}); setTimeout(()=>{console.log('TCP ::1 TIMEOUT');},5000);"
-          node -e "const WebSocket=require('ws'); const ws=new WebSocket('ws://127.0.0.1:9223'); ws.on('open',()=>{console.log('WS OPEN OK'); process.exit(0);}); ws.on('error',e=>{console.log('WS ERROR: '+e.message);}); setTimeout(()=>{console.log('WS TIMEOUT'); process.exit(2);},8000);"
-          $appProc = Get-Process -Name app -ErrorAction SilentlyContinue
-          if ($appProc) { Write-Host "app process alive: $($appProc.Id -join ',')" } else { Write-Host "WARNING: app process NOT alive" }
-          Write-Host "Verify step finished (non-fatal)"
+          $listener | ForEach-Object { Write-Host "MCP bridge listening on port $($_.LocalPort) (pid $($_.OwningProcess), addr $($_.LocalAddress))" }
+          $targetAddr = if ($listener[0].LocalAddress -in @("::", "0.0.0.0")) { "127.0.0.1" } else { $listener[0].LocalAddress }
+          node -e "const net=require('net'); const s=net.connect(9223,'$targetAddr',()=>{console.log('TCP handshake OK at $targetAddr'); s.destroy();}); s.on('error',e=>{console.log('TCP handshake FAIL at $targetAddr: '+e.message);}); setTimeout(()=>{},3000);"
 
       - name: Run E2E tests
         working-directory: tests

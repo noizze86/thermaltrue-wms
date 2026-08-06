@@ -374,6 +374,7 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             // (IP mesin bisa berubah via DHCP; app di mesin server tetap harus jalan)
             let mut nav_url = target_url.clone();
             let mut healthy = tauri::async_runtime::block_on(check_health_at(&nav_url, 1));
+            startup_log(&format!("ensure_server_running: initial health check done (healthy={})", healthy));
             for i in 1..=8 {
                 if healthy {
                     break;
@@ -396,7 +397,10 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
                     healthy = true;
                 }
             }
-            if let Some(window) = app.get_webview_window("main") {
+            let e2e_mode = std::env::var("MCP_E2E").is_ok();
+            if e2e_mode {
+                startup_log("ensure_server_running: MCP_E2E mode, melewati manipulasi window di setup");
+            } else if let Some(window) = app.get_webview_window("main") {
                 let current = window.url().map(|u| u.to_string()).unwrap_or_default();
                 if healthy {
                     if current.is_empty() || current == "about:blank" || !current.starts_with(&nav_url) {
@@ -418,8 +422,10 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            // Log window URL for debugging
-            if let Some(window) = app.get_webview_window("main") {
+            // Log window URL (skip saat MCP_E2E agar tidak menyentuh webview di setup)
+            if e2e_mode {
+                startup_log("ensure_server_running: MCP_E2E mode, melewati log URL window");
+            } else if let Some(window) = app.get_webview_window("main") {
                 let url = window.url().map(|u| u.to_string()).unwrap_or_default();
                 startup_log(&format!("Main window URL: {}", url));
             }
