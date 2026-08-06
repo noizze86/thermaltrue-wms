@@ -3,14 +3,16 @@ import { useQuery } from "@tanstack/react-query"
 import { getAnalysisAll, getWarehouses, getConsumptionSummary, getConsumptionDetails, getConsumptionSeasonal } from "../../api"
 import { Input } from "../../components/ui/input"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
+import { Button } from "../../components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
 import { Select } from "../../components/ui/select"
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts"
 import { Badge } from "../../components/ui/badge"
-import { Search, TrendingUp, TrendingDown, BarChart3, Calculator } from "lucide-react"
+import { Search, TrendingUp, TrendingDown, BarChart3, Calculator, FileDown } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
+import { downloadXlsx } from "../../lib/export-xlsx"
 
 export default function ConsumptionPage() {
   const [search, setSearch] = useState("")
@@ -89,6 +91,41 @@ export default function ConsumptionPage() {
   const totalCons12mo = filtered.reduce((s, i) => s + i.consumption_12mo, 0)
   const avgLeadTime = filtered.length > 0 ? filtered.reduce((s, i) => s + i.lead_time_days, 0) / filtered.length : 0
 
+  const [exporting, setExporting] = useState(false)
+
+  const exportXlsx = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const details = consDetails || enriched
+      const seasonalRows = (consSeasonal || seasonalData).map((d) => [d.name, Number(d.index.toFixed(2)), d.season])
+      const safetyRows = details.map((item: any) => {
+        const sd = item.std_dev ?? item.sigma
+        const lt = item.lead_time_days ?? 0
+        const ss = item.safety_stock ?? item.safetyStock
+        const si = item.seasonal_index ?? item.seasonalIndex ?? 1
+        const rp = item.reorder_point ?? item.rop
+        const rss = item.seasonal_safety_stock ?? item.seasonalSafetyStock ?? ss
+        return [item.material_name, sd ? Number(sd.toFixed(2)) : "", Number(lt.toFixed(1)), ss ? Number(ss.toFixed(1)) : "", Number(si.toFixed(2)), Math.round(rss), rp ? Number(rp.toFixed(1)) : ""]
+      })
+      const detailRows = details.map((item: any) => {
+        const c3 = item.consumption_3mo ?? 0
+        const c6 = item.consumption_6mo ?? 0
+        const ss = item.safety_stock ?? item.safetyStock ?? 0
+        const rp = item.reorder_point ?? item.rop ?? 0
+        const trend = item.consumption_trend ?? (c6 > c3 ? "▲" : c6 < c3 ? "▼" : "→")
+        return [item.material_name, item.sku, item.current_qty ?? item.quantity, trend, Number(c3.toFixed(0)), Number(c6.toFixed(0)), Number(ss.toFixed(1)), Number(rp.toFixed(1))]
+      })
+      await downloadXlsx("consumption-analysis.xlsx", [
+        { name: "Seasonal Index", header: ["Month", "Index", "Season"], rows: seasonalRows },
+        { name: "Safety Stock", header: ["Material", "σ", "Lead Time", "Base SS", "S. Index", "Rec. SS", "ROP"], rows: safetyRows },
+        { name: "Consumption Details", header: ["Material", "SKU", "Stock", "Trend", "Cons (3mo)", "Cons (6mo)", "Safety Stock", "ROP"], rows: detailRows },
+      ])
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (isLoading) return <LoadingState text="Loading consumption data..." />
   if (isError) return <ErrorState message={error?.message || "Failed to load consumption data"} onRetry={refetch} />
 
@@ -164,7 +201,12 @@ export default function ConsumptionPage() {
 
       {/* Seasonal Index Table */}
       <Card>
-        <CardHeader><CardTitle>Seasonal Index Table</CardTitle></CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Seasonal Index Table</CardTitle>
+          <Button size="sm" variant="outline" onClick={exportXlsx} disabled={exporting}>
+            <FileDown className="h-4 w-4" /> {exporting ? "Exporting..." : "Export XLSX"}
+          </Button>
+        </CardHeader>
         <CardContent>
           {(consSeasonal || seasonalData).length === 0 ? (
             <p className="text-center text-muted-foreground py-4">No data</p>
@@ -206,7 +248,12 @@ export default function ConsumptionPage() {
 
       {/* Safety Stock Recommendations */}
       <Card>
-        <CardHeader><CardTitle>Safety Stock Recommendations</CardTitle></CardHeader>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Safety Stock Recommendations</CardTitle>
+          <Button size="sm" variant="outline" onClick={exportXlsx} disabled={exporting}>
+            <FileDown className="h-4 w-4" /> {exporting ? "Exporting..." : "Export XLSX"}
+          </Button>
+        </CardHeader>
         <CardContent>
           {enriched.length === 0 ? (
             <p className="text-center text-muted-foreground py-4">No data</p>
@@ -327,6 +374,9 @@ export default function ConsumptionPage() {
                 <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input placeholder="Search by name or SKU..." className="pl-8" value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
+              <Button size="sm" variant="outline" onClick={exportXlsx} disabled={exporting}>
+                <FileDown className="h-4 w-4" /> {exporting ? "Exporting..." : "Export XLSX"}
+              </Button>
             </div>
           </div>
           <p className="text-xs text-muted-foreground">Filter consumption data by warehouse.</p>

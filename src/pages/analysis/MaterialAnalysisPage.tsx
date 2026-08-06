@@ -10,8 +10,9 @@ import { Select } from "../../components/ui/select"
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar,
 } from "recharts"
-import { Search } from "lucide-react"
+import { Search, FileDown } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
+import { downloadXlsx } from "../../lib/export-xlsx"
 
 export default function MaterialAnalysisPage() {
   const [search, setSearch] = useState("")
@@ -122,6 +123,34 @@ export default function MaterialAnalysisPage() {
       itr: Math.round((i.quantity > 0 ? i.consumption_12mo / i.quantity : 0) * 100) / 100,
     }))
 
+  const [exporting, setExporting] = useState(false)
+
+  const exportXlsx = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const allRows = sorted.map((i) => {
+        const md = matDetails?.find((d) => d.material_id === i.material_id)
+        const itr = md?.turnover_ratio ?? (i.quantity > 0 ? i.consumption_12mo / i.quantity : 0)
+        const risk = md?.stockout_risk ?? 0
+        const days = i.days_since_last > 999 ? "Never" : String(i.days_since_last)
+        let status = "Active"
+        if (i.days_since_last > 90) status = "Dead Stock"
+        else if (i.days_since_last > 30) status = "Slow Moving"
+        return [i.sku, i.material_name, i.quantity, days, Number(itr.toFixed(2)), Number(risk.toFixed(0)), md?.abc_class ? `${md.abc_class}${md.xyz_class ? `/${md.xyz_class}` : ""}` : "", status]
+      })
+      const riskRows = (matDetails || []).filter((d) => d.stockout_risk > 50).map((d) => [
+        d.sku, d.material_name, d.stockout_risk, d.quantity, d.min_stock, d.days_cover > 999 ? "∞" : d.days_cover,
+      ])
+      await downloadXlsx("material-analysis.xlsx", [
+        { name: "All Materials", header: ["SKU", "Name", "Stock", "Days Since Tx", "ITR", "Risk %", "ABC", "Status"], rows: allRows },
+        { name: "High Risk", header: ["SKU", "Name", "Risk %", "Stock", "Min Stock", "Days Cover"], rows: riskRows },
+      ])
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (isLoading) return <LoadingState text="Loading material analysis..." />
   if (isError) return <ErrorState message={error?.message} onRetry={refetch} />
 
@@ -177,6 +206,11 @@ export default function MaterialAnalysisPage() {
             <CardTitle className="flex items-center gap-2 text-sm">
               <span className="text-orange-500">⚠</span> High Stockout Risk Materials
             </CardTitle>
+            <div className="flex items-center gap-2">
+              <Button size="sm" variant="outline" onClick={exportXlsx} disabled={exporting}>
+                <FileDown className="h-4 w-4" /> {exporting ? "Exporting..." : "Export XLSX"}
+              </Button>
+            </div>
           </CardHeader>
           <CardContent className="max-h-48 overflow-y-auto">
             <Table>
@@ -311,6 +345,9 @@ export default function MaterialAnalysisPage() {
                 <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
                 <Input placeholder="Search by name or SKU..." className="pl-8" value={search} onChange={(e) => setSearch(e.target.value)} />
               </div>
+              <Button size="sm" variant="outline" onClick={exportXlsx} disabled={exporting}>
+                <FileDown className="h-4 w-4" /> {exporting ? "Exporting..." : "Export XLSX"}
+              </Button>
             </div>
           </div>
         </CardHeader>

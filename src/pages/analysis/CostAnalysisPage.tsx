@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo } from "react"
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query"
-import { getAnalysisAll, getMaterials, getCategories, getTransactions, getSupplierPrices, getSuppliers, getCategoryValueSummary, exportReportCsv, getBudgets, saveBudget, deleteBudget, getCostSummary, getCarryingCost, getCostToServe, getEfficiencyPenalty } from "../../api"
+import { getAnalysisAll, getMaterials, getCategories, getTransactions, getSupplierPrices, getSuppliers, getCategoryValueSummary, getBudgets, saveBudget, deleteBudget, getCostSummary, getCarryingCost, getCostToServe, getEfficiencyPenalty } from "../../api"
 import { Input } from "../../components/ui/input"
 import { Select } from "../../components/ui/select"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
@@ -12,6 +12,7 @@ import { toast } from "../../hooks/use-toast"
 import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts"
 import { Search, FileDown, DollarSign, TrendingUp, Package, Percent, Save, Trash2, BarChart3, Activity, Minus } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
+import { downloadXlsx } from "../../lib/export-xlsx"
 
 const COLORS = ["#3b82f6", "#22c55e", "#ef4444", "#a855f7", "#eab308", "#06b6d4", "#f97316"]
 
@@ -143,15 +144,25 @@ export default function CostAnalysisPage() {
     return match?.value || 0
   }, [budget.categoryId, catValues, categories])
 
-  const exportCsv = async () => {
+  const [exporting, setExporting] = useState(false)
+
+  const exportXlsx = async () => {
+    if (exporting) return
+    setExporting(true)
     try {
-      const csv = await exportReportCsv("materials")
-      const blob = new Blob([csv], { type: "text/csv" })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement("a"); a.href = url; a.download = "cost_analysis.csv"; a.click()
-      URL.revokeObjectURL(url)
-      toast({ title: "Exported", description: "Cost analysis CSV downloaded" })
-    } catch (e: unknown) { toast({ title: "Error", description: String(e), variant: "destructive" }) }
+      const detailRows = sorted.map((i) => [i.material_name, i.sku, Number(i.quantity.toFixed(0)), Number(i.turnover.toFixed(2)), Number((i.quantity * i.turnover).toFixed(0))])
+      const trendRows = costTrendData.map((r) => [r.date, r.price, Number(r.variance.toFixed(2))])
+      const carryingRows = (carryingCost?.items || []).map((item) => [item.sku, item.material_name, item.inventory_value, item.carrying_cost, item.shrinkage_cost, item.true_unit_cost])
+      const serveRows = (costToServe?.items || []).map((item) => [item.transaction_number, item.sku, item.picking_cost, item.packing_cost, item.admin_cost, item.total_cost, item.order_margin, item.is_profitable ? "OK" : "LOSS"])
+      await downloadXlsx("cost-analysis.xlsx", [
+        { name: "Cost Details", header: ["Material", "SKU", "Stock Qty", "Turnover", "Stock Value"], rows: detailRows },
+        { name: "Cost Trend", header: ["Date", "Price", "Variance %"], rows: trendRows },
+        { name: "Carrying Cost", header: ["SKU", "Material", "Value", "Carrying", "Shrinkage", "True Unit Cost"], rows: carryingRows },
+        { name: "Cost-to-Serve", header: ["Tx#", "SKU", "Pick", "Pack", "Admin", "Total", "Margin", "Status"], rows: serveRows },
+      ])
+    } finally {
+      setExporting(false)
+    }
   }
 
   if (isLoading) return <LoadingState text="Loading cost analysis..." />
@@ -160,7 +171,7 @@ export default function CostAnalysisPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-2">
         <h1 className="text-3xl font-bold">Cost Analysis</h1>
-        <Button variant="outline" onClick={exportCsv}><FileDown className="h-4 w-4" /> Export CSV</Button>
+        <Button variant="outline" onClick={exportXlsx} disabled={exporting}><FileDown className="h-4 w-4" /> {exporting ? "Exporting..." : "Export XLSX"}</Button>
       </div>
 
       <div className="grid gap-4 md:grid-cols-3">

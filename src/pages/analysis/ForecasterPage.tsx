@@ -10,6 +10,7 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 import { Package, Download, Save, RefreshCw, Database, TrendingUp, TrendingDown, Minus, BarChart3 } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 import { toast } from "../../hooks/use-toast"
+import { downloadXlsx } from "../../lib/export-xlsx"
 
 type ModelKey = "SMA3" | "SMA6" | "SMA12" | "WMA" | "SES" | "Holt" | "HoltWinters" | "LinReg"
 
@@ -135,6 +136,7 @@ export default function ForecasterPage() {
   const [beta, setBeta] = useState(0.1)
   const [gamma, setGamma] = useState(0.1)
   const [cacheStatus, setCacheStatus] = useState<string>("")
+  const [exporting, setExporting] = useState(false)
 
   const selected = useMemo(() => {
     if (!items || !selectedId) return null
@@ -210,19 +212,23 @@ export default function ForecasterPage() {
     return result
   }, [history, models, horizon])
 
-  const exportCsv = useCallback(() => {
-    if (!models) return
-    const rows = [["Model", "Forecast", "MAPE (%)", "MAE", "RMSE"]]
-    for (const m of models as ModelResult[]) rows.push([MODEL_LABELS[m.key], m.forecast.toFixed(2), m.mape.toFixed(2), m.mae.toFixed(2), m.rmse.toFixed(2)])
-    const csv = rows.map((r) => r.join(",")).join("\n")
-    const blob = new Blob([csv], { type: "text/csv" })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement("a")
-    a.href = url
-    a.download = `forecast_${selected?.material_name?.replace(/\s+/g, "_") || "data"}.csv`
-    a.click()
-    URL.revokeObjectURL(url)
-  }, [models, selected])
+  const exportXlsx = useCallback(async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const modelRows = (models as ModelResult[] | null)?.map((m) => [MODEL_LABELS[m.key], Number(m.forecast.toFixed(2)), Number(m.mape.toFixed(2)), Number(m.mae.toFixed(2)), Number(m.rmse.toFixed(2)), m.key === bestModel ? "Best" : ""]) || []
+      const persisted = forecastDetails?.items || []
+      const persistedRows = persisted.map((item) => [
+        item.material_name, item.sku, Number(item.forecast_1mo.toFixed(1)), Number(item.forecast_3mo.toFixed(1)), Number(item.forecast_6mo.toFixed(1)), Number(item.mape.toFixed(1)), item.trend, item.is_seasonal ? "Yes" : "No",
+      ])
+      await downloadXlsx(`forecaster-${selected?.material_name?.replace(/\s+/g, "_") || "all"}.xlsx`, [
+        { name: "Model Accuracy", header: ["Model", "Forecast", "MAPE (%)", "MAE", "RMSE", "Rating"], rows: modelRows },
+        { name: "Persisted Forecast", header: ["Material", "SKU", "Forecast 1mo", "Forecast 3mo", "Forecast 6mo", "MAPE %", "Trend", "Seasonal"], rows: persistedRows },
+      ])
+    } finally {
+      setExporting(false)
+    }
+  }, [models, selected, bestModel, forecastDetails, exporting])
 
   if (isLoading) return <LoadingState text="Loading..." />
   if (isError) return <ErrorState message={error?.message} onRetry={refetch} />
@@ -284,7 +290,12 @@ export default function ForecasterPage() {
       {/* Persisted forecast details table */}
       {forecastDetails && forecastDetails.items.length > 0 && (
         <Card>
-          <CardHeader><CardTitle>Persisted Forecast (Server-Generated)</CardTitle></CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle>Persisted Forecast (Server-Generated)</CardTitle>
+          <Button size="sm" variant="outline" onClick={exportXlsx} disabled={exporting}>
+            <Download className="mr-1 h-4 w-4" /> {exporting ? "Exporting..." : "Export XLSX"}
+          </Button>
+        </CardHeader>
           <CardContent>
             <Table>
               <TableHeader>
@@ -388,7 +399,7 @@ export default function ForecasterPage() {
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle>Forecast Comparison — {selected.material_name}</CardTitle>
-              <Button size="sm" onClick={exportCsv}><Download className="mr-1 h-4 w-4" />Export CSV</Button>
+              <Button size="sm" onClick={exportXlsx} disabled={!models || exporting}><Download className="mr-1 h-4 w-4" />{exporting ? "Exporting..." : "Export XLSX"}</Button>
             </CardHeader>
             <CardContent>
               <ResponsiveContainer width="100%" height={400}>

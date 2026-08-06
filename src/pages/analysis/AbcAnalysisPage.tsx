@@ -11,9 +11,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { formatCurrency } from "../../lib/utils"
 import { toast } from "../../hooks/use-toast"
 import { Treemap, PieChart, Pie, Cell, Tooltip, ResponsiveContainer, Legend } from "recharts"
-import { Search, Layers, PieChart as PieIcon, Sliders, RefreshCw } from "lucide-react"
+import { Search, Layers, PieChart as PieIcon, Sliders, RefreshCw, FileDown } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 import type { AbcClassifiedItem } from "../../api"
+import { downloadXlsx } from "../../lib/export-xlsx"
 
 const PIE_COLORS = ["#ef4444", "#eab308", "#22c55e"]
 const XYZ_COLORS: Record<string, string> = { X: "#22c55e", Y: "#eab308", Z: "#ef4444" }
@@ -120,6 +121,26 @@ export default function AbcAnalysisPage() {
 
   const totalXyz = allClassified.length
 
+  const [exporting, setExporting] = useState(false)
+
+  const exportXlsx = async () => {
+    if (exporting) return
+    setExporting(true)
+    try {
+      const sheets = (["A", "B", "C"] as const).map((cls) => {
+        const items = cls === "A" ? classAItems : cls === "B" ? classBItems : classCItems
+        const rows = filterItems(items).map((i) => {
+          const pct = grandTotal > 0 ? ((i.inventory_value / grandTotal) * 100).toFixed(1) : "0"
+          return [i.sku, i.material_name, Number(i.current_qty.toFixed(0)), i.inventory_value, `${pct}%`, `Class ${i.abc_class}`, `${i.xyz_class} (${i.composite_score.toFixed(3)})`]
+        })
+        return { name: `Class ${cls}`, header: ["SKU", "Name", "Stock", "Value", "% of Total", "Class", "XYZ"], rows }
+      })
+      await downloadXlsx("abc-analysis.xlsx", sheets)
+    } finally {
+      setExporting(false)
+    }
+  }
+
   if (isLoading) return <LoadingState text="Loading..." />
   if (isError) return <ErrorState message={error?.message} onRetry={refetch} />
   return (
@@ -158,6 +179,9 @@ export default function AbcAnalysisPage() {
           >
             <PieIcon className="mr-1 h-4 w-4" />
             {showPie ? "Pie" : "Tree"}
+          </Button>
+          <Button size="sm" variant="outline" onClick={exportXlsx} disabled={exporting}>
+            <FileDown className="mr-1 h-4 w-4" /> {exporting ? "Exporting..." : "Export XLSX"}
           </Button>
           <div className="relative w-56">
             <Search className="absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
