@@ -183,7 +183,7 @@ jobs:
           }
           $listener | ForEach-Object { Write-Host "MCP bridge listening on port $($_.LocalPort) (pid $($_.OwningProcess), addr $($_.LocalAddress))" }
           $targetAddr = if ($listener[0].LocalAddress -in @("::", "0.0.0.0")) { "127.0.0.1" } else { $listener[0].LocalAddress }
-          node -e "const net=require('net'); const s=net.connect(9223,'$targetAddr',()=>{console.log('TCP handshake OK at $targetAddr'); s.destroy();}); s.on('error',e=>{console.log('TCP handshake FAIL at $targetAddr: '+e.message);}); setTimeout(()=>{},3000);"
+          node -e "const net=require('net'); const s=net.connect(9223,'$targetAddr',()=>{console.log('TCP handshake OK at $targetAddr'); s.destroy();}); s.on('error',e=>{console.log('TCP handshake FAIL at ${targetAddr}: '+e.message);}); setTimeout(()=>{},3000);"
 
       - name: Run E2E tests
         working-directory: tests
