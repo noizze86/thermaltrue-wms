@@ -15,6 +15,7 @@
     "process:default",
     "barcode-scanner:default",
     "log:default",
+    "mcp-bridge:default",
     {
       "identifier": "http:default",
       "allow": [
