@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react"
+import { useState, useEffect, useRef, useCallback } from "react"
 import { getMaterials, generateQrCode, getCompanyProfile, generateQrZip } from "../../api"
 import { zipDataUrl } from "../../lib/binary"
 import { useQuery } from "@tanstack/react-query"
@@ -17,6 +17,7 @@ export default function QrGeneratorPage() {
   const [customData, setCustomData] = useState("")
   const [qrUrl, setQrUrl] = useState<string | null>(null)
   const [scannerActive, setScannerActive] = useState(false)
+  const [scannerStarting, setScannerStarting] = useState(false)
   const [scannedData, setScannedData] = useState("")
   const [materialSearch, setMaterialSearch] = useState("")
   const [selectedIds, setSelectedIds] = useState<string[]>([])
@@ -28,9 +29,8 @@ export default function QrGeneratorPage() {
   const [generatedQrs, setGeneratedQrs] = useState<{ materialId: string; sku: string; name: string; url: string }[]>([])
   const [thermalLayout, setThermalLayout] = useState(false)
   const [zipLoading, setZipLoading] = useState(false)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const scanIntervalRef = useRef<number | null>(null)
+  const videoRef = useRef<HTMLDivElement>(null)
+  const scannerRef = useRef<any>(null)
 
   const { data: materials, isLoading, isError, error, refetch } = useQuery({ queryKey: ["materials"], queryFn: () => getMaterials() })
 
@@ -61,34 +61,55 @@ export default function QrGeneratorPage() {
     )
   }
 
-  const startScanner = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } })
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        streamRef.current = stream
-        setScannerActive(true)
+  const stopScanner = useCallback(async () => {
+    if (scannerRef.current) {
+      try {
+        await scannerRef.current.stop()
+        scannerRef.current.clear()
+      } catch {
+        // ignore stop errors
       }
-    } catch {
-      toast({ title: "Camera Error", description: "Could not access camera", variant: "destructive" })
-    }
-  }
-
-  const stopScanner = () => {
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach((t) => t.stop())
-      streamRef.current = null
-    }
-    if (scanIntervalRef.current) {
-      clearInterval(scanIntervalRef.current)
-      scanIntervalRef.current = null
+      scannerRef.current = null
     }
     setScannerActive(false)
-  }
+    setScannerStarting(false)
+  }, [])
+
+  const startScanner = useCallback(async () => {
+    if (scannerStarting || scannerActive) return
+    setScannerStarting(true)
+    try {
+      const { Html5Qrcode } = await import("html5-qrcode")
+      if (!videoRef.current) { setScannerStarting(false); return }
+      videoRef.current.innerHTML = ""
+      const scanner = new Html5Qrcode("qr-scanner-container")
+      scannerRef.current = scanner
+      await scanner.start(
+        { facingMode: "environment" },
+        { fps: 10, qrbox: { width: 250, height: 250 } },
+        (decodedText: string) => {
+          setScannedData(decodedText)
+          setSelectedId("")
+          toast({ title: "Scanned", description: decodedText })
+          stopScanner()
+        },
+        () => {
+          // ignore scan failures (continuous scanning)
+        },
+      )
+      setScannerStarting(false)
+      setScannerActive(true)
+    } catch (e) {
+      console.error("QR Scanner error:", e)
+      setScannerStarting(false)
+      setScannerActive(false)
+      toast({ title: "Camera Error", description: "Could not access camera. Please check permissions.", variant: "destructive" })
+    }
+  }, [scannerStarting, scannerActive, stopScanner])
 
   useEffect(() => {
     return () => { stopScanner() }
-  }, [])
+  }, [stopScanner])
 
   useEffect(() => {
     if (showLogo && !companyLogo) {
@@ -277,23 +298,22 @@ export default function QrGeneratorPage() {
             <CardTitle className="flex items-center justify-between">
               <span>Scanner</span>
               {!scannerActive ? (
-                <Button size="sm" onClick={startScanner}><Camera className="h-4 w-4" /> Start</Button>
+                <Button size="sm" onClick={startScanner} disabled={scannerStarting}><Camera className="h-4 w-4" /> {scannerStarting ? "Starting..." : "Start"}</Button>
               ) : (
                 <Button size="sm" variant="destructive" onClick={stopScanner}><CameraOff className="h-4 w-4" /> Stop</Button>
               )}
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {scannerActive ? (
+            {scannerActive || scannerStarting ? (
               <div className="space-y-3">
-                <video ref={videoRef} autoPlay playsInline className="w-full rounded-lg bg-black" />
+                <div ref={videoRef} id="qr-scanner-container" className="w-full rounded-lg overflow-hidden bg-black" />
                 <p className="text-sm text-muted-foreground text-center">
                   <Scan className="h-4 w-4 inline mr-1" />
                   Point camera at a QR code
                 </p>
                 <p className="text-xs text-muted-foreground text-center">
-                  For actual QR scanning, use a dedicated scanner library like <code>html5-qrcode</code> or <code>zxing</code>.
-                  The scanned text can be pasted below.
+                  Scan result will be filled automatically below and used for Generate QR.
                 </p>
               </div>
             ) : (
