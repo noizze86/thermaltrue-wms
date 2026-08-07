@@ -1,12 +1,13 @@
 import { useState, useEffect, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
-import { getTransactions, getAnalysisAll, getSupplierPrices, getSuppliers, getMaterialSummary, getMaterialDetails } from "../../api"
+import { getTransactions, getAnalysisAll, getSupplierPrices, getSuppliers, getMaterialSummary, getMaterialDetails, getMaterials } from "../../api"
 import { Input } from "../../components/ui/input"
 import { Button } from "../../components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
 import { Badge } from "../../components/ui/badge"
 import { Select } from "../../components/ui/select"
+import { formatCurrency } from "../../lib/utils"
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, BarChart, Bar,
 } from "recharts"
@@ -35,6 +36,7 @@ export default function MaterialAnalysisPage() {
   })
   const { data: matSummary } = useQuery({ queryKey: ["matSummary"], queryFn: () => getMaterialSummary() })
   const { data: matDetails } = useQuery({ queryKey: ["matDetails"], queryFn: () => getMaterialDetails() })
+  const { data: materials } = useQuery({ queryKey: ["materials"], queryFn: () => getMaterials() })
   // Purchase prices for price trend overlay
   const { data: supplierPrices } = useQuery({
     queryKey: ["supplierPricesMaterial", selectedMaterialId],
@@ -111,6 +113,12 @@ export default function MaterialAnalysisPage() {
   const deadStock = filtered.filter((i) => i.days_since_last > 90)
   const slowMoving = filtered.filter((i) => i.days_since_last > 30 && i.days_since_last <= 90)
 
+  const deadStockValue = (matDetails || []).filter((d) => d.is_dead_stock).reduce((s, d) => s + (d.inventory_value || 0), 0)
+  const slowMovingValue = (matDetails || []).filter((d) => d.is_slow_moving).reduce((s, d) => s + (d.inventory_value || 0), 0)
+  const today = new Date().toISOString().slice(0, 10)
+  const expired = (materials || []).filter((m) => m.expiry_date && m.expiry_date <= today && m.quantity > 0)
+  const expiredValue = expired.reduce((s, m) => s + (m.quantity || 0) * (m.price || 0), 0)
+
   const turnoverChartData = [...filtered]
     .sort((a, b) => {
       const itrA = a.quantity > 0 ? a.consumption_12mo / a.quantity : 0
@@ -158,12 +166,13 @@ export default function MaterialAnalysisPage() {
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Material Analysis</h1>
 
-      <div className="grid gap-6 md:grid-cols-5">
+      <div className="grid gap-6 md:grid-cols-3 lg:grid-cols-6">
         <Card className="border-red-200">
           <CardHeader><CardTitle className="text-red-600 dark:text-red-400 text-xs">Dead Stock</CardTitle></CardHeader>
           <CardContent>
             <div className="text-2xl font-bold text-red-600 dark:text-red-400">{matSummary?.dead_stock_count ?? deadStock.length}</div>
             <p className="text-[10px] text-muted-foreground">no outbound &gt;90 days</p>
+            <p className="text-sm font-semibold text-red-600 dark:text-red-400">{formatCurrency(deadStockValue)}</p>
           </CardContent>
         </Card>
         <Card className="border-yellow-200">
@@ -171,6 +180,15 @@ export default function MaterialAnalysisPage() {
           <CardContent>
             <div className="text-2xl font-bold text-yellow-600 dark:text-yellow-400">{matSummary?.slow_moving_count ?? slowMoving.length}</div>
             <p className="text-[10px] text-muted-foreground">30-90 days idle</p>
+            <p className="text-sm font-semibold text-yellow-600 dark:text-yellow-400">{formatCurrency(slowMovingValue)}</p>
+          </CardContent>
+        </Card>
+        <Card className="border-purple-200">
+          <CardHeader><CardTitle className="text-purple-600 dark:text-purple-400 text-xs">Expired</CardTitle></CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold text-purple-600 dark:text-purple-400">{expired.length}</div>
+            <p className="text-[10px] text-muted-foreground">expiry date passed</p>
+            <p className="text-sm font-semibold text-purple-600 dark:text-purple-400">{formatCurrency(expiredValue)}</p>
           </CardContent>
         </Card>
         <Card className="border-gray-200 dark:border-gray-700">
