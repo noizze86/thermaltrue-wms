@@ -96,6 +96,7 @@ export default function StockPage() {
   const [errors, setErrors] = useState<Partial<Record<string, string>>>({})
   const [selected, setSelected] = useState<Set<string>>(new Set())
   const [riwayatMaterial, setRiwayatMaterial] = useState<Material | null>(null)
+  const [detailMaterial, setDetailMaterial] = useState<Material | null>(null)
   const [viewMode, setViewMode] = useState<"table" | "gallery">("table")
   const [lightboxImg, setLightboxImg] = useState("")
   const [bulkEditOpen, setBulkEditOpen] = useState(false)
@@ -435,7 +436,16 @@ export default function StockPage() {
     { key: "image", label: "Photo", render: (m) =>
       m.image ? <img src={m.image} alt="" className="h-10 w-10 object-cover rounded cursor-pointer" onClick={() => setLightboxImg(m.image)} /> : <div className="h-10 w-10 rounded bg-muted flex items-center justify-center"><Image className="h-4 w-4 text-muted-foreground" /></div>
     },
-    { key: "sku", label: "SKU", sortable: true, render: (m) => <span className="font-mono">{m.sku}</span> },
+    { key: "sku", label: "SKU", sortable: true, render: (m) => (
+      <button
+        type="button"
+        className="font-mono underline-offset-4 hover:underline cursor-pointer text-left"
+        onClick={() => setDetailMaterial(m)}
+        title="Click to view description"
+      >
+        {m.sku}
+      </button>
+    ) },
     { key: "barcode", label: "Barcode", render: (m) => <BarcodeCell sku={m.sku} /> },
     { key: "name", label: "Name", sortable: true, render: (m) => <span className="font-medium">{m.name}</span> },
     { key: "category_name", label: "Category", render: (m) => m.category_name || "-" },
@@ -592,7 +602,14 @@ export default function StockPage() {
                       </div>
                       <div className="p-2 space-y-1">
                         <p className="font-medium text-sm truncate">{m.name}</p>
-                        <p className="text-xs text-muted-foreground font-mono">{m.sku}</p>
+                        <button
+                          type="button"
+                          className="text-xs text-muted-foreground font-mono underline-offset-4 hover:underline cursor-pointer text-left block truncate max-w-full"
+                          onClick={() => setDetailMaterial(m)}
+                          title="Click to view description"
+                        >
+                          {m.sku}
+                        </button>
                         <div className="flex items-center justify-between">
                           <Badge variant={m.quantity <= m.min_stock ? "destructive" : "default"} className="text-xs">{m.quantity}</Badge>
                           <span className="text-xs text-muted-foreground">{formatCurrency(m.price)}</span>
@@ -958,6 +975,53 @@ export default function StockPage() {
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>QR Code</DialogTitle></DialogHeader>
           {qrData && <img src={qrData} alt="QR Code" className="mx-auto" />}
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!detailMaterial} onOpenChange={() => setDetailMaterial(null)}>
+        <DialogContent className="max-w-lg">
+          {detailMaterial && (
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-3">
+                  {detailMaterial.image ? (
+                    <img src={detailMaterial.image} alt={detailMaterial.name} className="h-12 w-12 object-cover rounded" />
+                  ) : (
+                    <div className="h-12 w-12 rounded bg-muted flex items-center justify-center">
+                      <Image className="h-5 w-5 text-muted-foreground" />
+                    </div>
+                  )}
+                  <div>
+                    <div className="font-mono text-sm text-muted-foreground">{detailMaterial.sku}</div>
+                    <div>{detailMaterial.name}</div>
+                  </div>
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <div>
+                  <p className="text-sm font-medium mb-1">Description</p>
+                  <p className="text-sm text-muted-foreground whitespace-pre-wrap">{detailMaterial.description || "No description available"}</p>
+                </div>
+                <div className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm">
+                  <div><span className="text-muted-foreground">SKU:</span> <span className="font-mono">{detailMaterial.sku}</span></div>
+                  <div><span className="text-muted-foreground">Category:</span> {detailMaterial.category_name || "-"}</div>
+                  <div><span className="text-muted-foreground">Unit:</span> {detailMaterial.unit_name || "-"}</div>
+                  <div><span className="text-muted-foreground">Supplier:</span> {detailMaterial.supplier_name || "-"}</div>
+                  <div><span className="text-muted-foreground">Warehouse:</span> {detailMaterial.warehouse_name || "-"}</div>
+                  <div><span className="text-muted-foreground">Rack:</span> {racks?.find((r) => r.id === detailMaterial.rack_id)?.rack_name || "-"}</div>
+                  <div><span className="text-muted-foreground">Quantity:</span> <span className="font-semibold">{detailMaterial.quantity}</span></div>
+                  <div><span className="text-muted-foreground">Min / Max:</span> {detailMaterial.min_stock} / {detailMaterial.max_stock}</div>
+                  <div><span className="text-muted-foreground">Price:</span> {formatCurrency(detailMaterial.price)}</div>
+                  <div><span className="text-muted-foreground">Expiry:</span> {detailMaterial.expiry_date || "-"}</div>
+                  <div><span className="text-muted-foreground">Status:</span>
+                    <Badge variant={detailMaterial.is_active ? "default" : "outline"} className="ml-1">
+                      {detailMaterial.is_active ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
+                </div>
+              </div>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
