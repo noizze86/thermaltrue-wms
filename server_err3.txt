@@ -1,0 +1,8 @@
+[2026-07-27T02:47:51.383Z INFO  server] Connecting to database...
+[2026-07-27T02:47:51.479Z INFO  sqlx::postgres::notice] relation "_sqlx_migrations" already exists, skipping
+[2026-07-27T02:47:51.588Z INFO  server] ┌─────────────────────────────────────┐
+[2026-07-27T02:47:51.589Z INFO  server] │ Thermaltrue WMS API Server          │
+[2026-07-27T02:47:51.590Z INFO  server] │ Mode:    PRODUCTION                  
+[2026-07-27T02:47:51.591Z INFO  server] │ Bind:    0.0.0.0:3000                
+[2026-07-27T02:47:51.593Z INFO  server] │ Access:  http://192.168.10.151:3000                 
+[2026-07-27T02:47:51.593Z INFO  server] └─────────────────────────────────────┘

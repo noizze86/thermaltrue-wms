@@ -705,19 +705,6 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let _ = dotenvy::dotenv();
-    // MCP_E2E (CI): WebView2/GPU headless crash guard. GitHub Actions windows
-    // runners have no GPU; without software rendering the page may crash and
-    // silently kill the process right after the MCP bridge comes up. Setting
-    // this BEFORE the WebView2 environment is created avoids the crash.
-    if std::env::var("MCP_E2E").is_ok() {
-        if std::env::var_os("WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS").is_none() {
-            std::env::set_var(
-                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
-                "--disable-gpu --no-sandbox --disable-features=RendererCodeIntegrity",
-            );
-            startup_log("MCP_E2E mode: WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS set (disable-gpu/no-sandbox/no-code-integrity)");
-        }
-    }
     startup_log("=== THERMALTRUE APP STARTING ===");
     startup_log(&format!("Args: {:?}", std::env::args().collect::<Vec<_>>()));
     startup_log(&format!("Current dir: {:?}", std::env::current_dir()));

@@ -1,0 +1,16 @@
+[2026-07-26T10:42:24.291Z INFO  server] Connecting to database...
+[2026-07-26T10:42:24.331Z DEBUG sqlx_postgres::options::pgpass] `.pgpass` file not found path=C:\Users\Nana Rusdiana\AppData\Roaming\postgres\pgpass.conf
+[2026-07-26T10:42:24.418Z DEBUG sqlx::query] summary="SELECT current_database()" db.statement="" rows_affected=1 rows_returned=1 elapsed=1.1852ms elapsed_secs=0.0011852
+[2026-07-26T10:42:24.449Z DEBUG sqlx::query] summary="SELECT pg_advisory_lock($1)" db.statement="" rows_affected=1 rows_returned=1 elapsed=700.2µs elapsed_secs=0.0007002
+[2026-07-26T10:42:24.474Z INFO  sqlx::postgres::notice] relation "_sqlx_migrations" already exists, skipping
+[2026-07-26T10:42:24.499Z DEBUG sqlx::query] summary="CREATE TABLE IF NOT …" db.statement="\n\n\nCREATE TABLE IF NOT EXISTS _sqlx_migrations (\n    version BIGINT PRIMARY KEY,\n    description TEXT NOT NULL,\n    installed_on TIMESTAMPTZ NOT NULL DEFAULT now(),\n    success BOOLEAN NOT NULL,\n    checksum BYTEA NOT NULL,\n    execution_time BIGINT NOT NULL\n);\n                \n" rows_affected=0 rows_returned=0 elapsed=25.5072ms elapsed_secs=0.0255072
+[2026-07-26T10:42:24.502Z DEBUG sqlx::query] summary="SELECT version FROM _sqlx_migrations …" db.statement="\n\nSELECT version FROM _sqlx_migrations WHERE success = false ORDER BY version LIMIT 1\n" rows_affected=0 rows_returned=0 elapsed=2.3983ms elapsed_secs=0.0023983
+[2026-07-26T10:42:24.504Z DEBUG sqlx::query] summary="SELECT version, checksum FROM …" db.statement="\n\nSELECT version, checksum FROM _sqlx_migrations ORDER BY version\n" rows_affected=18 rows_returned=18 elapsed=752.6µs elapsed_secs=0.0007526
+[2026-07-26T10:42:24.505Z DEBUG sqlx::query] summary="SELECT current_database()" db.statement="" rows_affected=1 rows_returned=1 elapsed=310.8µs elapsed_secs=0.0003108
+[2026-07-26T10:42:24.507Z DEBUG sqlx::query] summary="SELECT pg_advisory_unlock($1)" db.statement="" rows_affected=1 rows_returned=1 elapsed=574.3µs elapsed_secs=0.0005743
+[2026-07-26T10:42:24.567Z DEBUG sqlx::query] summary="SELECT COUNT(*) FROM users" db.statement="" rows_affected=1 rows_returned=1 elapsed=3.2872ms elapsed_secs=0.0032872
+[2026-07-26T10:42:24.575Z INFO  server] ┌─────────────────────────────────────┐
+[2026-07-26T10:42:24.576Z INFO  server] │ Thermaltrue WMS API Server          │
+[2026-07-26T10:42:24.577Z INFO  server] │ Mode:    DEVELOPMENT                 
+[2026-07-26T10:42:24.577Z INFO  server] │ Bind:    127.0.0.1:3001              
+[2026-07-26T10:42:24.579Z INFO  server] └─────────────────────────────────────┘

@@ -33,7 +33,13 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Install system dependencies
-        run: choco install -y mingw
+        run: |
+          choco install -y mingw
+          $wv = Get-ItemProperty 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}' -ErrorAction SilentlyContinue
+          Write-Host "WebView2 Runtime version on runner: $($wv.pv)"
+          $msedge = Get-ChildItem 'C:\Program Files (x86)\Microsoft\EdgeWebView\Application' -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Name
+          Write-Host "WebView2 Application dirs: $($msedge -join ',')"
+          try { Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version | Format-List | Out-String | Write-Host } catch {}
 
       - name: Cache Rust dependencies
         uses: actions/cache@v4
@@ -145,7 +151,6 @@ jobs:
         shell: pwsh
         env:
           MCP_E2E: "true"
-          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--disable-gpu --no-sandbox --disable-features=RendererCodeIntegrity"
         run: |
           $ErrorActionPreference = "Stop"
           $app = Join-Path $env:GITHUB_WORKSPACE "target\debug\app.exe"
@@ -199,6 +204,41 @@ jobs:
           $wsFile = Join-Path $logDir "wshandshake.cjs"
           Set-Content -Path $wsFile -Value $wsScript
           node $wsFile "$wsPath" "$targetAddr"
+          # Watchdog: pantau process app selama 45 dtk. Kalau mati diam-diam
+          # (crash native WebView2 tanpa log Rust), tangkap momen + bukti Windows
+          # Event Log (Application Error / WER) sebelum step berakhir.
+          $diedAt = $null
+          for ($i = 0; $i -lt 45; $i++) {
+            Start-Sleep -Seconds 1
+            $alive = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
+            if (-not $alive) { $diedAt = $i + 1; break }
+            if ($i -in @(5, 10, 20, 30, 40)) { Write-Host "watchdog: app alive at t+${i}s (pid $($p.Id))" }
+          }
+          if ($diedAt) {
+            Write-Host "!! APP DIED at t+${diedAt}s after bridge handshake (silent, no Rust log expected)"
+            Write-Host "=== app.err.log tail ==="
+            Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
+            Write-Host "=== app.out.log tail ==="
+            Get-Content (Join-Path $logDir "app.out.log") -Tail 40 -ErrorAction SilentlyContinue
+            Write-Host "=== Windows Application Error events (last 10 min) ==="
+            try {
+              Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-10) } -ErrorAction Stop |
+                Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting|Application Hang|.NET Runtime' } |
+                Select-Object -First 8 |
+                ForEach-Object {
+                  Write-Host ("--- " + $_.TimeCreated.ToString('HH:mm:ss') + " [" + $_.ProviderName + "] Id=" + $_.Id)
+                  Write-Host $_.Message
+                }
+            } catch { Write-Host "no app event log entries (or access denied): $($_.Exception.Message)" }
+            Write-Host "=== WER ReportArchive (crash dumps) ==="
+            Get-ChildItem "$env:ProgramData\Microsoft\Windows\WER\ReportArchive" -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match 'app|WebView' } |
+              Select-Object -First 5 -ExpandProperty FullName | ForEach-Object { Write-Host $_ }
+            Write-Host "=== msedgewebview2.exe processes (children) ==="
+            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Select-Object Id, StartTime | Format-Table | Out-String | Write-Host
+            throw "Tauri app died silently at t+${diedAt}s after bridge handshake"
+          }
+          Write-Host "watchdog: app survived 45s watchdog (PID $($p.Id))"
 
       - name: Verify app & bridge alive before tests
         shell: pwsh

@@ -1,0 +1,2 @@
+Set UAC = CreateObject("Shell.Application")
+UAC.ShellExecute "powershell.exe", "-NoProfile -ExecutionPolicy Bypass -Command ""Copy-Item -LiteralPath 'C:\test wms\thermaltrue\target\release\server.exe' -Destination 'C:\Program Files\Thermaltrue\server.exe' -Force; Remove-Item 'C:\Program Files\Thermaltrue\dist' -Recurse -Force -ErrorAction SilentlyContinue; Copy-Item -LiteralPath 'C:\test wms\thermaltrue\dist' -Destination 'C:\Program Files\Thermaltrue\dist' -Recurse -Force; sc.exe start ThermaltrueServer""", "", "runas", 1
