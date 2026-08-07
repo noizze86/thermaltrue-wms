@@ -1,9 +1,9 @@
 name: Tauri MCP E2E Tests
 on:
   push:
-    branches: [main, develop]
+    branches: [master, main, develop]
   pull_request:
-    branches: [main]
+    branches: [master, main]
   workflow_dispatch:
 
 permissions:
@@ -145,6 +145,7 @@ jobs:
         shell: pwsh
         env:
           MCP_E2E: "true"
+          WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS: "--disable-gpu --no-sandbox --disable-features=RendererCodeIntegrity"
         run: |
           $ErrorActionPreference = "Stop"
           $app = Join-Path $env:GITHUB_WORKSPACE "target\debug\app.exe"
@@ -158,7 +159,7 @@ jobs:
           $logDir = Join-Path $env:GITHUB_WORKSPACE "tests\results"
           New-Item -ItemType Directory -Path $logDir -Force | Out-Null
           $p = Start-Process -FilePath $app -RedirectStandardOutput (Join-Path $logDir "app.out.log") -RedirectStandardError (Join-Path $logDir "app.err.log") -WindowStyle Hidden -PassThru
-          Start-Sleep -Seconds 10
+          Start-Sleep -Seconds 12
           $alive = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
           if (-not $alive) {
             Write-Host "=== app.err.log tail (app exited) ==="
@@ -183,7 +184,21 @@ jobs:
           }
           $listener | ForEach-Object { Write-Host "MCP bridge listening on port $($_.LocalPort) (pid $($_.OwningProcess), addr $($_.LocalAddress))" }
           $targetAddr = if ($listener[0].LocalAddress -in @("::", "0.0.0.0")) { "127.0.0.1" } else { $listener[0].LocalAddress }
-          node -e "const net=require('net'); const s=net.connect(9223,'$targetAddr',()=>{console.log('TCP handshake OK at $targetAddr'); s.destroy();}); s.on('error',e=>{console.log('TCP handshake FAIL at ${targetAddr}: '+e.message);}); setTimeout(()=>{},3000);"
+          # Real WebSocket handshake using the SAME 'ws' library the MCP client uses
+          # (TCP-connect is NOT enough: the bridge accepts async WS upgrades via tokio-tungstenite)
+          $wsPath = Join-Path $env:GITHUB_WORKSPACE "tests\node_modules\ws"
+          if (-not (Test-Path $wsPath)) { throw "ws library not found at $wsPath (run npm ci in tests/)"; }
+          $wsScript = @'
+          const WebSocket = require(process.argv[2]);
+          const host = process.argv[3] || '127.0.0.1';
+          const ws = new WebSocket('ws://' + host + ':9223');
+          const t = setTimeout(() => { console.log('WS handshake TIMEOUT at ' + host); process.exit(2); }, 8000);
+          ws.on('open', () => { console.log('WS handshake OK at ' + ws.url); clearTimeout(t); ws.close(); process.exit(0); });
+          ws.on('error', (e) => { clearTimeout(t); console.log('WS handshake FAIL: ' + e.message); process.exit(1); });
+          '@
+          $wsFile = Join-Path $logDir "wshandshake.cjs"
+          Set-Content -Path $wsFile -Value $wsScript
+          node $wsFile "$wsPath" "$targetAddr"
 
       - name: Verify app & bridge alive before tests
         shell: pwsh
@@ -204,7 +219,18 @@ jobs:
             Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
             throw "bridge port 9223 not listening before E2E"
           }
-          Write-Host "app alive (PID $($app.Id -join ',')), bridge 9223 listening"
+          $wsPath = Join-Path $env:GITHUB_WORKSPACE "tests\node_modules\ws"
+          $wsScript = @'
+          const WebSocket = require(process.argv[2]);
+          const ws = new WebSocket('ws://127.0.0.1:9223');
+          const t = setTimeout(() => { console.log('WS recheck TIMEOUT'); process.exit(2); }, 8000);
+          ws.on('open', () => { console.log('WS recheck OK at ' + ws.url); clearTimeout(t); ws.close(); process.exit(0); });
+          ws.on('error', (e) => { clearTimeout(t); console.log('WS recheck FAIL: ' + e.message); process.exit(1); });
+          '@
+          $wsFile = Join-Path $logDir "wsrecheck.cjs"
+          Set-Content -Path $wsFile -Value $wsScript
+          node $wsFile "$wsPath"
+          Write-Host "app alive (PID $($app.Id -join ',')), bridge 9223 listening + WS handshake OK"
 
       - name: Run E2E tests
         working-directory: tests
