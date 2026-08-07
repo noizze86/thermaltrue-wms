@@ -332,7 +332,8 @@ async fn security_headers(request: Request, next: Next) -> Response {
     if std::env::var("TLS_CERT_PATH").is_ok() {
         headers.insert("Strict-Transport-Security", "max-age=31536000; includeSubDomains".parse().unwrap());
     }
-    let csp = if cfg!(debug_assertions) {
+    let mcp_e2e = std::env::var("MCP_E2E").is_ok();
+    let csp = if cfg!(debug_assertions) || mcp_e2e {
         "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' http://localhost:*;"
     } else {
         "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self';"
