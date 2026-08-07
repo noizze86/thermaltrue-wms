@@ -121,7 +121,7 @@ jobs:
           }
           Write-Host "PostgreSQL ready (embedded)"
 
-      - name: Build and start backend server
+      - name: Build backend server
         shell: pwsh
         env:
           RUSTFLAGS: ""
@@ -129,10 +129,26 @@ jobs:
           $ErrorActionPreference = "Stop"
           cargo build --release -p server
           if ($LASTEXITCODE -ne 0) { throw "server build failed" }
-          $env:PORT = "3000"
-          $env:DATABASE_URL = "postgresql://postgres:postgres@127.0.0.1:5432/thermaltrue?sslmode=disable"
-          $env:DEFAULT_ADMIN_PASSWORD = "admin123"
-          Start-Process -FilePath (Join-Path $env:GITHUB_WORKSPACE "target\release\server.exe") -ArgumentList "run" -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput (Join-Path $env:TEMP "server.out.log") -RedirectStandardError (Join-Path $env:TEMP "server.err.log") -WindowStyle Hidden
+
+      - name: Start Tauri app + backend + verify + run E2E (single step)
+        shell: pwsh
+        env:
+          MCP_E2E: "true"
+          PORT: "3000"
+          DATABASE_URL: ${{ env.DATABASE_URL }}
+          DEFAULT_ADMIN_PASSWORD: admin123
+          TAURI_APP_PATH: ${{ env.TAURI_APP_PATH }}
+          MCP_BRIDGE_PORT: "9223"
+        timeout-minutes: 30
+        run: |
+          $ErrorActionPreference = "Stop"
+          $logDir = Join-Path $env:GITHUB_WORKSPACE "tests\results"
+          New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+
+          # 1) Start backend server (release) di port 3000
+          $server = Join-Path $env:GITHUB_WORKSPACE "target\release\server.exe"
+          if (-not (Test-Path $server)) { throw "server.exe not found at $server" }
+          $srv = Start-Process -FilePath $server -ArgumentList "run" -WorkingDirectory $env:GITHUB_WORKSPACE -RedirectStandardOutput (Join-Path $logDir "server.out.log") -RedirectStandardError (Join-Path $logDir "server.err.log") -WindowStyle Hidden -PassThru
           $ok = $false
           for ($i = 0; $i -lt 90; $i++) {
             Start-Sleep -Seconds 2
@@ -140,29 +156,24 @@ jobs:
               $r = Invoke-RestMethod -Uri "http://127.0.0.1:3000/api/health/db" -TimeoutSec 3
               if ($r.status -eq "ok") { $ok = $true; break }
             } catch {}
+            if ($srv.HasExited) {
+              Get-Content (Join-Path $logDir "server.err.log") -Tail 40 -ErrorAction SilentlyContinue
+              throw "Backend server exited early (code $($srv.ExitCode))"
+            }
           }
           if (-not $ok) {
-            Get-Content (Join-Path $env:TEMP "server.err.log") -Tail 30 -ErrorAction SilentlyContinue
+            Get-Content (Join-Path $logDir "server.err.log") -Tail 40 -ErrorAction SilentlyContinue
             throw "Backend server did not become healthy on port 3000"
           }
-          Write-Host "Backend server healthy on port 3000"
+          Write-Host "Backend server healthy on port 3000 (pid $($srv.Id))"
 
-      - name: Start Tauri app
-        shell: pwsh
-        env:
-          MCP_E2E: "true"
-        run: |
-          $ErrorActionPreference = "Stop"
+          # 2) Copy release server.exe next to debug app.exe (ensure_server_running)
           $app = Join-Path $env:GITHUB_WORKSPACE "target\debug\app.exe"
           if (-not (Test-Path $app)) { throw "app.exe not found at $app" }
-          $relServer = Join-Path $env:GITHUB_WORKSPACE "target\release\server.exe"
           $dbgServer = Join-Path $env:GITHUB_WORKSPACE "target\debug\server.exe"
-          if ((Test-Path $relServer) -and (-not (Test-Path $dbgServer))) {
-            Copy-Item $relServer $dbgServer -Force
-            Write-Host "copied release server.exe next to app.exe (for ensure_server_running)"
-          }
-          $logDir = Join-Path $env:GITHUB_WORKSPACE "tests\results"
-          New-Item -ItemType Directory -Path $logDir -Force | Out-Null
+          Copy-Item $server $dbgServer -Force
+
+          # 3) Start Tauri app (debug)
           $p = Start-Process -FilePath $app -RedirectStandardOutput (Join-Path $logDir "app.out.log") -RedirectStandardError (Join-Path $logDir "app.err.log") -WindowStyle Hidden -PassThru
           Start-Sleep -Seconds 12
           $alive = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
@@ -174,6 +185,8 @@ jobs:
             throw "Tauri app exited early (code $($p.ExitCode)) before MCP bridge could start"
           }
           Write-Host "Tauri app alive (PID $($p.Id))"
+
+          # 4) Wait bridge port 9223 + real WS handshake
           $listener = $null
           for ($i = 0; $i -lt 20; $i++) {
             $listener = Get-NetTCPConnection -State Listen -ErrorAction SilentlyContinue | Where-Object { $_.LocalPort -ge 9223 -and $_.LocalPort -le 9422 }
@@ -189,8 +202,6 @@ jobs:
           }
           $listener | ForEach-Object { Write-Host "MCP bridge listening on port $($_.LocalPort) (pid $($_.OwningProcess), addr $($_.LocalAddress))" }
           $targetAddr = if ($listener[0].LocalAddress -in @("::", "0.0.0.0")) { "127.0.0.1" } else { $listener[0].LocalAddress }
-          # Real WebSocket handshake using the SAME 'ws' library the MCP client uses
-          # (TCP-connect is NOT enough: the bridge accepts async WS upgrades via tokio-tungstenite)
           $wsPath = Join-Path $env:GITHUB_WORKSPACE "tests\node_modules\ws"
           if (-not (Test-Path $wsPath)) { throw "ws library not found at $wsPath (run npm ci in tests/)"; }
           $wsScript = @'
@@ -204,82 +215,30 @@ jobs:
           $wsFile = Join-Path $logDir "wshandshake.cjs"
           Set-Content -Path $wsFile -Value $wsScript
           node $wsFile "$wsPath" "$targetAddr"
-          # Watchdog: pantau process app selama 45 dtk. Kalau mati diam-diam
-          # (crash native WebView2 tanpa log Rust), tangkap momen + bukti Windows
-          # Event Log (Application Error / WER) sebelum step berakhir.
-          $diedAt = $null
-          for ($i = 0; $i -lt 45; $i++) {
-            Start-Sleep -Seconds 1
-            $alive = Get-Process -Id $p.Id -ErrorAction SilentlyContinue
-            if (-not $alive) { $diedAt = $i + 1; break }
-            if ($i -in @(5, 10, 20, 30, 40)) { Write-Host "watchdog: app alive at t+${i}s (pid $($p.Id))" }
-          }
-          if ($diedAt) {
-            Write-Host "!! APP DIED at t+${diedAt}s after bridge handshake (silent, no Rust log expected)"
+
+          # 5) Quick health pre-check (app masih hidup + bridge masih listen)
+          if (-not (Get-Process -Id $p.Id -ErrorAction SilentlyContinue)) {
             Write-Host "=== app.err.log tail ==="
             Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
             Write-Host "=== app.out.log tail ==="
             Get-Content (Join-Path $logDir "app.out.log") -Tail 40 -ErrorAction SilentlyContinue
-            Write-Host "=== Windows Application Error events (last 10 min) ==="
-            try {
-              Get-WinEvent -FilterHashtable @{ LogName = 'Application'; StartTime = (Get-Date).AddMinutes(-10) } -ErrorAction Stop |
-                Where-Object { $_.ProviderName -match 'Application Error|Windows Error Reporting|Application Hang|.NET Runtime' } |
-                Select-Object -First 8 |
-                ForEach-Object {
-                  Write-Host ("--- " + $_.TimeCreated.ToString('HH:mm:ss') + " [" + $_.ProviderName + "] Id=" + $_.Id)
-                  Write-Host $_.Message
-                }
-            } catch { Write-Host "no app event log entries (or access denied): $($_.Exception.Message)" }
-            Write-Host "=== WER ReportArchive (crash dumps) ==="
-            Get-ChildItem "$env:ProgramData\Microsoft\Windows\WER\ReportArchive" -Directory -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -match 'app|WebView' } |
-              Select-Object -First 5 -ExpandProperty FullName | ForEach-Object { Write-Host $_ }
-            Write-Host "=== msedgewebview2.exe processes (children) ==="
-            Get-Process msedgewebview2 -ErrorAction SilentlyContinue | Select-Object Id, StartTime | Format-Table | Out-String | Write-Host
-            throw "Tauri app died silently at t+${diedAt}s after bridge handshake"
+            throw "app.exe died right after WS handshake"
           }
-          Write-Host "watchdog: app survived 45s watchdog (PID $($p.Id))"
+          Write-Host "pre-test check: app alive (PID $($p.Id)) + bridge 9223 + WS handshake OK"
 
-      - name: Verify app & bridge alive before tests
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = "Stop"
-          $logDir = Join-Path $env:GITHUB_WORKSPACE "tests\results"
-          $app = Get-Process -Name app -ErrorAction SilentlyContinue
-          if (-not $app) {
-            Write-Host "=== app.err.log tail ==="
-            Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
-            Write-Host "=== app.out.log tail ==="
-            Get-Content (Join-Path $logDir "app.out.log") -Tail 40 -ErrorAction SilentlyContinue
-            throw "app.exe not alive before E2E (died after start step)"
+          # 6) Run E2E tests (di step yang sama, tanpa batas step antar-process)
+          Push-Location (Join-Path $env:GITHUB_WORKSPACE "tests")
+          try {
+            npm run test:all
+            if ($LASTEXITCODE -ne 0) { throw "E2E tests failed (exit $LASTEXITCODE)" }
+          } finally {
+            Pop-Location
           }
-          $listener = Get-NetTCPConnection -State Listen -LocalPort 9223 -ErrorAction SilentlyContinue
-          if (-not $listener) {
-            Write-Host "=== app.err.log tail ==="
-            Get-Content (Join-Path $logDir "app.err.log") -Tail 60 -ErrorAction SilentlyContinue
-            throw "bridge port 9223 not listening before E2E"
-          }
-          $wsPath = Join-Path $env:GITHUB_WORKSPACE "tests\node_modules\ws"
-          $wsScript = @'
-          const WebSocket = require(process.argv[2]);
-          const ws = new WebSocket('ws://127.0.0.1:9223');
-          const t = setTimeout(() => { console.log('WS recheck TIMEOUT'); process.exit(2); }, 8000);
-          ws.on('open', () => { console.log('WS recheck OK at ' + ws.url); clearTimeout(t); ws.close(); process.exit(0); });
-          ws.on('error', (e) => { clearTimeout(t); console.log('WS recheck FAIL: ' + e.message); process.exit(1); });
-          '@
-          $wsFile = Join-Path $logDir "wsrecheck.cjs"
-          Set-Content -Path $wsFile -Value $wsScript
-          node $wsFile "$wsPath"
-          Write-Host "app alive (PID $($app.Id -join ',')), bridge 9223 listening + WS handshake OK"
+          Write-Host "E2E tests PASSED"
 
-      - name: Run E2E tests
-        working-directory: tests
-        run: npm run test:all
-        timeout-minutes: 30
-        env:
-          DATABASE_URL: ${{ env.DATABASE_URL }}
-          TAURI_APP_PATH: ${{ env.TAURI_APP_PATH }}
-          MCP_BRIDGE_PORT: "9223"
+          # 7) Cleanup
+          if (Get-Process -Id $p.Id -ErrorAction SilentlyContinue) { Stop-Process -Id $p.Id -Force }
+          if (Get-Process -Id $srv.Id -ErrorAction SilentlyContinue) { Stop-Process -Id $srv.Id -Force }
 
       - name: Upload test reports
         if: always()
