@@ -231,12 +231,16 @@ export class TauriMcpClient {
       target.dispatchEvent(new Event('change', { bubbles: true }));
       return { ok: true };
     })()`;
-    const result = await this.callTool("webview_execute_js", { script });
-    const out = this.textOf(result);
-    if (!/"ok"\s*:\s*true/.test(out)) {
-      const dom = await this.inspectDom();
-      throw new Error(`fillField("${label}") failed: ${out}. DOM snippet: ${dom.slice(0, 1500)}`);
+    let lastOut = "";
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const result = await this.callTool("webview_execute_js", { script });
+      const out = this.textOf(result);
+      lastOut = out;
+      if (/"ok"\s*:\s*true/.test(out)) return;
+      await this.sleep(1500);
     }
+    const dom = await this.inspectDom();
+    throw new Error(`fillField("${label}") failed: ${lastOut}. DOM snippet: ${dom.slice(0, 1500)}`);
   }
 
   async type(text: string): Promise<void> {

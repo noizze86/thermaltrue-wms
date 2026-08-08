@@ -57,7 +57,7 @@ async function testMasterData() {
     await client.waitForDomTextOrThrow("Add Category", 20000);
 
     await client.clickElement("Add Category");
-    await client.sleep(1500);
+    await client.sleep(2500);
     await client.fillField("Name", testData.category.name);
     await client.fillField("Description", testData.category.description);
     await client.clickElement("Create");
