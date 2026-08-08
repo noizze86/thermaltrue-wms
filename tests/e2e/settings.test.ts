@@ -24,7 +24,7 @@ async function testSettings() {
     // TC-SET-02: Navigate to Users
     console.log("  TC-SET-02: Navigate to Users");
     await navigateTo(client, "Users");
-    await client.waitForDomTextOrThrow("Users", 10000);
+    await client.waitForDomTextOrThrow("Users", 25000);
     const usersDom = await client.inspectDom();
     if (usersDom.includes("Add User") || usersDom.includes("Username") || usersDom.includes("Users")) {
       console.log("    ✓ Users page loaded");

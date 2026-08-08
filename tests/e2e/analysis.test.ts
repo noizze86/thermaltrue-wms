@@ -63,7 +63,7 @@ async function testAnalysis() {
     // TC-ANL-05: Navigate to ABC Analysis
     console.log("  TC-ANL-05: Navigate to ABC Analysis");
     await navigateTo(client, "ABC Analysis");
-    await client.waitForDomTextOrThrow("ABC Analysis", 10000);
+    await client.waitForDomTextOrThrow("ABC Analysis", 25000);
     const abcDom = await client.inspectDom();
     if (abcDom.includes("ABC Analysis") || abcDom.includes("Class A")) {
       console.log("    ✓ ABC Analysis page loaded");

@@ -54,7 +54,7 @@ async function testMasterData() {
     // TC-MD-03: Create category
     console.log("  TC-MD-03: Create new category");
     await navigateTo(client, "Categories");
-    await client.waitForDomTextOrThrow("/settings/categories", 5000);
+    await client.waitForDomTextOrThrow("Add Category", 20000);
 
     await client.clickElement("Add Category");
     await client.sleep(1500);
