@@ -1,9 +1,10 @@
 use std::sync::Arc;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::collections::HashMap;
 use std::time::Instant;
 use std::sync::RwLock;
-use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::{Request, State}, response::{IntoResponse, Response}, body::Body, http::{Method, StatusCode, Uri, header::{AUTHORIZATION, COOKIE}}};
+use std::net::SocketAddr;
+use axum::{Router, routing::{get, post, put, delete}, middleware, Json, middleware::Next, extract::{Request, State, ConnectInfo}, response::{IntoResponse, Response}, body::Body, http::{Method, StatusCode, Uri, header::{AUTHORIZATION, COOKIE}}};
 
 use tower_http::cors::CorsLayer;
 use tokio::fs as async_fs;
@@ -344,28 +345,48 @@ async fn security_headers(request: Request, next: Next) -> Response {
 
 async fn spa_handler(uri: Uri) -> Response<Body> {
     let dist = frontend_dist_dir();
+    let dist_path = PathBuf::from(&dist);
     let path = uri.path().trim_start_matches('/');
-    let file_path = Path::new(&dist).join(path);
+
+    // Path traversal protection: reject ".." segments (raw or percent-encoded),
+    // backslashes, and double slashes before touching the filesystem.
+    if !path.is_empty()
+        && (path.split('/').any(|seg| seg == "..")
+            || path.to_ascii_lowercase().contains("%2e%2e")
+            || path.contains('\\'))
+    {
+        log::warn!("spa_handler: rejected suspicious path: {}", uri.path());
+        return (StatusCode::NOT_FOUND, "Not found").into_response();
+    }
 
     // Serve actual file if it exists (JS, CSS, images, etc.)
-    if !path.is_empty() && file_path.is_file() {
-        match async_fs::read(&file_path).await {
-            Ok(content) => {
-                let cache = if path.contains("index.html") || path.is_empty() {
-                    "no-cache"
-                } else {
-                    "public, max-age=31536000, immutable"
-                };
-                return match Response::builder()
-                    .header("Content-Type", mime_type(&file_path))
-                    .header("Cache-Control", cache)
-                    .body(Body::from(content))
-                {
-                    Ok(res) => res,
-                    Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Response build error: {}", e)).into_response(),
-                };
+    if !path.is_empty() {
+        let file_path = dist_path.join(path);
+        // Verify the resolved path stays inside dist/ (symlink-safe via canonicalize).
+        let safe = std::fs::canonicalize(&dist_path)
+            .ok()
+            .and_then(|d| std::fs::canonicalize(&file_path).ok().map(|c| (d, c)))
+            .map(|(d, c)| c.starts_with(&d))
+            .unwrap_or(false);
+        if safe && file_path.is_file() {
+            match async_fs::read(&file_path).await {
+                Ok(content) => {
+                    let cache = if path.contains("index.html") || path.is_empty() {
+                        "no-cache"
+                    } else {
+                        "public, max-age=31536000, immutable"
+                    };
+                    return match Response::builder()
+                        .header("Content-Type", mime_type(&file_path))
+                        .header("Cache-Control", cache)
+                        .body(Body::from(content))
+                    {
+                        Ok(res) => res,
+                        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("Response build error: {}", e)).into_response(),
+                    };
+                }
+                Err(_) => { /* fall through to index.html */ }
             }
-            Err(_) => { /* fall through to index.html */ }
         }
     }
 
@@ -454,10 +475,16 @@ async fn auth_middleware(
         return next.run(req).await;
     }
 
-    // CSRF protection: validate Origin (or Referer fallback) against CORS_ORIGIN for mutating requests
+    // CSRF protection: validate Origin (or Referer fallback) against the Host
+    // header (same-origin) or the configured CORS_ORIGIN for mutating requests.
+    // Enforced for every browser-like request regardless of CORS_ORIGIN value —
+    // browsers always send Origin on cross-origin state-changing requests, so
+    // allowing nothing through here is the safe default. Non-browser clients
+    // (Tauri IPC, scripts) are authenticated via the Authorization header and
+    // are not CSRF targets.
     let allowed = std::env::var("CORS_ORIGIN").unwrap_or_default();
     let allowed = allowed.trim();
-    if !allowed.is_empty() && allowed != "*" && matches!(req.method(), &Method::POST | &Method::PUT | &Method::DELETE | &Method::PATCH) {
+    if matches!(req.method(), &Method::POST | &Method::PUT | &Method::DELETE | &Method::PATCH) {
         let request_origin = req.headers().get("Origin").and_then(|v| v.to_str().ok())
             .or_else(|| req.headers().get("Referer").and_then(|v| v.to_str().ok())
                 .and_then(|r| r.find("://").map(|s| {
@@ -467,7 +494,7 @@ async fn auth_middleware(
                 })));
         if let Some(origin) = request_origin {
             let host = req.headers().get("Host").and_then(|v| v.to_str().ok());
-            let matches_cors = origin == allowed;
+            let matches_cors = !allowed.is_empty() && allowed != "*" && origin == allowed;
             let matches_host = host.map_or(false, |h| {
                 origin == format!("http://{}", h) || origin == format!("https://{}", h)
             });
@@ -513,19 +540,15 @@ async fn auth_middleware(
 }
 
 /// General rate limiter: 120 requests/min per IP, skips non-API paths
-async fn rate_limiter(request: Request, next: Next) -> Response {
+async fn rate_limiter(ConnectInfo(addr): ConnectInfo<SocketAddr>, request: Request, next: Next) -> Response {
     let path = request.uri().path();
     if request.method() == Method::OPTIONS || !path.starts_with("/api/") || path == "/api/health" || path == "/api/health/db" || path == "/api/login" {
         return next.run(request).await;
     }
-    let ip = request.headers().get("X-Forwarded-For").and_then(|v| v.to_str().ok())
-        .or_else(|| request.headers().get("X-Real-IP").and_then(|v| v.to_str().ok()))
-        .or_else(|| {
-            request.headers().get("X-Forwarded-For").and_then(|v| v.to_str().ok())
-                .and_then(|v| v.split(',').next().map(|s| s.trim()))
-        })
-        .unwrap_or("unknown")
-        .to_string();
+    // Key on the real socket peer IP. X-Forwarded-For is NOT trusted because
+    // the server binds directly to the network without a reverse proxy, so it
+    // would trivially bypass the limiter.
+    let ip = addr.ip().to_string();
     let now = Instant::now();
     let blocked = {
         if let Ok(mut guard) = RATE_LIMITER.write() {

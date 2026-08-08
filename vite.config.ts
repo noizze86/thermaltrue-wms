@@ -32,7 +32,7 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     setupFiles: ["./src/setupTests.ts"],
-    exclude: ["node_modules", "tests", "backend"],
+    exclude: ["node_modules", "tests", "backend", ".opencode", "dist", "dist-client-stub"],
   },
   server: {
     port: 5174,

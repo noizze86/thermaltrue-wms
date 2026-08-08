@@ -360,8 +360,10 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             }
             // Tunggu server sehat (periksa URL target), lalu pastikan window ada di URL server
             // (auto-recover jika load awal gagal karena server belum aktif)
-            // Mode MCP_E2E: lewati seluruh blok ini (health check block_on dapat membuat
-            // app berhenti lanjut di CI; webview tetap memuat URL config secara default).
+            // Mode MCP_E2E: lewati health-wait (block_on dapat membuat app berhenti
+            // lanjut di CI), lalu arahkan window ke halaman app (custom protocol)
+            // agar window.__TAURI__ ter-inject dan bridge mcp-bridge dapat
+            // mengirim hasil script melalui IPC (remote URLs TIDAK di-inject).
             if std::env::var("MCP_E2E").is_ok() {
                 startup_log("ensure_server_running: MCP_E2E mode, melewati health-wait & window navigation");
             } else {
@@ -404,7 +406,17 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             }
             let e2e_mode = std::env::var("MCP_E2E").is_ok();
             if e2e_mode {
-                startup_log("ensure_server_running: MCP_E2E mode, melewati manipulasi window di setup");
+                // Navigasi ke halaman app (tauri://localhost) TANPA health-wait.
+                // Remote URLs tidak mendapat injeksi window.__TAURI__, sehingga
+                // plugin mcp-bridge tidak bisa mengirim script_result via IPC.
+                if let Some(window) = app.get_webview_window("main") {
+                    if let Ok(u) = tauri::Url::parse("tauri://localhost/index.html") {
+                        startup_log("ensure_server_running: navigasi window ke halaman app (tauri://localhost/index.html)");
+                        let _ = window.navigate(u);
+                    } else {
+                        startup_log("ensure_server_running: MCP_E2E mode, melewati manipulasi window di setup");
+                    }
+                }
             } else if let Some(window) = app.get_webview_window("main") {
                 let current = window.url().map(|u| u.to_string()).unwrap_or_default();
                 if healthy {

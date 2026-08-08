@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, lazy, Suspense } from "react"
-import { HashRouter, Routes, Route, Navigate } from "react-router-dom"
+import { HashRouter, Routes, Route, Navigate, useLocation } from "react-router-dom"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { AuthProvider, useAuth } from "./contexts/AuthContext"
 import { ErrorBoundary } from "./components/ErrorBoundary"
@@ -174,68 +174,77 @@ export default function App() {
       <ServerCheck>
         <AuthProvider>
           <HashRouter>
-            <ErrorBoundary>
-            <Suspense fallback={<div className="flex h-screen items-center justify-center text-sm text-muted-foreground">Loading&hellip;</div>}>
-            <Routes>
-              <Route path="/login" element={<LoginPage />} />
-              <Route
-                path="/"
-                element={
-                  <ProtectedRoute>
-                    <DashboardLayout />
-                  </ProtectedRoute>
-                }
-              >
-                <Route index element={<Navigate to="/dashboard" replace />} />
-                <Route path="dashboard" element={<DashboardPage />} />
-                <Route path="materials/master-data" element={<MasterDataPage />} />
-                <Route path="materials/stock" element={<StockPage />} />
-                <Route path="materials/qr-generator" element={<QrGeneratorPage />} />
-                <Route path="materials/labels" element={<LabelPrintPage />} />
-                <Route path="transactions/in" element={<TransactionInPage />} />
-                <Route path="transactions/out" element={<TransactionOutPage />} />
-                <Route path="transactions/history" element={<TransactionHistoryPage />} />
-                <Route path="transactions/:id" element={<TransactionDetailPage />} />
-                <Route path="analysis/dashboard" element={<AnalysisDashboardPage />} />
-                <Route path="analysis/material" element={<MaterialAnalysisPage />} />
-                <Route path="analysis/consumption" element={<ConsumptionPage />} />
-                <Route path="analysis/cost" element={<CostAnalysisPage />} />
-                <Route path="analysis/abc" element={<AbcAnalysisPage />} />
-                <Route path="analysis/forecaster" element={<ForecasterPage />} />
-                <Route path="warehouse/dashboard" element={<WarehouseDashboardPage />} />
-                <Route path="warehouse/list" element={<WarehouseListPage />} />
-                <Route path="warehouse/racks" element={<RackPage />} />
-                <Route path="warehouse/transfer" element={<TransferPage />} />
-                <Route path="warehouse/opname" element={<StockOpnamePage />} />
-                <Route path="reports/summary" element={<ReportSummaryPage />} />
-                <Route path="reports/stock" element={<StockReportPage />} />
-                <Route path="reports/transactions" element={<TransactionReportPage />} />
-                <Route path="reports/opname" element={<OpnameReportPage />} />
-                <Route path="reports/multi-warehouse" element={<MultiWarehouseComparisonPage />} />
-                <Route path="reports/pivot" element={<PivotReportPage />} />
-                <Route path="reports/variance/:opnameId" element={<VarianceRootCausePage />} />
-                <Route path="settings/profile" element={<ProfilePage />} />
-                <Route path="settings/system" element={<SystemPage />} />
-                <Route path="settings/users" element={<UsersPage />} />
-                <Route path="settings/categories" element={<CategoriesPage />} />
-                <Route path="settings/units" element={<UnitsPage />} />
-                <Route path="settings/suppliers" element={<SuppliersPage />} />
-                <Route path="settings/audit-log" element={<AuditLogPage />} />
-                <Route path="settings/roles" element={<RolesPage />} />
-                <Route path="settings/label-templates" element={<LabelTemplatesPage />} />
-                <Route path="settings/email" element={<EmailSettingsPage />} />
-                <Route path="settings/inventory" element={<InventorySettingsPage />} />
-                <Route path="settings/api" element={<ApiSettingsPage />} />
-                <Route path="settings/network-test" element={<NetworkTestPage />} />
-                <Route path="settings/update-test" element={<UpdateTestPage />} />
-              </Route>
-            </Routes>
-            </Suspense>
-            <Toaster />
-            </ErrorBoundary>
+            <AppRoutes />
           </HashRouter>
         </AuthProvider>
       </ServerCheck>
     </QueryClientProvider>
+  )
+}
+
+function AppRoutes() {
+  const location = useLocation()
+  return (
+    // key=pathname: error boundary reset when navigating to a different page,
+    // so a crashed page never blocks the rest of the app.
+    <ErrorBoundary key={location.pathname}>
+      <Suspense fallback={<div className="flex h-screen items-center justify-center text-sm text-muted-foreground">Loading&hellip;</div>}>
+        <Routes>
+          <Route path="/login" element={<LoginPage />} />
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <DashboardLayout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<Navigate to="/dashboard" replace />} />
+            <Route path="dashboard" element={<DashboardPage />} />
+            <Route path="materials/master-data" element={<MasterDataPage />} />
+            <Route path="materials/stock" element={<StockPage />} />
+            <Route path="materials/qr-generator" element={<QrGeneratorPage />} />
+            <Route path="materials/labels" element={<LabelPrintPage />} />
+            <Route path="transactions/in" element={<TransactionInPage />} />
+            <Route path="transactions/out" element={<TransactionOutPage />} />
+            <Route path="transactions/history" element={<TransactionHistoryPage />} />
+            <Route path="transactions/:id" element={<TransactionDetailPage />} />
+            <Route path="analysis/dashboard" element={<AnalysisDashboardPage />} />
+            <Route path="analysis/material" element={<MaterialAnalysisPage />} />
+            <Route path="analysis/consumption" element={<ConsumptionPage />} />
+            <Route path="analysis/cost" element={<CostAnalysisPage />} />
+            <Route path="analysis/abc" element={<AbcAnalysisPage />} />
+            <Route path="analysis/forecaster" element={<ForecasterPage />} />
+            <Route path="warehouse/dashboard" element={<WarehouseDashboardPage />} />
+            <Route path="warehouse/list" element={<WarehouseListPage />} />
+            <Route path="warehouse/racks" element={<RackPage />} />
+            <Route path="warehouse/transfer" element={<TransferPage />} />
+            <Route path="warehouse/opname" element={<StockOpnamePage />} />
+            <Route path="reports/summary" element={<ReportSummaryPage />} />
+            <Route path="reports/stock" element={<StockReportPage />} />
+            <Route path="reports/transactions" element={<TransactionReportPage />} />
+            <Route path="reports/opname" element={<OpnameReportPage />} />
+            <Route path="reports/multi-warehouse" element={<MultiWarehouseComparisonPage />} />
+            <Route path="reports/pivot" element={<PivotReportPage />} />
+            <Route path="reports/variance/:opnameId" element={<VarianceRootCausePage />} />
+            <Route path="settings/profile" element={<ProfilePage />} />
+            <Route path="settings/system" element={<SystemPage />} />
+            <Route path="settings/users" element={<UsersPage />} />
+            <Route path="settings/categories" element={<CategoriesPage />} />
+            <Route path="settings/units" element={<UnitsPage />} />
+            <Route path="settings/suppliers" element={<SuppliersPage />} />
+            <Route path="settings/audit-log" element={<AuditLogPage />} />
+            <Route path="settings/roles" element={<RolesPage />} />
+            <Route path="settings/label-templates" element={<LabelTemplatesPage />} />
+            <Route path="settings/email" element={<EmailSettingsPage />} />
+            <Route path="settings/inventory" element={<InventorySettingsPage />} />
+            <Route path="settings/api" element={<ApiSettingsPage />} />
+            <Route path="settings/network-test" element={<NetworkTestPage />} />
+            <Route path="settings/update-test" element={<UpdateTestPage />} />
+          </Route>
+        </Routes>
+      </Suspense>
+      <Toaster />
+    </ErrorBoundary>
   )
 }

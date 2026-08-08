@@ -57,6 +57,12 @@ jobs:
       - name: Build frontend
         run: npm run build
 
+      - name: Lint (oxlint)
+        run: npm run lint
+
+      - name: Unit tests (vitest)
+        run: npm run test
+
       - name: Build Tauri app (debug, no bundle)
         run: npx tauri build --debug --no-bundle
         env:
@@ -129,6 +135,17 @@ jobs:
           $ErrorActionPreference = "Stop"
           cargo build --release -p server
           if ($LASTEXITCODE -ne 0) { throw "server build failed" }
+
+      - name: Rust tests (backend + server)
+        shell: pwsh
+        env:
+          RUSTFLAGS: ""
+        run: |
+          $ErrorActionPreference = "Stop"
+          cargo test -p backend --lib
+          if ($LASTEXITCODE -ne 0) { throw "backend tests failed" }
+          cargo test -p server
+          if ($LASTEXITCODE -ne 0) { throw "server tests failed" }
 
       - name: Start Tauri app + backend + verify + run E2E (single step)
         shell: pwsh

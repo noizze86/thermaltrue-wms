@@ -44,7 +44,7 @@ describe("LoginPage", () => {
     renderLogin();
 
     await user.type(screen.getByLabelText("Username"), "admin");
-    await user.type(screen.getByLabelText("Password"), "wrong");
+    await user.type(screen.getByLabelText("Password"), "wrongpass");
     await user.click(screen.getByText("Sign In"));
 
     expect(await screen.findByText("Invalid credentials")).toBeInTheDocument();

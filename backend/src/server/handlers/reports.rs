@@ -124,25 +124,25 @@ pub async fn export_pdf(
         match q.report_type.as_str() {
             "materials" => {
                 cl.use_text("SKU | Name | Category | Qty | Price | Min",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
-                for (sk,nm,ct,qt,pr,mn) in &mat_data { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}|{}",sk,nm,ct,qt,pr,mn),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
+                for (sk,nm,ct,qt,pr,mn) in &mat_data { if y<20.0{cl.use_text("..data terpotong (terlalu banyak baris untuk 1 halaman)",8.0,Mm(20.0),Mm(15.0),&fr); log::warn!("report truncated: {}", q.report_type); break;} cl.use_text(&format!("{}|{}|{}|{}|{}|{}",sk,nm,ct,qt,pr,mn),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
             }
             "stock" => {
                 cl.use_text("SKU | Name | Warehouse | Qty | Min",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
-                for (sk,nm,wh,qt,mn) in &stk_data { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}",sk,nm,wh,qt,mn),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
+                for (sk,nm,wh,qt,mn) in &stk_data { if y<20.0{cl.use_text("..data terpotong (terlalu banyak baris untuk 1 halaman)",8.0,Mm(20.0),Mm(15.0),&fr); log::warn!("report truncated: {}", q.report_type); break;} cl.use_text(&format!("{}|{}|{}|{}|{}",sk,nm,wh,qt,mn),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
             }
             "opname" => {
                 cl.use_text("Material | System | Physical | Diff | Notes",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
-                for (mt,sy,ph,df,no) in &opn_data { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}",mt,sy,ph,df,no),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
+                for (mt,sy,ph,df,no) in &opn_data { if y<20.0{cl.use_text("..data terpotong (terlalu banyak baris untuk 1 halaman)",8.0,Mm(20.0),Mm(15.0),&fr); log::warn!("report truncated: {}", q.report_type); break;} cl.use_text(&format!("{}|{}|{}|{}|{}",mt,sy,ph,df,no),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
                 y=40.0; cl.use_text("Supervisor: _______________",10.0,Mm(20.0),Mm(y),&fr);
                 cl.use_text("Mengetahui: _______________",10.0,Mm(120.0),Mm(y),&fr);
             }
             "transactions" => {
                 cl.use_text("Number | Type | Material | Qty | Ref | Status | Date",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
-                for (nu,tp,mt,qt,rf,st,dt) in &tx_data { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}|{}|{}",nu,tp,mt,qt,rf,st,dt),7.0,Mm(20.0),Mm(y),&fr); y-=4.5; }
+                for (nu,tp,mt,qt,rf,st,dt) in &tx_data { if y<20.0{cl.use_text("..data terpotong (terlalu banyak baris untuk 1 halaman)",8.0,Mm(20.0),Mm(15.0),&fr); log::warn!("report truncated: {}", q.report_type); break;} cl.use_text(&format!("{}|{}|{}|{}|{}|{}|{}",nu,tp,mt,qt,rf,st,dt),7.0,Mm(20.0),Mm(y),&fr); y-=4.5; }
             }
             "audit_log_filtered" => {
                 cl.use_text("Time | User | Action | Entity | Details",8.0,Mm(20.0),Mm(y),&fb); y-=6.0;
-                for (id,un,ac,en,de,dt) in &aud_data { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}|{}",dt,un,ac,en,de.replace('\n'," "),id),6.0,Mm(20.0),Mm(y),&fr); y-=4.0; }
+                for (id,un,ac,en,de,dt) in &aud_data { if y<20.0{cl.use_text("..data terpotong (terlalu banyak baris untuk 1 halaman)",8.0,Mm(20.0),Mm(15.0),&fr); log::warn!("report truncated: {}", q.report_type); break;} cl.use_text(&format!("{}|{}|{}|{}|{}|{}",dt,un,ac,en,de.replace('\n'," "),id),6.0,Mm(20.0),Mm(y),&fr); y-=4.0; }
             }
             _ => {}
         }
@@ -468,7 +468,7 @@ pub async fn generate_receipt_pdf(
         if !ti.is_empty(){cl.use_text(&format!("Invoice: {}",ti),10.0,Mm(20.0),Mm(y),&fr);y-=6.0;} y-=3.0;
         cl.use_text(&"\u{2500}".repeat(100),9.0,Mm(20.0),Mm(y),&fm); y-=8.0;
         cl.use_text("SKU | Material | Batch | Qty | Subtotal",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
-        for (_,sk,ba,qt,pr) in &items { if y<25.0{break;} let sub=if *qt>0.0{format!("{}",*qt**pr)}else{"-".into()}; cl.use_text(&format!("{}|{}|{}|{}|{}",sk,"",ba,qt,sub),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
+        for (_,sk,ba,qt,pr) in &items { if y<25.0{cl.use_text("..data terpotong (terlalu banyak baris untuk 1 halaman)",8.0,Mm(20.0),Mm(15.0),&fr); log::warn!("receipt pdf truncated"); break;} let sub=if *qt>0.0{format!("{}",*qt**pr)}else{"-".into()}; cl.use_text(&format!("{}|{}|{}|{}|{}",sk,"",ba,qt,sub),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
         cl.use_text(&format!("Page 1 | {} - Receipt",co),7.0,Mm(20.0),Mm(10.0),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
     }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
@@ -499,7 +499,7 @@ pub async fn generate_picking_list_pdf(
         cl.use_text(&format!("Reference: {}",tr),10.0,Mm(20.0),Mm(y),&fr); y-=6.0;
         cl.use_text(&format!("Date: {}",td),10.0,Mm(20.0),Mm(y),&fr); y-=10.0;
         cl.use_text("Rack | Area | SKU | Material | Qty",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
-        for (rk,ar,sk,qt,nm) in &items { if y<20.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}",rk,ar,sk,nm,qt),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
+        for (rk,ar,sk,qt,nm) in &items { if y<20.0{cl.use_text("..data terpotong (terlalu banyak baris untuk 1 halaman)",8.0,Mm(20.0),Mm(15.0),&fr); log::warn!("picking list truncated"); break;} cl.use_text(&format!("{}|{}|{}|{}|{}",rk,ar,sk,nm,qt),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
         cl.use_text(&format!("Page 1 | {} - Picking List",co),7.0,Mm(20.0),Mm(10.0),&fr);
         Ok(base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &doc.save_to_bytes().map_err(|e|e.to_string())?))
     }).await.map_err(|e| crate::server::server_error(e))?.map_err(|e| crate::server::server_error(e))?;
@@ -540,7 +540,7 @@ pub async fn generate_do_pdf(
         if !dno.is_empty(){cl.use_text(&format!("Notes: {}",dno),10.0,Mm(20.0),Mm(y),&fr);y-=6.0;} y-=3.0;
         cl.use_text(&"\u{2500}".repeat(100),9.0,Mm(20.0),Mm(y),&fm); y-=8.0;
         cl.use_text("No | SKU | Description | Qty | Unit",9.0,Mm(20.0),Mm(y),&fb); y-=6.0;
-        for (i,(sk,nm,qt,un)) in items.iter().enumerate() { if y<35.0{break;} cl.use_text(&format!("{}|{}|{}|{}|{}",i+1,sk,nm,qt,un),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
+        for (i,(sk,nm,qt,un)) in items.iter().enumerate() { if y<35.0{cl.use_text("..data terpotong (terlalu banyak baris untuk 1 halaman)",8.0,Mm(20.0),Mm(15.0),&fr); log::warn!("delivery order truncated"); break;} cl.use_text(&format!("{}|{}|{}|{}|{}",i+1,sk,nm,qt,un),8.0,Mm(20.0),Mm(y),&fr); y-=5.0; }
         y=30.0;     cl.use_text("Dikirim oleh: _______________",10.0,Mm(20.0),Mm(y),&fr);
         cl.use_text("Diterima oleh: _______________",10.0,Mm(120.0),Mm(y),&fr); y-=12.0;
         cl.use_text(&format!("Page 1 | {} - Delivery Order",co),7.0,Mm(20.0),Mm(y),&fr);

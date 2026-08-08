@@ -115,15 +115,18 @@ pub struct SaveEmailConfigBody {
 }
 
 pub async fn get_email_config(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<Option<EmailConfig>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let row = sqlx::query("SELECT id, smtp_host, smtp_port, smtp_user, smtp_pass, sender_name, sender_email, use_tls FROM email_config LIMIT 1")
         .fetch_optional(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     match row {
+        // smtp_pass is write-only: never expose the stored secret to clients.
         Some(r) => Ok(Json(Some(EmailConfig {
             id: r.get(0), smtp_host: r.get(1), smtp_port: r.get(2),
-            smtp_user: r.get(3), smtp_pass: r.get(4),
+            smtp_user: r.get(3), smtp_pass: String::new(),
             sender_name: r.get(5), sender_email: r.get(6), use_tls: r.get(7),
         }))),
         None => Ok(Json(None)),
@@ -136,11 +139,21 @@ pub async fn save_email_config(
     Json(body): Json<SaveEmailConfigBody>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    // Keep the stored SMTP password when the client sends an empty one
+    // (password is write-only and never returned by get_email_config).
+    let stored_pass: Option<String> = sqlx::query_scalar("SELECT smtp_pass FROM email_config LIMIT 1")
+        .fetch_optional(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let final_pass = if body.smtp_pass.trim().is_empty() {
+        stored_pass.unwrap_or_default()
+    } else {
+        body.smtp_pass.clone()
+    };
     let existing: bool = sqlx::query_scalar("SELECT COUNT(*) > 0 FROM email_config")
         .fetch_one(&pool.pool).await.unwrap_or(false);
     if existing {
         sqlx::query("UPDATE email_config SET smtp_host=$1, smtp_port=$2, smtp_user=$3, smtp_pass=$4, sender_name=$5, sender_email=$6, use_tls=$7")
-            .bind(&body.smtp_host).bind(&body.smtp_port).bind(&body.smtp_user).bind(&body.smtp_pass)
+            .bind(&body.smtp_host).bind(&body.smtp_port).bind(&body.smtp_user).bind(&final_pass)
             .bind(&body.sender_name).bind(&body.sender_email).bind(&body.use_tls)
             .execute(&pool.pool).await
             .map_err(|e| crate::server::server_error(e))?;
@@ -148,7 +161,7 @@ pub async fn save_email_config(
         let id = uuid::Uuid::new_v4().to_string();
         sqlx::query("INSERT INTO email_config (id, smtp_host, smtp_port, smtp_user, smtp_pass, sender_name, sender_email, use_tls) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)")
             .bind(&id).bind(&body.smtp_host).bind(&body.smtp_port).bind(&body.smtp_user)
-            .bind(&body.smtp_pass).bind(&body.sender_name).bind(&body.sender_email).bind(&body.use_tls)
+            .bind(&final_pass).bind(&body.sender_name).bind(&body.sender_email).bind(&body.use_tls)
             .execute(&pool.pool).await
             .map_err(|e| crate::server::server_error(e))?;
     }
@@ -518,7 +531,8 @@ pub async fn backup_database(
         .output().await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("pg_dump failed: {}", e)}))))?;
     if !output.status.success() {
-        return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("pg_dump: {}", String::from_utf8_lossy(&output.stderr))}))));
+        log::error!("pg_dump failed: {}", String::from_utf8_lossy(&output.stderr));
+        return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"Database backup failed"}))));
     }
     crate::server::handlers::audit(&pool.pool, &user_id, "export", "database_backup", &backup_path, "Database backup created").await;
     Ok(Json(json!(backup_path)))
@@ -534,13 +548,27 @@ pub async fn restore_database(
     Json(body): Json<RestoreDatabaseBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    // Restrict restore source to files inside BACKUP_DIR to prevent arbitrary
+    // file execution via psql -f.
+    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "backups".into());
+    let dir_canon = std::fs::canonicalize(&backup_dir).unwrap_or_else(|_| std::path::PathBuf::from(&backup_dir));
+    let file_canon = std::fs::canonicalize(&body.backup_path)
+        .map_err(|_| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Backup file not found"}))))?;
+    if !file_canon.starts_with(&dir_canon) {
+        log::warn!("restore_database: rejected path outside BACKUP_DIR: {}", body.backup_path);
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Backup path must be inside the backup directory"}))));
+    }
+    if !file_canon.is_file() {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Backup path is not a file"}))));
+    }
     let database_url = std::env::var("DATABASE_URL").map_err(|_| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"DATABASE_URL not set"}))))?;
     let output = tokio::process::Command::new("psql")
         .arg("-d").arg(&database_url).arg("-f").arg(&body.backup_path)
         .output().await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("psql failed: {}", e)}))))?;
     if !output.status.success() {
-        return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": format!("psql restore: {}", String::from_utf8_lossy(&output.stderr))}))));
+        log::error!("psql restore failed: {}", String::from_utf8_lossy(&output.stderr));
+        return Err((axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error":"Database restore failed"}))));
     }
     crate::server::handlers::audit(&pool.pool, &user_id, "import", "database_restore", &body.backup_path, "Database restored from backup").await;
     Ok(Json(json!("Database restored successfully")))

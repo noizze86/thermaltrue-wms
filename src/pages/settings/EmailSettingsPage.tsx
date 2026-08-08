@@ -89,7 +89,8 @@ export default function EmailSettingsPage() {
             </div>
             <div className="space-y-2">
               <Label>SMTP Password</Label>
-              <Input type="password" value={form.smtpPass} onChange={(e) => update("smtpPass", e.target.value)} placeholder="••••••••" />
+              <Input type="password" value={form.smtpPass} onChange={(e) => update("smtpPass", e.target.value)} placeholder="Kosongkan untuk mempertahankan password lama" />
+              <p className="text-xs text-muted-foreground">Password tidak pernah ditampilkan kembali. Kosongkan jika tidak ingin mengubahnya.</p>
             </div>
           </div>
           <div className="flex items-center gap-2">

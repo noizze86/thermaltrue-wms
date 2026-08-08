@@ -490,16 +490,16 @@ pub async fn delete_bulk(
             {
                 let (mid, qty): (String, f64) = (row.get(0), row.get(1));
                 match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
-                    TxType::In => { let _ = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await; }
-                    TxType::Out => { let _ = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await; }
+                    TxType::In => { if let Err(e) = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await { errors.push(format!("{}: stock reversal failed: {}", id, e)); continue; } }
+                    TxType::Out => { if let Err(e) = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(&mid).execute(&mut *db_tx).await { errors.push(format!("{}: stock reversal failed: {}", id, e)); continue; } }
                     _ => {}
                 }
             }
         } else {
             for (mid, qty) in &items {
                 match tx_type.parse::<TxType>().unwrap_or(TxType::In) {
-                    TxType::In => { let _ = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await; }
-                    TxType::Out => { let _ = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await; }
+                    TxType::In => { if let Err(e) = sqlx::query("UPDATE materials SET quantity = CASE WHEN quantity - $1 < 0 THEN 0 ELSE quantity - $1 END WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await { errors.push(format!("{}: stock reversal failed: {}", id, e)); continue; } }
+                    TxType::Out => { if let Err(e) = sqlx::query("UPDATE materials SET quantity = quantity + $1 WHERE id=$2").bind(qty).bind(mid).execute(&mut *db_tx).await { errors.push(format!("{}: stock reversal failed: {}", id, e)); continue; } }
                     _ => {}
                 }
             }

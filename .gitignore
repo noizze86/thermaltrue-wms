@@ -41,3 +41,10 @@ certificate/
 
 # Helper scripts
 start
+
+# Sensitive artifacts (tokens, temp credentials, password resets)
+token.txt
+tmp_login.json
+tmp_tx.json
+reset_admin_password.txt
+set_admin_pass.sql

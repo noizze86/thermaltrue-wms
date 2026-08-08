@@ -1,8 +1,16 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Production capability — localhost + LAN IP",
+  "description": "Production capability - localhost + LAN IP",
   "windows": ["main"],
+  "remote": {
+    "urls": [
+      "http://127.0.0.1:3000/*",
+      "http://localhost:3000/*",
+      "http://127.0.0.1:5174/*",
+      "http://localhost:5174/*"
+    ]
+  },
   "permissions": [
     "core:default",
     "dialog:default",
@@ -15,6 +23,7 @@
     "process:default",
     "barcode-scanner:default",
     "log:default",
+    "mcp-bridge:default",
     {
       "identifier": "http:default",
       "allow": [

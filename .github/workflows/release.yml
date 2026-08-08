@@ -72,6 +72,9 @@ jobs:
           fi
       - name: Build frontend
         run: npm ci && npm run build
+
+      - name: Lint + unit tests
+        run: npm run lint && npm run test
       - name: Check Windows certificate
         if: matrix.os == 'windows-latest'
         shell: pwsh

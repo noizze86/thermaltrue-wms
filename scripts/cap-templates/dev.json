@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Development capability — localhost only",
+  "description": "Development capability - localhost only",
   "windows": ["main"],
   "permissions": [
     "core:default",
@@ -12,6 +12,7 @@
     "process:default",
     "barcode-scanner:default",
     "log:default",
+    "mcp-bridge:default",
     {
       "identifier": "http:default",
       "allow": [

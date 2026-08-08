@@ -790,7 +790,8 @@ pub async fn backup_database(db: State<'_, DbPool>, token: String, app_handle: A
         .await
         .map_err(|e| AppError::Internal(format!("Failed to run pg_dump: {}", e)))?;
     if !output.status.success() {
-        return Err(AppError::Internal(format!("pg_dump failed: {}", String::from_utf8_lossy(&output.stderr))));
+        log::error!("pg_dump failed: {}", String::from_utf8_lossy(&output.stderr));
+        return Err(AppError::Internal("Database backup failed".into()));
     }
     crate::commands::audit_log(&db.pool, &user_id, "export", "database_backup", &backup_path.to_string_lossy().to_string(), "Database backup created").await;
     Ok(backup_path.to_string_lossy().to_string())
@@ -800,6 +801,19 @@ pub async fn backup_database(db: State<'_, DbPool>, token: String, app_handle: A
 pub async fn restore_database(db: State<'_, DbPool>, token: String, backup_path: String, _app_handle: AppHandle) -> Result<String, AppError> {
     let user_id = db.verify_token(&token)?;
     if !validate::check_user_permission(&db.pool, &user_id, "manage_settings").await? { return Err(AppError::Auth("Permission denied".into())); }
+    // Restrict restore source to files inside BACKUP_DIR to prevent arbitrary
+    // file execution via psql -f.
+    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "backups".into());
+    let dir_canon = std::fs::canonicalize(&backup_dir).unwrap_or_else(|_| std::path::PathBuf::from(&backup_dir));
+    let file_canon = std::fs::canonicalize(&backup_path)
+        .map_err(|_| AppError::Auth("Backup file not found".into()))?;
+    if !file_canon.starts_with(&dir_canon) {
+        log::warn!("restore_database: rejected path outside BACKUP_DIR: {}", backup_path);
+        return Err(AppError::Auth("Backup path must be inside the backup directory".into()));
+    }
+    if !file_canon.is_file() {
+        return Err(AppError::Auth("Backup path is not a file".into()));
+    }
     let database_url = std::env::var("DATABASE_URL")
         .map_err(|_| AppError::Internal("DATABASE_URL environment variable not set".into()))?;
     let output = tokio::process::Command::new("psql")
@@ -809,7 +823,8 @@ pub async fn restore_database(db: State<'_, DbPool>, token: String, backup_path:
         .await
         .map_err(|e| AppError::Internal(format!("Failed to run psql: {}", e)))?;
     if !output.status.success() {
-        return Err(AppError::Internal(format!("psql restore failed: {}", String::from_utf8_lossy(&output.stderr))));
+        log::error!("psql restore failed: {}", String::from_utf8_lossy(&output.stderr));
+        return Err(AppError::Internal("Database restore failed".into()));
     }
     crate::commands::audit_log(&db.pool, &user_id, "import", "database_restore", &backup_path, "Database restored from backup").await;
     Ok("Database restored successfully".into())

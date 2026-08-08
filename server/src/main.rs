@@ -1,6 +1,7 @@
 use std::ffi::OsString;
 use std::time::Duration;
 use std::io::Write;
+use std::net::SocketAddr;
 use rand::RngCore;
 use backend::db_pool::DbPool;
 use backend::server::create_router;
@@ -231,7 +232,7 @@ async fn serve(pool: DbPool) {
             std::process::exit(1);
         });
         axum_server::bind_rustls(addr.parse().unwrap(), tls_cfg)
-            .serve(app.into_make_service())
+            .serve(app.into_make_service_with_connect_info::<SocketAddr>())
             .await
             .unwrap_or_else(|e| {
                 log::error!("Server error: {}", e);
@@ -242,7 +243,7 @@ async fn serve(pool: DbPool) {
             log::error!("Cannot bind to {}: {}", addr, e);
             std::process::exit(1);
         });
-        axum::serve(listener, app).await.unwrap_or_else(|e| {
+        axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>()).await.unwrap_or_else(|e| {
             log::error!("Server error: {}", e);
             std::process::exit(1);
         });
