@@ -76,9 +76,9 @@ async function testSettings() {
     // TC-SET-06: Navigate to API Settings
     console.log("  TC-SET-06: Navigate to API Settings");
     await navigateTo(client, "API Settings");
-    await client.waitForDomTextOrThrow("API Settings", 10000);
+    await client.waitForDomTextOrThrow("API Server Configuration", 10000);
     const apiDom = await client.inspectDom();
-    if (apiDom.includes("API Settings") || apiDom.includes("Server URL")) {
+    if (apiDom.includes("API Server Configuration") || apiDom.includes("Server URL")) {
       console.log("    ✓ API Settings page loaded");
       passed++;
     } else {

@@ -272,6 +272,11 @@ export class TauriMcpClient {
     return this.textOf(result);
   }
 
+  async setHash(hash: string): Promise<void> {
+    const script = `(() => { location.hash = ${JSON.stringify(hash)}; return location.hash; })()`;
+    await this.callTool("webview_execute_js", { script });
+  }
+
   async waitForDomText(text: string, timeout = 10000): Promise<boolean> {
     const deadline = Date.now() + timeout;
     while (Date.now() < deadline) {
@@ -352,8 +357,69 @@ export async function login(
   await client.waitForDomTextOrThrow("Dashboard", 15000);
 }
 
+const MENU_PARENTS: Record<string, string[]> = {
+  Materials: ["Master Data", "Stock Management", "QR Generator", "Label Printing"],
+  Transactions: ["Goods In", "Goods Out", "History"],
+  Analysis: ["Analysis Dashboard", "Material Analysis", "Consumption", "Cost Analysis", "ABC Analysis", "Forecaster"],
+  Warehouse: ["Warehouse Dashboard", "Warehouses", "Rack/Bin", "Transfer", "Stock Opname"],
+  Reports: ["Material Summary", "Stock Report", "Transaction Report", "Opname Report", "Multi-Warehouse", "Pivot Report"],
+  Settings: ["My Profile", "System", "Users", "Categories", "Units", "Suppliers", "Audit Log", "Roles", "Label Templates", "Inventory Settings", "Email Config", "API Settings", "Network Test", "Update Test"],
+};
+
+const ROUTE_BY_LABEL: Record<string, string> = {
+  Dashboard: "#/dashboard",
+  "Master Data": "#/materials/master-data",
+  "Stock Management": "#/materials/stock",
+  "QR Generator": "#/materials/qr-generator",
+  "Label Printing": "#/materials/labels",
+  "Goods In": "#/transactions/in",
+  "Goods Out": "#/transactions/out",
+  History: "#/transactions/history",
+  "Analysis Dashboard": "#/analysis/dashboard",
+  "Material Analysis": "#/analysis/material",
+  Consumption: "#/analysis/consumption",
+  "Cost Analysis": "#/analysis/cost",
+  "ABC Analysis": "#/analysis/abc",
+  Forecaster: "#/analysis/forecaster",
+  "Warehouse Dashboard": "#/warehouse/dashboard",
+  Warehouses: "#/warehouse/list",
+  "Rack/Bin": "#/warehouse/racks",
+  Transfer: "#/warehouse/transfer",
+  "Stock Opname": "#/warehouse/opname",
+  "Material Summary": "#/reports/summary",
+  "Stock Report": "#/reports/stock",
+  "Transaction Report": "#/reports/transactions",
+  "Opname Report": "#/reports/opname",
+  "Multi-Warehouse": "#/reports/multi-warehouse",
+  "Pivot Report": "#/reports/pivot",
+  "My Profile": "#/settings/profile",
+  System: "#/settings/system",
+  Users: "#/settings/users",
+  Categories: "#/settings/categories",
+  Units: "#/settings/units",
+  Suppliers: "#/settings/suppliers",
+  "Audit Log": "#/settings/audit-log",
+  Roles: "#/settings/roles",
+  "Label Templates": "#/settings/label-templates",
+  "Email Config": "#/settings/email",
+  "Inventory Settings": "#/settings/inventory",
+  "API Settings": "#/settings/api",
+  "Network Test": "#/settings/network-test",
+  "Update Test": "#/settings/update-test",
+};
+
 export async function navigateTo(client: TauriMcpClient, label: string): Promise<void> {
   const target = LABEL_ALIASES[label] || label;
+  const route = ROUTE_BY_LABEL[target];
+  if (route) {
+    try {
+      await client.setHash(route);
+      await client.sleep(2500);
+      return;
+    } catch {
+      // hash navigation failed — fall through to menu clicks
+    }
+  }
   const dom = await client.inspectDom();
   if (!dom.toLowerCase().includes(target.toLowerCase())) {
     const parent = Object.keys(MENU_PARENTS).find(k => MENU_PARENTS[k].includes(target));
@@ -369,14 +435,5 @@ export async function navigateTo(client: TauriMcpClient, label: string): Promise
   await client.clickElement(target);
   await client.sleep(2000);
 }
-
-const MENU_PARENTS: Record<string, string[]> = {
-  Materials: ["Master Data", "Stock Management", "QR Generator", "Label Printing"],
-  Transactions: ["Goods In", "Goods Out", "History"],
-  Analysis: ["Analysis Dashboard", "Material Analysis", "Consumption", "Cost Analysis", "ABC Analysis", "Forecaster"],
-  Warehouse: ["Warehouse Dashboard", "Warehouses", "Rack/Bin", "Transfer", "Stock Opname"],
-  Reports: ["Material Summary", "Stock Report", "Transaction Report", "Opname Report", "Multi-Warehouse", "Pivot Report"],
-  Settings: ["My Profile", "System", "Users", "Categories", "Units", "Suppliers", "Audit Log", "Roles", "Label Templates", "Inventory Settings", "Email Config", "API Settings", "Network Test", "Update Test"],
-};
 
 const LABEL_ALIASES: Record<string, string> = { "System Settings": "System" };

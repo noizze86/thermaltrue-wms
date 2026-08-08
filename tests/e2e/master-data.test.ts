@@ -40,8 +40,8 @@ async function testMasterData() {
 
     // TC-MD-02: Search material
     console.log("  TC-MD-02: Search material by SKU");
-    await client.typeInto(100, 180, testData.material.sku);
-    await client.sleep(1000);
+    await client.fillField("Search...", testData.material.sku);
+    await client.sleep(1500);
     const searchDom = await client.inspectDom();
     if (searchDom.includes(testData.material.sku)) {
       console.log("    ✓ Search found the material");
