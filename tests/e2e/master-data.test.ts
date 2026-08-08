@@ -58,8 +58,8 @@ async function testMasterData() {
 
     await client.clickElement("Add Category");
     await client.sleep(1500);
-    await client.typeInto(250, 250, testData.category.name);
-    await client.typeInto(250, 290, testData.category.description);
+    await client.fillField("Name", testData.category.name);
+    await client.fillField("Description", testData.category.description);
     await client.clickElement("Create");
     await client.sleep(3000);
 
@@ -75,12 +75,12 @@ async function testMasterData() {
     // TC-MD-04: Create unit
     console.log("  TC-MD-04: Create new unit");
     await navigateTo(client, "Units");
-    await client.waitForDomTextOrThrow("/settings/units", 5000);
+    await client.waitForDomTextOrThrow("Add Unit", 20000);
 
     await client.clickElement("Add Unit");
     await client.sleep(1500);
-    await client.typeInto(250, 250, testData.unit.name);
-    await client.typeInto(250, 290, testData.unit.symbol);
+    await client.fillField("Name", testData.unit.name);
+    await client.fillField("Symbol", testData.unit.symbol);
     await client.clickElement("Create");
     await client.sleep(3000);
 
@@ -96,14 +96,14 @@ async function testMasterData() {
     // TC-MD-05: Create supplier
     console.log("  TC-MD-05: Create new supplier");
     await navigateTo(client, "Suppliers");
-    await client.waitForDomTextOrThrow("/settings/suppliers", 5000);
+    await client.waitForDomTextOrThrow("Add Supplier", 20000);
 
     await client.clickElement("Add Supplier");
     await client.sleep(1500);
-    await client.typeInto(250, 250, testData.supplier.name);
-    await client.typeInto(250, 290, testData.supplier.contact);
-    await client.typeInto(250, 330, testData.supplier.phone);
-    await client.typeInto(250, 370, testData.supplier.contactPerson);
+    await client.fillField("Name", testData.supplier.name);
+    await client.fillField("Contact", testData.supplier.contact);
+    await client.fillField("Phone", testData.supplier.phone);
+    await client.fillField("Contact Person", testData.supplier.contactPerson);
     await client.clickElement("Create");
     await client.sleep(3000);
 

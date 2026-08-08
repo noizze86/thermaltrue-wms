@@ -164,8 +164,6 @@ pub async fn abc_classify(
         } else { 999.0 };
         let xyz = if cv < 0.5 { "X" } else if cv < 1.0 { "Y" } else { "Z" };
 
-        cumulative += value_pct;
-
         let item_name: String = row.get("name");
         let item_sku: String = row.get("sku");
 

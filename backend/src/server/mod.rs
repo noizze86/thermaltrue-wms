@@ -10,8 +10,9 @@ use tower_http::cors::CorsLayer;
 use tokio::fs as async_fs;
 use crate::db_pool::DbPool;
 
-// Per-IP rate limiter: max 120 requests per minute per IP
-const RATE_LIMIT_MAX: usize = 120;
+// Per-IP rate limiter: max 600 requests per minute per IP.
+// 120 was too low for legitimate UIs that fire many parallel API calls on page load.
+const RATE_LIMIT_MAX: usize = 600;
 const RATE_LIMIT_WINDOW: std::time::Duration = std::time::Duration::from_secs(60);
 
 static RATE_LIMITER: once_cell::sync::Lazy<RwLock<HashMap<String, Vec<Instant>>>> =
