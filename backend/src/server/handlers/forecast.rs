@@ -140,28 +140,32 @@ pub async fn forecast_generate(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let wh = q.warehouse_id.as_deref().unwrap_or("");
     let period = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
-    let rows = sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT m.id, m.name, m.sku, m.quantity, m.min_stock, m.warehouse_id, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as c3, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as c6, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as c12 \
-         FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
-    ).bind(wh).fetch_all(&pool.pool).await
+         FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(" ORDER BY m.name");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
-    let monthly_rows = sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT material_id, \
          EXTRACT(YEAR FROM created_at::timestamp)::int as y, \
          EXTRACT(MONTH FROM created_at::timestamp)::int as m, \
          COALESCE(SUM(quantity),0) as qty \
          FROM transactions WHERE type='out' AND status NOT IN ('voided','reversed') \
-         AND created_at::timestamp >= NOW() - INTERVAL '12 months' \
-         AND ($1 = '' OR warehouse_id = $1) \
-         GROUP BY material_id, y, m ORDER BY material_id, y, m"
-    ).bind(wh).fetch_all(&pool.pool).await
+         AND created_at::timestamp >= NOW() - INTERVAL '12 months'"
+    );
+    scope.apply_builder(&mut b, "warehouse_id", q.warehouse_id.as_deref());
+    b.push(" GROUP BY material_id, y, m ORDER BY material_id, y, m");
+    let monthly_rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let mut monthly_map: std::collections::HashMap<String, Vec<f64>> = std::collections::HashMap::new();
@@ -294,8 +298,9 @@ pub async fn forecast_summary(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let period = chrono::Local::now().format("%Y-%m-%d").to_string();
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
-    let row = match sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT COUNT(*) as total, \
          COUNT(*) FILTER (WHERE forecast_1mo > 0) as forecasted, \
          COUNT(*) FILTER (WHERE trend='▲') as trend_up, \
@@ -303,7 +308,10 @@ pub async fn forecast_summary(
          COUNT(*) FILTER (WHERE is_seasonal=TRUE) as seasonal_cnt, \
          COALESCE(AVG(mape),0) as avg_mape \
          FROM forecast_metrics WHERE period=$1 AND forecast_model='best'"
-    ).bind(&period).fetch_optional(&pool.pool).await {
+    );
+    b.push_bind(&period);
+    scope.apply_builder(&mut b, "forecast_metrics.warehouse_id", None);
+    let row = match b.build().fetch_optional(&pool.pool).await {
         Ok(Some(r)) => r,
         Ok(None) | Err(_) => {
             match sqlx::query(
@@ -338,19 +346,19 @@ pub async fn forecast_details(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let period = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let wh = q.warehouse_id.as_deref().unwrap_or("");
     let mid = q.material_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
-    let rows = sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT fm.*, m.name as material_name, m.sku \
          FROM forecast_metrics fm \
          JOIN materials m ON m.id = fm.material_id \
-         WHERE fm.period=$1 AND fm.forecast_model='best' \
-         AND ($2 = '' OR fm.warehouse_id = $2) \
-         AND ($3 = '' OR fm.material_id = $3) \
-         ORDER BY m.name"
-    ).bind(&period).bind(wh).bind(mid)
-     .fetch_all(&pool.pool).await
+         WHERE fm.period=$1 AND fm.forecast_model='best'"
+    );
+    b.push_bind(&period);
+    scope.apply_builder(&mut b, "fm.warehouse_id", q.warehouse_id.as_deref());
+    b.push(" AND ($3 = '' OR fm.material_id = $3) ORDER BY m.name");
+    let rows = b.build().bind(mid).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let items: Vec<serde_json::Value> = rows.iter().map(|row| {

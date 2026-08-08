@@ -23,10 +23,16 @@ pub struct SaveItemBody {
 }
 
 pub async fn list(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT id, opname_number, warehouse_id, status, notes, created_by, created_at, updated_at, cycle_mode, deadline, blind_mode, tolerance_pct, assigned_to, zone_id, recount_of FROM stock_opname ORDER BY created_at DESC")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new("SELECT id, opname_number, warehouse_id, status, notes, created_by, created_at, updated_at, cycle_mode, deadline, blind_mode, tolerance_pct, assigned_to, zone_id, recount_of FROM stock_opname WHERE 1=1");
+    scope.apply_builder(&mut builder, "warehouse_id", None);
+    builder.push(" ORDER BY created_at DESC");
+    let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"id": row.get::<String,_>("id"), "opname_number": row.get::<String,_>("opname_number"),
@@ -46,6 +52,11 @@ pub async fn create(
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
+    if let Some(w) = body.get("warehouse_id").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
+    } else if !validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?.is_all() {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
+    }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM stock_opname")
@@ -103,6 +114,11 @@ pub async fn update_status(
     let task_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_opname WHERE id=$1)")
         .bind(&id).fetch_one(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     if !task_exists { return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Stock opname task not found"})))); }
+    let op_wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
+        .bind(&id).fetch_one(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?
+        .flatten();
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    if !(scope.is_all() || op_wh.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false)) { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     let allowed = ["open", "in_progress", "pending_review", "completed", "expired", "draft", "voided", "rejected"];
     if !allowed.contains(&body.status.as_str()) {
         return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Invalid status transition: {}", body.status)}))));
@@ -166,9 +182,14 @@ pub async fn update_status(
 }
 
 pub async fn get_items(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let op_wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
+        .bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.flatten();
+    if !(scope.is_all() || op_wh.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false)) { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     let rows = sqlx::query("SELECT id, opname_id, material_id, system_qty, physical_qty, difference, notes, cycle_round, approved_status, reviewer_id, reviewed_at, remark FROM stock_opname_items WHERE opname_id=$1")
         .bind(&id).fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -190,6 +211,10 @@ pub async fn save_item(
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     if body.physical_qty < 0.0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Physical quantity cannot be negative"})))); }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let op_wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
+        .bind(&body.opname_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.flatten();
+    if !(scope.is_all() || op_wh.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false)) { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     let opname_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_opname WHERE id=$1)")
         .bind(&body.opname_id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     if !opname_exists { return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Stock opname not found"})))); }
@@ -222,11 +247,15 @@ pub async fn save_item(
 pub struct ScopeQuery { pub warehouse_id: Option<String>, pub category_id: Option<String>, pub rack_id: Option<String> }
 
 pub async fn get_scope_items(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<ScopeQuery>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
     let mut builder = sqlx::QueryBuilder::new("SELECT m.id, m.sku, m.name, m.quantity, m.min_stock, COALESCE(m.rack_id,'') AS rack_id, COALESCE(m.category_id,'') AS category_id FROM materials m WHERE m.is_active=true");
     if let Some(ref w) = q.warehouse_id { builder.push(" AND m.warehouse_id = "); builder.push_bind(w); }
+    scope.apply_builder(&mut builder, "m.warehouse_id", None);
     if let Some(ref c) = q.category_id { builder.push(" AND m.category_id = "); builder.push_bind(c); }
     if let Some(ref r) = q.rack_id { builder.push(" AND m.rack_id = "); builder.push_bind(r); }
     builder.push(" ORDER BY m.sku");
@@ -241,9 +270,14 @@ pub async fn get_scope_items(
 }
 
 pub async fn get_task_history(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let op_wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
+        .bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.flatten();
+    if !(scope.is_all() || op_wh.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false)) { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     let rows = sqlx::query("SELECT id, task_id, material_id, action, before_qty, after_qty, changed_by, created_at FROM cycle_count_history WHERE task_id=$1 ORDER BY created_at DESC")
         .bind(&id).fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -256,10 +290,16 @@ pub async fn get_task_history(
 }
 
 pub async fn get_cycle_zones(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT id, zone_id, warehouse_id, assign_mode, last_date, next_date, created_at FROM cycle_count_zones ORDER BY next_date")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new("SELECT id, zone_id, warehouse_id, assign_mode, last_date, next_date, created_at FROM cycle_count_zones WHERE 1=1");
+    scope.apply_builder(&mut builder, "warehouse_id", None);
+    builder.push(" ORDER BY next_date");
+    let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"id": row.get::<String,_>("id"), "zone_id": row.get::<String,_>("zone_id"),
@@ -295,6 +335,7 @@ pub async fn create_zone_schedule(
     if body.assign_mode != "daily" && body.assign_mode != "weekly" {
         return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"assign_mode must be 'daily' or 'weekly'"}))));
     }
+    if let Some(w) = &body.warehouse_id { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query("INSERT INTO cycle_count_zones (id, zone_id, warehouse_id, assign_mode, next_date, created_at) VALUES ($1,$2,$3,$4,CURRENT_DATE,$5)")
@@ -313,6 +354,9 @@ pub async fn delete_zone_schedule(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM cycle_count_zones WHERE id=$1")
+        .bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.flatten();
+    if let Some(w) = wh { if !validate::is_allowed_warehouse(&pool.pool, &user_id, &w).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     sqlx::query("DELETE FROM cycle_count_zones WHERE id=$1").bind(&id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -339,10 +383,16 @@ pub async fn set_config(
 }
 
 pub async fn get_cycle_schedules(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT id, warehouse_id, class, frequency_days, next_date, last_date, created_at FROM cycle_schedules ORDER BY next_date")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new("SELECT id, warehouse_id, class, frequency_days, next_date, last_date, created_at FROM cycle_schedules WHERE 1=1");
+    scope.apply_builder(&mut builder, "warehouse_id", None);
+    builder.push(" ORDER BY next_date");
+    let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"id": row.get::<String,_>("id"), "warehouse_id": row.get::<Option<String>,_>("warehouse_id"),
@@ -362,7 +412,9 @@ pub async fn create_cycle_schedule(
     Json(body): Json<CreateCycleBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
+    let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if let Some(w) = &body.warehouse_id { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query("INSERT INTO cycle_schedules (id, warehouse_id, class, frequency_days, next_date, created_at) VALUES ($1,$2,$3,$4,CURRENT_DATE,$5)")
@@ -381,6 +433,9 @@ pub async fn delete_cycle_schedule(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM cycle_schedules WHERE id=$1")
+        .bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.flatten();
+    if let Some(w) = wh { if !validate::is_allowed_warehouse(&pool.pool, &user_id, &w).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     sqlx::query("DELETE FROM cycle_schedules WHERE id=$1").bind(&id)
         .execute(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -410,6 +465,7 @@ pub async fn recount(
         .bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?
         .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error": "Task not found"}))))?;
     let src_wh: String = src.get(0);
+    if !validate::is_allowed_warehouse(&pool.pool, &user_id, &src_wh).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     let src_mode: String = src.get(1);
     let src_deadline: String = src.get(2);
     let src_blind: bool = src.get(3);

@@ -33,8 +33,10 @@ pub async fn list(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_users").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     let rows = sqlx::query(
         "SELECT id, username, full_name, email, role, is_active, photo, \
-         last_login_at, last_login_ip, password_changed_at, created_at, updated_at \
-         FROM users ORDER BY username"
+         last_login_at, last_login_ip, password_changed_at, created_at, updated_at, \
+         COALESCE((SELECT string_agg(w.name, ', ' ORDER BY w.name) FROM user_warehouses uw \
+                   JOIN warehouses w ON w.id = uw.warehouse_id WHERE uw.user_id = u.id), '') as warehouse_names \
+         FROM users u ORDER BY username"
     ).fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
@@ -44,8 +46,73 @@ pub async fn list(
             "photo": row.get::<String,_>("photo"), "last_login_at": row.get::<Option<String>,_>("last_login_at"),
             "last_login_ip": row.get::<String,_>("last_login_ip"),
             "password_changed_at": row.get::<Option<String>,_>("password_changed_at"),
-            "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at")})
+            "created_at": row.get::<String,_>("created_at"), "updated_at": row.get::<String,_>("updated_at"),
+            "warehouse_names": row.get::<String,_>("warehouse_names")})
     }).collect::<Vec<_>>())))
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetWarehousesBody { pub warehouse_ids: Vec<String> }
+
+pub async fn get_user_warehouses(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Path(id): Path<String>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if id != user_id && !validate::check_user_permission(&pool.pool, &user_id, "manage_users").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let rows = sqlx::query(
+        "SELECT w.id FROM user_warehouses uw JOIN warehouses w ON w.id = uw.warehouse_id WHERE uw.user_id=$1 ORDER BY w.name"
+    ).bind(&id).fetch_all(&pool.pool).await
+     .map_err(|e| crate::server::server_error(e))?;
+    let ids: Vec<String> = rows.iter().map(|r| r.get::<String, _>(0)).collect();
+    Ok(Json(json!({ "warehouse_ids": ids })))
+}
+
+pub async fn set_user_warehouses(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+    Path(id): Path<String>,
+    Json(body): Json<SetWarehousesBody>,
+) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "manage_users").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let role: Option<String> = sqlx::query_scalar("SELECT role FROM users WHERE id=$1")
+        .bind(&id).fetch_optional(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?
+        .ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"User not found"}))))?;
+    let mut tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
+    sqlx::query("DELETE FROM user_warehouses WHERE user_id=$1").bind(&id).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+    let mut inserted = 0usize;
+    for wid in &body.warehouse_ids {
+        let exists: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM warehouses WHERE id=$1")
+            .bind(wid).fetch_one(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+        if exists == 0 { continue; }
+        sqlx::query("INSERT INTO user_warehouses (user_id, warehouse_id) VALUES ($1,$2)")
+            .bind(&id).bind(wid).execute(&mut *tx).await.map_err(|e| crate::server::server_error(e))?;
+        inserted += 1;
+    }
+    tx.commit().await.map_err(|e| crate::server::server_error(e))?;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "user", &id, &format!("Warehouse access set (role {}, {} warehouses)", role, inserted)).await;
+    Ok(Json(()))
+}
+
+pub async fn get_my_warehouses(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    if scope.is_all() {
+        let rows = sqlx::query("SELECT id, name FROM warehouses WHERE is_active=true ORDER BY name")
+            .fetch_all(&pool.pool).await
+            .map_err(|e| crate::server::server_error(e))?;
+        return Ok(Json(json!({"all": true, "warehouses": rows.iter().map(|r| json!({"id": r.get::<String,_>(0), "name": r.get::<String,_>(1)})).collect::<Vec<_>>()})));
+    }
+    let ids = scope.allowed_ids().cloned().unwrap_or_default();
+    let rows = sqlx::query("SELECT id, name FROM warehouses WHERE id = ANY($1) ORDER BY name")
+        .bind(&ids).fetch_all(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    Ok(Json(json!({"all": false, "warehouses": rows.iter().map(|r| json!({"id": r.get::<String,_>(0), "name": r.get::<String,_>(1)})).collect::<Vec<_>>()})))
 }
 
 pub async fn get_me(

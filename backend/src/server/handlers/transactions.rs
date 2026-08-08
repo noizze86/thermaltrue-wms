@@ -19,7 +19,7 @@ pub async fn list(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Transaction>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "view_transactions").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
-    let warehouse_ids = validate::get_user_warehouses(&pool.pool, &user_id).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
         .map_err(|e| (axum::http::StatusCode::INTERNAL_SERVER_ERROR, Json(json!({"error": e.to_string()}))))?;
     let search_pat = params.search.as_ref().filter(|s| !s.is_empty()).map(|s| format!("%{}%", s));
     let de_val = params.date_end.as_ref().filter(|d| !d.is_empty()).map(|d| format!("{} 23:59:59", d));
@@ -34,12 +34,9 @@ pub async fn list(
     if let Some(ref w) = params.warehouse_id { if !w.is_empty() { builder.push(" AND warehouse_id = ").push_bind(w.clone()); } }
     if let Some(ref ds) = params.date_start { if !ds.is_empty() { builder.push(" AND created_at >= ").push_bind(ds.clone()); } }
     if let Some(ref dv) = de_val { builder.push(" AND created_at <= ").push_bind(dv.clone()); }
-    if !warehouse_ids.is_empty() {
-        builder.push(" AND warehouse_id = ANY(").push_bind(&warehouse_ids).push(")");
-    }
+    scope.apply_builder(&mut builder, "warehouse_id", params.warehouse_id.as_deref());
 
-    let sf = params.status_filter.as_deref().unwrap_or("");
-    if sf == "active" {
+    let sf = params.status_filter.as_deref().unwrap_or("");    if sf == "active" {
         builder.push(" AND status NOT IN ('voided', 'reversed')");
     } else if !sf.is_empty() && sf != "all" {
         builder.push(" AND status = ").push_bind(sf);

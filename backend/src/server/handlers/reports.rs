@@ -27,21 +27,31 @@ pub async fn export_csv(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
     let mut wtr = csv::Writer::from_writer(Vec::new());
     match q.report_type.as_str() {
         "materials" => {
             wtr.write_record(["SKU","Name","Category","Quantity","Price","Min Stock","Expiry Date"]).map_err(|e| crate::server::server_error(e))?;
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock,COALESCE(m.expiry_date,'') FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock,COALESCE(m.expiry_date,'') FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true");
+            scope.apply_builder(&mut b, "m.warehouse_id", None);
+            b.push(" ORDER BY m.name");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<f64,_>(4).to_string(),row.get::<f64,_>(5).to_string(),row.get::<String,_>(6)]).map_err(|e| crate::server::server_error(e))?; }
         }
         "transactions" => {
             wtr.write_record(["Number","Type","Material","Quantity","Date"]).map_err(|e| crate::server::server_error(e))?;
-            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE t.status NOT IN ('voided','reversed') ORDER BY t.created_at DESC").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE t.status NOT IN ('voided','reversed')");
+            scope.apply_builder(&mut b, "t.warehouse_id", None);
+            b.push(" ORDER BY t.created_at DESC");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<String,_>(4)]).map_err(|e| crate::server::server_error(e))?; }
         }
         "stock" => {
             wtr.write_record(["SKU","Name","Warehouse","Quantity","Min Stock"]).map_err(|e| crate::server::server_error(e))?;
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY w.name,m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true");
+            scope.apply_builder(&mut b, "m.warehouse_id", None);
+            b.push(" ORDER BY w.name,m.name");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             for row in &rows { wtr.write_record([row.get::<String,_>(0),row.get::<String,_>(1),row.get::<String,_>(2),row.get::<f64,_>(3).to_string(),row.get::<f64,_>(4).to_string()]).map_err(|e| crate::server::server_error(e))?; }
         }
         _ => return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": "Unknown report type"})))),
@@ -58,6 +68,7 @@ pub async fn export_pdf(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
     let company: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
     let addr: String = sqlx::query_scalar("SELECT COALESCE(address,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let mat_data: Vec<(String,String,String,f64,f64,f64)>;
@@ -67,36 +78,39 @@ pub async fn export_pdf(
     let mut aud_data: Vec<(String,String,String,String,String,String)> = Vec::new();
     match q.report_type.as_str() {
         "materials" => {
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true");
+            scope.apply_builder(&mut b, "m.warehouse_id", None);
+            b.push(" ORDER BY m.name");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             mat_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4),r.get(5))).collect();
             stk_data = Vec::new(); opn_data = Vec::new(); tx_data = Vec::new();
         }
         "stock" => {
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY w.name,m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true");
+            scope.apply_builder(&mut b, "m.warehouse_id", None);
+            b.push(" ORDER BY w.name,m.name");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             mat_data = Vec::new(); stk_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
             opn_data = Vec::new(); tx_data = Vec::new();
         }
         "opname" => {
             let oid = q.opname_id.unwrap_or_default();
+            let owh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1").bind(&oid).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            if let Some(w) = owh { if !validate::is_allowed_warehouse(&pool.pool, &user_id, &w).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
             let rows = sqlx::query("SELECT m.name,soi.system_qty,soi.physical_qty,soi.difference,soi.notes FROM stock_opname_items soi LEFT JOIN materials m ON soi.material_id=m.id WHERE soi.opname_id=$1 ORDER BY m.name").bind(&oid).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             mat_data = Vec::new(); stk_data = Vec::new();
             opn_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
             tx_data = Vec::new();
         }
         "transactions" => {
-            let mut sql = String::from("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,COALESCE(t.reference,''),t.status,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE 1=1");
-            let mut p = 1;
-            if let Some(ref ds) = q.date_start { if !ds.is_empty() { sql.push_str(&format!(" AND t.created_at>=${}",p)); p+=1; } }
-            if let Some(ref de) = q.date_end { if !de.is_empty() { sql.push_str(&format!(" AND t.created_at<=${}",p)); p+=1; } }
-            if let Some(ref tf) = q.type_filter { if !tf.is_empty() && tf!="all" { sql.push_str(&format!(" AND t.type=${}",p)); p+=1; } }
-            if let Some(ref sf) = q.status_filter { if !sf.is_empty() && sf!="all" { sql.push_str(&format!(" AND t.status=${}",p)); } }
-            sql.push_str(" ORDER BY t.created_at DESC LIMIT 500");
-            let mut qb = sqlx::query(&sql);
-            if let Some(ref ds) = q.date_start { if !ds.is_empty() { qb = qb.bind(ds); } }
-            if let Some(ref de) = q.date_end { if !de.is_empty() { qb = qb.bind(format!("{} 23:59:59",de)); } }
-            if let Some(ref tf) = q.type_filter { if !tf.is_empty() && tf!="all" { qb = qb.bind(tf); } }
-            if let Some(ref sf) = q.status_filter { if !sf.is_empty() && sf!="all" { qb = qb.bind(sf); } }
-            let rows = qb.fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,COALESCE(t.reference,''),t.status,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE 1=1");
+            if let Some(ref ds) = q.date_start { if !ds.is_empty() { b.push(" AND t.created_at>=").push_bind(ds); } }
+            if let Some(ref de) = q.date_end { if !de.is_empty() { b.push(" AND t.created_at<=").push_bind(format!("{} 23:59:59",de)); } }
+            if let Some(ref tf) = q.type_filter { if !tf.is_empty() && tf!="all" { b.push(" AND t.type=").push_bind(tf); } }
+            if let Some(ref sf) = q.status_filter { if !sf.is_empty() && sf!="all" { b.push(" AND t.status=").push_bind(sf); } }
+            scope.apply_builder(&mut b, "t.warehouse_id", None);
+            b.push(" ORDER BY t.created_at DESC LIMIT 500");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             mat_data = Vec::new(); stk_data = Vec::new(); opn_data = Vec::new();
             tx_data = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4),r.get(5),r.get(6))).collect();
         }
@@ -172,6 +186,9 @@ pub async fn approve_opname(
     let task_exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM stock_opname WHERE id=$1)")
         .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     if !task_exists { return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Stock opname task not found"})))); }
+    let owh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
+        .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if let Some(w) = owh.as_deref() { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let mut tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let today = chrono::Local::now().format("%Y-%m-%d").to_string();
@@ -252,6 +269,9 @@ pub async fn export_opname_xlsx(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let owh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
+        .bind(&q.opname_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if let Some(w) = owh.as_deref() { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let rows = sqlx::query("SELECT m.name,soi.system_qty,soi.physical_qty,soi.difference,soi.notes FROM stock_opname_items soi LEFT JOIN materials m ON soi.material_id=m.id WHERE soi.opname_id=$1 ORDER BY m.name")
         .bind(&q.opname_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let b64 = tokio::task::spawn_blocking(move || -> Result<String,String> {
@@ -340,20 +360,30 @@ pub async fn run_schedule(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_settings").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
     let sched = sqlx::query("SELECT id,report_type,email_to,frequency,day_of_week,hour,is_active FROM report_schedules WHERE id=$1").bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Schedule not found"}))))?;
     let rt: String = sched.get(1);
     let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let lines = match rt.as_str() {
         "materials" => {
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true ORDER BY m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT m.sku,m.name,COALESCE(c.name,''),m.quantity,m.price,m.min_stock FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true");
+            scope.apply_builder(&mut b, "m.warehouse_id", None);
+            b.push(" ORDER BY m.name");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             rows.iter().map(|r| format!("{}|{}|{}|{}|{}|{}",r.get::<String,_>(0),r.get::<String,_>(1),r.get::<String,_>(2),r.get::<f64,_>(3),r.get::<f64,_>(4),r.get::<f64,_>(5))).collect::<Vec<_>>().join("\n")
         }
         "stock" => {
-            let rows = sqlx::query("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true ORDER BY w.name,m.name").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT m.sku,m.name,COALESCE(w.name,''),m.quantity,m.min_stock FROM materials m LEFT JOIN warehouses w ON m.warehouse_id=w.id WHERE m.is_active=true");
+            scope.apply_builder(&mut b, "m.warehouse_id", None);
+            b.push(" ORDER BY w.name,m.name");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             rows.iter().map(|r| format!("{}|{}|{}|{}|{}",r.get::<String,_>(0),r.get::<String,_>(1),r.get::<String,_>(2),r.get::<f64,_>(3),r.get::<f64,_>(4))).collect::<Vec<_>>().join("\n")
         }
         "transactions" => {
-            let rows = sqlx::query("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.status,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE t.status NOT IN ('voided','reversed') ORDER BY t.created_at DESC LIMIT 500").fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+            let mut b = sqlx::QueryBuilder::new("SELECT t.transaction_number,t.type,COALESCE(m.name,''),t.quantity,t.status,t.created_at FROM transactions t LEFT JOIN materials m ON t.material_id=m.id WHERE t.status NOT IN ('voided','reversed')");
+            scope.apply_builder(&mut b, "t.warehouse_id", None);
+            b.push(" ORDER BY t.created_at DESC LIMIT 500");
+            let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
             rows.iter().map(|r| format!("{}|{}|{}|{}|{}|{}",r.get::<String,_>(0),r.get::<String,_>(1),r.get::<String,_>(2),r.get::<f64,_>(3),r.get::<String,_>(4),r.get::<String,_>(5))).collect::<Vec<_>>().join("\n")
         }
         _ => return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error":"Unknown report type"})))),
@@ -372,7 +402,8 @@ pub async fn multi_warehouse_comparison(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT w.id, w.name, w.code, w.location,
             (SELECT COUNT(*)::bigint FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true) as mat_count,
             (SELECT COALESCE(SUM(m.quantity*m.price),0) FROM materials m WHERE m.warehouse_id=w.id AND m.is_active=true) as stock_value,
@@ -381,8 +412,11 @@ pub async fn multi_warehouse_comparison(
             (SELECT COALESCE(SUM(CASE WHEN t.type='in' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.status NOT IN ('voided','reversed') AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as inbound_30d,
             (SELECT COALESCE(SUM(CASE WHEN t.type='out' THEN t.quantity ELSE 0 END),0) FROM transactions t WHERE t.warehouse_id=w.id AND t.status NOT IN ('voided','reversed') AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) as outbound_30d,
             (SELECT COUNT(*)::bigint FROM stock_opname so WHERE so.warehouse_id=w.id AND so.status='completed' AND so.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '90 days','YYYY-MM-DD HH24:MI:SS')) as opname_90d
-        FROM warehouses w ORDER BY w.name"
-    ).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+        FROM warehouses w WHERE 1=1"
+    );
+    scope.apply_builder(&mut b, "w.id", None);
+    b.push(" ORDER BY w.name");
+    let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let v = rows.iter().map(|r| json!({"id":r.get::<String,_>(0),"name":r.get::<String,_>(1),"code":r.get::<String,_>(2),"location":r.get::<String,_>(3),"material_count":r.get::<i64,_>(4),"stock_value":r.get::<f64,_>(5),"rack_count":r.get::<i64,_>(6),"tx_30d":r.get::<i64,_>(7),"inbound_30d":r.get::<f64,_>(8),"outbound_30d":r.get::<f64,_>(9),"opname_90d":r.get::<i64,_>(10)})).collect();
     Ok(Json(v))
 }
@@ -395,6 +429,7 @@ pub async fn pivot_report(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_reports").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
     let row_f = body.get("rowField").and_then(|v| v.as_str()).unwrap_or("category");
     let col_f = body.get("colField").and_then(|v| v.as_str()).unwrap_or("type");
     let val_f = body.get("valueField").and_then(|v| v.as_str()).unwrap_or("quantity");
@@ -405,14 +440,12 @@ pub async fn pivot_report(
     let cc = match col_f {"type"=>"t.type","status"=>"t.status","month"=>"TO_CHAR(t.created_at,'YYYY-MM')","category"=>"COALESCE(c.name,'Uncat')","user"=>"COALESCE(u.full_name,'System')",_=>"t.type"};
     let vc = match val_f {"quantity"=>"t.quantity","value"=>"t.quantity*t.price","count"=>"1",_=>"t.quantity"};
     let ag = match agg_f {"SUM"=>"SUM","COUNT"=>"COUNT","AVG"=>"AVG","MIN"=>"MIN","MAX"=>"MAX",_=>"SUM"};
-    let mut sql = format!("SELECT {},{},{}({}) as val FROM transactions t LEFT JOIN materials m ON t.material_id=m.id LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN warehouses w ON t.warehouse_id=w.id LEFT JOIN users u ON t.user_id=u.id WHERE t.status='approved'",rc,cc,ag,vc);
-    let mut binds: Vec<String> = Vec::new();
-    if let Some(ref d) = ds { sql.push_str(&format!(" AND t.created_at>=${}",binds.len()+1)); binds.push(d.to_string()); }
-    if let Some(ref d) = de { sql.push_str(&format!(" AND t.created_at<=${}",binds.len()+1)); binds.push(format!("{} 23:59:59",d)); }
-    sql.push_str(" GROUP BY 1,2 ORDER BY 1,2");
-    let mut qb = sqlx::query(&sql);
-    for b in &binds { qb = qb.bind(b); }
-    let rows = qb.fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(format!("SELECT {},{},{}({}) as val FROM transactions t LEFT JOIN materials m ON t.material_id=m.id LEFT JOIN categories c ON m.category_id=c.id LEFT JOIN warehouses w ON t.warehouse_id=w.id LEFT JOIN users u ON t.user_id=u.id WHERE t.status='approved'",rc,cc,ag,vc));
+    if let Some(ref d) = ds { b.push(" AND t.created_at>=").push_bind(d); }
+    if let Some(ref d) = de { b.push(" AND t.created_at<=").push_bind(format!("{} 23:59:59",d)); }
+    scope.apply_builder(&mut b, "t.warehouse_id", None);
+    b.push(" GROUP BY 1,2 ORDER BY 1,2");
+    let rows = b.build().fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     let data: Vec<(String,String,f64)> = rows.iter().map(|r| (r.get(0),r.get(1),r.get(2))).collect();
     let mut rk: Vec<String> = Vec::new(); let mut ck: Vec<String> = Vec::new();
     for (a,b,_) in &data { if !rk.contains(a) { rk.push(a.clone()); } if !ck.contains(b) { ck.push(b.clone()); } }
@@ -444,6 +477,8 @@ pub async fn generate_receipt_pdf(
     let ca: String = sqlx::query_scalar("SELECT COALESCE(address,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let cp: String = sqlx::query_scalar("SELECT COALESCE(phone,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let ce: String = sqlx::query_scalar("SELECT COALESCE(email,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
+    let txwh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if let Some(w) = txwh.as_deref() { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let tx = sqlx::query("SELECT transaction_number,type,COALESCE(reference,''),COALESCE(po_number,''),COALESCE(invoice_no,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
     let tn: String = tx.get(0); let tt: String = tx.get(1); let tr: String = tx.get(2); let tp: String = tx.get(3); let ti: String = tx.get(4); let td: String = tx.get(5);
     let items: Vec<(String,String,String,f64,f64)> = sqlx::query("SELECT ti.material_id,COALESCE(m.sku,''),COALESCE(ti.batch_id,''),ti.quantity,ti.price FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id WHERE ti.tx_id=$1 ORDER BY m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
@@ -484,6 +519,8 @@ pub async fn generate_picking_list_pdf(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let co: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
+    let txwh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if let Some(w) = txwh.as_deref() { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let tx = sqlx::query("SELECT transaction_number,COALESCE(reference,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
     let tn: String = tx.get(0); let tr: String = tx.get(1); let td: String = tx.get(2);
     let items: Vec<(String,String,String,f64,String)> = sqlx::query("SELECT COALESCE(r.rack_name,'No Rack'),COALESCE(r.area,''),COALESCE(m.sku,''),ti.quantity,COALESCE(m.name,'') FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id LEFT JOIN racks r ON m.rack_id=r.id WHERE ti.tx_id=$1 ORDER BY r.warehouse_id,r.area,r.rack_name,m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3),r.get(4))).collect();
@@ -518,6 +555,8 @@ pub async fn generate_do_pdf(
     let ca: String = sqlx::query_scalar("SELECT COALESCE(address,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let cp: String = sqlx::query_scalar("SELECT COALESCE(phone,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
     let ce: String = sqlx::query_scalar("SELECT COALESCE(email,'') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or_default();
+    let txwh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if let Some(w) = txwh.as_deref() { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let tx = sqlx::query("SELECT transaction_number,COALESCE(reference,''),COALESCE(notes,''),created_at FROM transactions WHERE id=$1").bind(&q.tx_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.ok_or((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Transaction not found"}))))?;
     let dn: String = tx.get(0); let dr: String = tx.get(1); let dno: String = tx.get(2); let dd: String = tx.get(3);
     let items: Vec<(String,String,f64,String)> = sqlx::query("SELECT COALESCE(m.sku,''),COALESCE(m.name,''),ti.quantity,COALESCE(m.unit_id,'pcs') FROM transaction_items ti LEFT JOIN materials m ON ti.material_id=m.id WHERE ti.tx_id=$1 ORDER BY m.name").bind(&q.tx_id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.iter().map(|r| (r.get(0),r.get(1),r.get(2),r.get(3))).collect();
@@ -563,6 +602,9 @@ pub async fn generate_count_sheet_pdf(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    if !validate::is_allowed_warehouse(&pool.pool, &user_id, &q.warehouse_id).await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
+    }
     let company: String = sqlx::query_scalar("SELECT COALESCE(company_name,'Thermaltrue') FROM company_profile LIMIT 1").fetch_one(&pool.pool).await.unwrap_or("Thermaltrue".into());
     let wh: String = sqlx::query_scalar("SELECT name FROM warehouses WHERE id=$1").bind(&q.warehouse_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.unwrap_or("Unknown".into());
     let rows: Vec<(String,String,String,f64)> = sqlx::query("SELECT m.sku,m.name,COALESCE(r.rack_name,'-'),m.quantity FROM materials m LEFT JOIN racks r ON m.rack_id=r.id WHERE m.warehouse_id=$1 AND m.is_active=true ORDER BY m.name")
@@ -601,6 +643,9 @@ pub async fn get_variance_root_cause(
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let owh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
+        .bind(&opname_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    if let Some(w) = owh.as_deref() { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let rows = sqlx::query(
         "SELECT m.id, m.name, COALESCE(c.name,'Uncategorized'), m.sku, soi.system_qty, soi.physical_qty, soi.difference,
                 COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='in' AND t.created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '90 days','YYYY-MM-DD HH24:MI:SS')),0) as inbound_90d,

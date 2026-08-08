@@ -80,26 +80,38 @@ pub async fn material_summary(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
-    let total: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)"
-    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0);
-    let dead: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days') AND ($1 = '' OR m.warehouse_id = $1)"
-    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0);
-    let slow: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND EXISTS (SELECT 1 FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days' AND t.created_at::timestamp < NOW() - INTERVAL '30 days') AND ($1 = '' OR m.warehouse_id = $1)"
-    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0);
-    let avg_turnover: f64 = sqlx::query_scalar(
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    let total: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND NOT EXISTS (SELECT 1 FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days')"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    let dead: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND EXISTS (SELECT 1 FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days' AND t.created_at::timestamp < NOW() - INTERVAL '30 days')"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    let slow: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT COALESCE(AVG(turnover),0) FROM material_metrics WHERE period_start=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD')"
-    ).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let avg_risk: f64 = sqlx::query_scalar(
+    );
+    scope.apply_builder(&mut b, "material_metrics.warehouse_id", q.warehouse_id.as_deref());
+    let avg_turnover: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT COALESCE(AVG(stockout_risk),0) FROM material_metrics WHERE period_start=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD')"
-    ).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let high_risk: i64 = sqlx::query_scalar(
-        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND m.quantity <= m.min_stock AND m.min_stock > 0 AND ($1 = '' OR m.warehouse_id = $1)"
-    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0);
+    );
+    scope.apply_builder(&mut b, "material_metrics.warehouse_id", q.warehouse_id.as_deref());
+    let avg_risk: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT COUNT(*) FROM materials m WHERE m.is_active=true AND m.quantity <= m.min_stock AND m.min_stock > 0"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    let high_risk: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
 
     Ok(Json(json!({
         "total_materials": total,
@@ -120,8 +132,9 @@ pub async fn material_details(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
-    let rows = sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT m.id, m.name, m.sku, m.quantity, m.price, m.min_stock, m.max_stock, m.warehouse_id, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo, \
@@ -133,8 +146,11 @@ pub async fn material_details(
          (SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id) as lead_time_days, \
          (SELECT abc_class FROM abc_classification WHERE material_id=m.id AND period=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD') ORDER BY updated_at DESC LIMIT 1) as abc_class, \
          (SELECT xyz_class FROM abc_classification WHERE material_id=m.id AND period=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD') ORDER BY updated_at DESC LIMIT 1) as xyz_class \
-         FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
-    ).bind(wh).fetch_all(&pool.pool).await
+         FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(" ORDER BY m.name");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let mut details = Vec::new();

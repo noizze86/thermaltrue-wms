@@ -77,16 +77,20 @@ pub async fn abc_classify(
     }
     let mode = q.mode.as_deref().unwrap_or("single");
     let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
-    let rows = sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT m.id, m.name, m.sku, m.quantity, m.price, m.min_stock, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo, \
          COALESCE((SELECT t.quantity FROM transactions t WHERE t.material_id=m.id AND t.type='out' ORDER BY t.created_at DESC LIMIT 1),0) as turnover, \
          (SELECT MAX(created_at) FROM transactions WHERE material_id=m.id) as last_transaction \
-         FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY consumption_12mo DESC"
-    ).bind(wh).fetch_all(&pool.pool).await
+         FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(" ORDER BY consumption_12mo DESC");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let weights = if mode == "multi" {
@@ -213,9 +217,14 @@ pub async fn abc_summary(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let period = chrono::Local::now().format("%Y-%m-%d").to_string();
-    let counts = sqlx::query(
-        "SELECT abc_class, COUNT(*) as cnt FROM abc_classification WHERE period=$1 GROUP BY abc_class"
-    ).bind(&period).fetch_all(&pool.pool).await.unwrap_or_default();
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT abc_class, COUNT(*) as cnt FROM abc_classification WHERE period=$1"
+    );
+    b.push_bind(&period);
+    scope.apply_builder(&mut b, "abc_classification.warehouse_id", None);
+    b.push(" GROUP BY abc_class");
+    let counts = b.build().fetch_all(&pool.pool).await.unwrap_or_default();
     let mut a = 0i64; let mut b = 0i64; let mut c = 0i64;
     for row in &counts {
         match row.get::<String,_>("abc_class").as_str() {

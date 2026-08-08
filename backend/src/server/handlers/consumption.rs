@@ -81,20 +81,31 @@ pub async fn consumption_summary(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
-    let total_c3: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(sub.c3),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as c3 FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)) sub"
-    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let total_c6: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(sub.c6),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as c6 FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)) sub"
-    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let total_c12: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(SUM(sub.c12),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as c12 FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)) sub"
-    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let avg_lt: f64 = sqlx::query_scalar(
-        "SELECT COALESCE(AVG(COALESCE((SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id),0)),0) FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1)"
-    ).bind(wh).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT COALESCE(SUM(sub.c3),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as c3 FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(") sub");
+    let total_c3: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT COALESCE(SUM(sub.c6),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as c6 FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(") sub");
+    let total_c6: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT COALESCE(SUM(sub.c12),0) FROM (SELECT COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as c12 FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(") sub");
+    let total_c12: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT COALESCE(AVG(COALESCE((SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id),0)),0) FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    let avg_lt: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
     Ok(Json(json!({
         "total_consumption_3mo": (total_c3 * 100.0).round() / 100.0,
         "total_consumption_6mo": (total_c6 * 100.0).round() / 100.0,
@@ -112,16 +123,20 @@ pub async fn consumption_details(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
-    let rows = sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT m.id, m.name, m.sku, m.quantity, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as consumption_1mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo, \
          COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t.type='out' AND t.created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo, \
          (SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id) as lead_time_days \
-         FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
-    ).bind(wh).fetch_all(&pool.pool).await
+         FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(" ORDER BY m.name");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let mut details = Vec::new();
@@ -195,20 +210,21 @@ pub async fn consumption_seasonal(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
     let month_labels = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
     let now = chrono::Local::now();
 
-    let monthly_rows = sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT EXTRACT(MONTH FROM t.created_at::timestamp) as m, \
          COALESCE(SUM(t.quantity),0) as total_qty, \
          COUNT(DISTINCT t.material_id) as material_count \
          FROM transactions t WHERE t.type='out' AND t.status NOT IN ('voided','reversed') \
-         AND t.created_at::timestamp >= NOW() - INTERVAL '12 months' \
-         AND ($1 = '' OR t.warehouse_id = $1) \
-         GROUP BY EXTRACT(MONTH FROM t.created_at::timestamp) ORDER BY m"
-    ).bind(wh).fetch_all(&pool.pool).await.unwrap_or_default();
+         AND t.created_at::timestamp >= NOW() - INTERVAL '12 months'"
+    );
+    scope.apply_builder(&mut b, "t.warehouse_id", q.warehouse_id.as_deref());
+    b.push(" GROUP BY EXTRACT(MONTH FROM t.created_at::timestamp) ORDER BY m");
+    let monthly_rows = b.build().fetch_all(&pool.pool).await.unwrap_or_default();
 
     let mut month_totals = [0.0_f64; 12];
     let mut month_counts = [0_i64; 12];

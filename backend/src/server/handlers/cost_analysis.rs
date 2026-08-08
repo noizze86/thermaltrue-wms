@@ -52,15 +52,19 @@ pub async fn carrying_cost(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
     let carrying_rate: f64 = sqlx::query_scalar("SELECT COALESCE(carrying_cost_rate, 20.0) FROM company_profile LIMIT 1")
         .fetch_one(&pool.pool).await.unwrap_or(20.0) / 100.0;
 
-    let rows = sqlx::query(
+    let mut b = sqlx::QueryBuilder::new(
          r#"SELECT m.id, m.name, m.sku, m.quantity, m.price,
           COALESCE((SELECT SUM(ABS(soi.difference)) FROM stock_opname_items soi WHERE soi.material_id=m.id),0) as variance_qty,
           COALESCE((SELECT SUM(t.quantity) FROM transactions t WHERE t.material_id=m.id AND t."type"='out' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as monthly_out
-          FROM materials m WHERE m.is_active=true ORDER BY (m.quantity * m.price) DESC"#
-    ).fetch_all(&pool.pool).await
+          FROM materials m WHERE m.is_active=true"#
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", None);
+    b.push(" ORDER BY (m.quantity * m.price) DESC");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let mut results = Vec::new();
@@ -121,14 +125,17 @@ pub async fn cost_to_serve(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         r#"SELECT t.id, t.transaction_number, t."type", t.quantity, t.price,
          m.name as material_name, m.sku, m.id as material_id,
          (EXTRACT(EPOCH FROM (NULLIF(t.updated_at, '')::timestamp - t.created_at::timestamp)) / 60)::double precision as processing_minutes
          FROM transactions t JOIN materials m ON t.material_id=m.id
-         WHERE t.status='approved' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'
-         ORDER BY t.created_at DESC LIMIT 100"#
-    ).fetch_all(&pool.pool).await
+         WHERE t.status='approved' AND t.created_at::timestamp >= NOW() - INTERVAL '90 days'"#
+    );
+    scope.apply_builder(&mut b, "t.warehouse_id", None);
+    b.push(" ORDER BY t.created_at DESC LIMIT 100");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let mut total_all_cost = 0.0_f64;
@@ -200,12 +207,15 @@ pub async fn efficiency_penalty(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         r#"SELECT t."type", COUNT(*) as tx_count,
          COALESCE((AVG(EXTRACT(EPOCH FROM (NULLIF(t.updated_at, '')::timestamp - t.created_at::timestamp)) / 60))::double precision, 1) as avg_minutes
-         FROM transactions t WHERE t.status='approved' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days'
-         GROUP BY t."type""#
-    ).fetch_all(&pool.pool).await
+         FROM transactions t WHERE t.status='approved' AND t.created_at::timestamp >= NOW() - INTERVAL '30 days'"#
+    );
+    scope.apply_builder(&mut b, "t.warehouse_id", None);
+    b.push(r#" GROUP BY t."type""#);
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     let hourly_rate: f64 = sqlx::query_scalar("SELECT COALESCE(hourly_labor_rate, 5000) FROM company_profile LIMIT 1")
@@ -252,21 +262,28 @@ pub async fn cost_summary(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let total_inv: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity*price),0) FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let total_qty: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity),0) FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let material_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.unwrap_or(0);
-    let tx_30d: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at::timestamp >= NOW() - INTERVAL '30 days'")
-        .fetch_one(&pool.pool).await.unwrap_or(0);
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COALESCE(SUM(quantity*price),0) FROM materials WHERE is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let total_inv: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COALESCE(SUM(quantity),0) FROM materials WHERE is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let total_qty: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM materials WHERE is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let material_count: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at::timestamp >= NOW() - INTERVAL '30 days'");
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    let tx_30d: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
     let carrying_rate: f64 = sqlx::query_scalar("SELECT COALESCE(carrying_cost_rate, 20.0) FROM company_profile LIMIT 1")
         .fetch_one(&pool.pool).await.unwrap_or(20.0);
     let estimated_carrying = total_inv * (carrying_rate / 100.0);
 
-    let avg_purchase: f64 = sqlx::query_scalar(
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT COALESCE(AVG(price),0) FROM transactions WHERE type='in' AND status='approved' AND created_at::timestamp >= NOW() - INTERVAL '90 days'"
-    ).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    );
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    let avg_purchase: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
 
     let avg_value = if material_count > 0 { (total_inv / material_count as f64) * 100.0 / 100.0 } else { 0.0 };
 

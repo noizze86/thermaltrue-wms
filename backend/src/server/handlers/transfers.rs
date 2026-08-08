@@ -32,6 +32,7 @@ pub async fn transfer_material(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::ensure_warehouses_allowed(&pool.pool, &user_id, &[&body.from_warehouse_id, &body.to_warehouse_id]).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     let stock: f64 = sqlx::query_scalar("SELECT quantity FROM materials WHERE id=$1 AND is_active=true")
         .bind(&body.material_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?
         .ok_or_else(|| (axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Material not found"}))))?;
@@ -68,6 +69,13 @@ pub async fn transfer_bulk(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let mut all_whs: Vec<String> = Vec::new();
+    for t in &body.transfers {
+        if let Some(w) = t.get("from_warehouse_id").and_then(|v| v.as_str()) { if !all_whs.iter().any(|x| x == w) { all_whs.push(w.to_string()); } }
+        if let Some(w) = t.get("to_warehouse_id").and_then(|v| v.as_str()) { if !all_whs.iter().any(|x| x == w) { all_whs.push(w.to_string()); } }
+    }
+    let wh_refs: Vec<&str> = all_whs.iter().map(|s| s.as_str()).collect();
+    if !validate::ensure_warehouses_allowed(&pool.pool, &user_id, &wh_refs).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut count: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM transactions WHERE type='transfer'").fetch_one(&mut *db_tx).await.unwrap_or(1);
@@ -113,6 +121,10 @@ pub async fn batch_transfer_rack(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::is_allowed_warehouse(&pool.pool, &user_id, &body.dest_warehouse_id).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
+    let src_wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM racks WHERE id=$1")
+        .bind(&body.source_rack_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?.flatten();
+    if let Some(w) = src_wh { if !validate::is_allowed_warehouse(&pool.pool, &user_id, &w).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let mut db_tx = pool.pool.begin().await.map_err(|e| crate::server::server_error(e))?;
     let materials: Vec<(String, String, f64, String)> = sqlx::query("SELECT id, name, quantity, warehouse_id FROM materials WHERE rack_id=$1 AND is_active=true")
@@ -147,12 +159,18 @@ pub async fn batch_transfer_rack(
 }
 
 pub async fn get_transfer_orders(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Query(q): Query<serde_json::Value>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
     let status_filter = q.get("statusFilter").and_then(|v| v.as_str()).filter(|s| !s.is_empty());
     let mut builder = sqlx::QueryBuilder::new("SELECT id, transfer_number, from_warehouse_id, to_warehouse_id, status, notes, created_by, approved_by, created_at, updated_at FROM transfer_orders WHERE 1=1");
     if let Some(s) = status_filter { builder.push(" AND status = "); builder.push_bind(s); }
+    if let Some(ids) = scope.allowed_ids() {
+        builder.push(" AND (from_warehouse_id = ANY(").push_bind(ids).push(") OR to_warehouse_id = ANY(").push_bind(ids).push("))");
+    }
     builder.push(" ORDER BY created_at DESC");
     let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -172,6 +190,7 @@ pub async fn create_transfer_order(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::ensure_warehouses_allowed(&pool.pool, &user_id, &[&body.from_warehouse_id, &body.to_warehouse_id]).await.map_err(|e| crate::server::server_error(e))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) + 1 FROM transfer_orders").fetch_one(&pool.pool).await.unwrap_or(1);
@@ -200,6 +219,15 @@ pub async fn update_transfer_order_status(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let whs: Vec<(Option<String>, Option<String>)> = sqlx::query_as("SELECT from_warehouse_id, to_warehouse_id FROM transfer_orders WHERE id=$1")
+        .bind(&id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    for (f, t) in &whs {
+        if !(f.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false) || t.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false)) {
+            return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
+        }
+    }
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
     sqlx::query("UPDATE transfer_orders SET status=$1, updated_at=$2 WHERE id=$3")
         .bind(&body.status).bind(&now).bind(&id)
@@ -231,9 +259,19 @@ pub async fn update_transfer_order_status(
 }
 
 pub async fn get_transfer_items(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
     Path(id): Path<String>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let whs: Vec<(Option<String>, Option<String>)> = sqlx::query_as("SELECT from_warehouse_id, to_warehouse_id FROM transfer_orders WHERE id=$1")
+        .bind(&id).fetch_all(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    for (f, t) in &whs {
+        if !(f.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false) || t.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false)) {
+            return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
+        }
+    }
     let rows = sqlx::query("SELECT ti.id, ti.transfer_id, ti.material_id, ti.batch_id, ti.quantity, m.sku, m.name FROM transfer_items ti JOIN materials m ON ti.material_id=m.id WHERE ti.transfer_id=$1")
         .bind(&id).fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
@@ -246,10 +284,16 @@ pub async fn get_transfer_items(
 }
 
 pub async fn get_throughput_metrics(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT w.id, w.name, COALESCE(SUM(CASE WHEN t.type='in' AND t.created_at::date=CURRENT_DATE THEN t.quantity ELSE 0 END),0), COALESCE(SUM(CASE WHEN t.type='out' AND t.created_at::date=CURRENT_DATE THEN t.quantity ELSE 0 END),0), COUNT(CASE WHEN t.created_at::date=CURRENT_DATE THEN 1 END) FROM warehouses w LEFT JOIN transactions t ON w.id=t.warehouse_id GROUP BY w.id ORDER BY w.name")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new("SELECT w.id, w.name, COALESCE(SUM(CASE WHEN t.type='in' AND t.created_at::date=CURRENT_DATE THEN t.quantity ELSE 0 END),0), COALESCE(SUM(CASE WHEN t.type='out' AND t.created_at::date=CURRENT_DATE THEN t.quantity ELSE 0 END),0), COUNT(CASE WHEN t.created_at::date=CURRENT_DATE THEN 1 END) FROM warehouses w LEFT JOIN transactions t ON w.id=t.warehouse_id WHERE 1=1");
+    scope.apply_builder(&mut builder, "w.id", None);
+    builder.push(" GROUP BY w.id ORDER BY w.name");
+    let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"warehouse_id": row.get::<String,_>("id"), "warehouse_name": row.get::<String,_>("name"),
@@ -258,10 +302,16 @@ pub async fn get_throughput_metrics(
 }
 
 pub async fn get_picker_activity(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT u.id, u.full_name, COUNT(*) FROM transactions t JOIN users u ON t.user_id=u.id WHERE t.type='out' AND t.created_at::date=CURRENT_DATE GROUP BY u.id ORDER BY COUNT(*) DESC LIMIT 20")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new("SELECT u.id, u.full_name, COUNT(*) FROM transactions t JOIN users u ON t.user_id=u.id WHERE t.type='out' AND t.created_at::date=CURRENT_DATE");
+    scope.apply_builder(&mut builder, "t.warehouse_id", None);
+    builder.push(" GROUP BY u.id ORDER BY COUNT(*) DESC LIMIT 20");
+    let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"user_id": row.get::<String,_>("id"), "user_name": row.get::<String,_>("full_name"), "pick_count": row.get::<i64,_>(2)})
@@ -269,14 +319,22 @@ pub async fn get_picker_activity(
 }
 
 pub async fn get_slotting_suggestions(
+    Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    use sqlx::QueryBuilder;
+    let mut builder = QueryBuilder::new(
         "SELECT m.id, m.sku, m.name, COALESCE(r.rack_name,'None'), 'Recommended Zone', 'High turnover - move closer to shipping' FROM materials m \
          LEFT JOIN racks r ON m.rack_id=r.id \
-         WHERE m.id IN (SELECT material_id FROM transactions WHERE type='out' AND created_at >= TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS') GROUP BY material_id HAVING SUM(quantity) > 10) \
-         ORDER BY (SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) DESC LIMIT 10"
-    ).fetch_all(&pool.pool).await
+         WHERE m.id IN (SELECT material_id FROM transactions WHERE type='out' AND created_at >= TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')"
+    );
+    scope.apply_builder(&mut builder, "warehouse_id", None);
+    builder.push(" GROUP BY material_id HAVING SUM(quantity) > 10)");
+    scope.apply_builder(&mut builder, "m.warehouse_id", None);
+    builder.push(" ORDER BY (SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at>=TO_CHAR(CURRENT_DATE - INTERVAL '30 days','YYYY-MM-DD HH24:MI:SS')) DESC LIMIT 10");
+    let rows = builder.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"material_id": row.get::<String,_>("id"), "sku": row.get::<String,_>("sku"), "name": row.get::<String,_>("name"),

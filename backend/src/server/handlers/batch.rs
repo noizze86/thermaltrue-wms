@@ -3,6 +3,7 @@ use axum::{Json, extract::State, Extension};
 use serde_json::json;
 use sqlx::Row;
 use crate::db_pool::DbPool;
+use crate::validate;
 
 pub async fn nightly_recalc(
     Extension(user_id): Extension<String>,
@@ -12,6 +13,10 @@ pub async fn nightly_recalc(
         .map_err(|e| crate::server::server_error(e))?
     {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"}))));
+    }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    if !scope.is_all() {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
     }
 
     let rows = sqlx::query("SELECT out_material_id, out_warehouse_id, out_action, out_detail FROM batch_nightly_recalc()")
@@ -44,6 +49,10 @@ pub async fn dashboard_refresh(
         .map_err(|e| crate::server::server_error(e))?
     {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"}))));
+    }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    if !scope.is_all() {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
     }
 
     let rows = sqlx::query("SELECT out_action, out_detail FROM batch_dashboard_refresh()")

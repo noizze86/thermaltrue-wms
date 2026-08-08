@@ -39,6 +39,9 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/users/:id/photo", put(handlers::users::update_photo))
         .route("/api/users/:id/activity", get(handlers::users::get_activity))
         .route("/api/users/:id/log-activity", post(handlers::users::log_activity))
+        .route("/api/users/:id/warehouses", get(handlers::users::get_user_warehouses))
+        .route("/api/users/:id/warehouses", put(handlers::users::set_user_warehouses))
+        .route("/api/users/me/warehouses", get(handlers::users::get_my_warehouses))
         // Stock Opname
         .route("/api/stock-opnames", get(handlers::stock_opname::list))
         .route("/api/stock-opnames", post(handlers::stock_opname::create))

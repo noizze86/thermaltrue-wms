@@ -25,13 +25,26 @@ pub async fn kpi(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let total_materials: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE is_active=true").fetch_one(&pool.pool).await.unwrap_or(0);
-    let total_transactions: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM transactions WHERE status NOT IN ('voided','reversed')").fetch_one(&pool.pool).await.unwrap_or(0);
-    let low_stock: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE quantity <= min_stock AND min_stock > 0 AND is_active=true").fetch_one(&pool.pool).await.unwrap_or(0);
-    let total_warehouses: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM warehouses WHERE is_active=true").fetch_one(&pool.pool).await.unwrap_or(0);
-    let stock_value: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity * price),0) FROM materials WHERE is_active=true").fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let recent_tx_rows = sqlx::query("SELECT id, transaction_number, type, material_id, warehouse_id, quantity, created_at FROM transactions WHERE status NOT IN ('voided','reversed') ORDER BY created_at DESC LIMIT 10")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM materials WHERE is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let total_materials: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM transactions WHERE status NOT IN ('voided','reversed')");
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    let total_transactions: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM materials WHERE quantity <= min_stock AND min_stock > 0 AND is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let low_stock: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*) FROM warehouses WHERE is_active=true");
+    scope.apply_builder(&mut b, "id", None);
+    let total_warehouses: i64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COALESCE(SUM(quantity * price),0) FROM materials WHERE is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let stock_value: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new("SELECT id, transaction_number, type, material_id, warehouse_id, quantity, created_at FROM transactions WHERE status NOT IN ('voided','reversed')");
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    b.push(" ORDER BY created_at DESC LIMIT 10");
+    let recent_tx_rows = b.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     let recent = recent_tx_rows.iter().map(|row| {
         json!({"id": row.get::<String,_>("id"), "transaction_number": row.get::<String,_>("transaction_number"),
@@ -52,8 +65,8 @@ pub async fn analysis_all(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
-let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+let mut builder = sqlx::QueryBuilder::new(
         "SELECT m.id, m.name, m.sku, m.quantity, \
             COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo, \
             COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '180 days'),0) as consumption_6mo, \
@@ -64,8 +77,11 @@ let rows = sqlx::query(
             COALESCE((SELECT forecast_1mo FROM forecast_metrics WHERE material_id=m.id AND period=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD') AND forecast_model='best' LIMIT 1), \
                 (SELECT COALESCE(SUM(quantity)/3.0 * 1.1, 0) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days')) as forecast_qty, \
             (SELECT abc_class FROM abc_classification WHERE material_id=m.id AND period=TO_CHAR(CURRENT_DATE,'YYYY-MM-DD') ORDER BY updated_at DESC LIMIT 1) as abc_class \
-         FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
-    ).bind(wh_filter).fetch_all(&pool.pool).await
+         FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut builder, "m.warehouse_id", q.warehouse_id.as_deref());
+    builder.push(" ORDER BY m.name");
+    let rows = builder.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let last_tx: Option<String> = row.get::<Option<String>,_>("last_transaction");
@@ -294,6 +310,10 @@ pub async fn health_index(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    if !scope.is_allowed(wh) {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
+    }
     let (health_result, _, _) = compute_and_persist_all(&pool.pool, wh).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(health_result))
@@ -308,6 +328,10 @@ pub async fn biggest_losses(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    if !scope.is_allowed(wh) {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
+    }
     let (_, losses, _) = compute_and_persist_all(&pool.pool, wh).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(losses)))
@@ -322,6 +346,10 @@ pub async fn capacity_pressure(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    if !scope.is_allowed(wh) {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
+    }
     let (_, _, capacity_result) = compute_and_persist_all(&pool.pool, wh).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(capacity_result))
@@ -336,6 +364,10 @@ pub async fn compute_all(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let wh = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    if !scope.is_allowed(wh) {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"}))));
+    }
     let (health_result, losses, capacity_result) = compute_and_persist_all(&pool.pool, wh).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!({
@@ -352,15 +384,19 @@ pub async fn metrics_latest(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let row = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT health_index, accuracy_rate, productivity_rate, on_time_shipping_rate, \
          utilization_rate, stock_availability_rate, yesterday_health_index, avg_7days_health_index, \
          trend_direction, capacity_pressure_score, predicted_full_date, top_losses, \
          total_capacity, used_capacity, available_capacity, utilization_pct, \
          avg_daily_inbound, avg_daily_outbound, days_to_full, capacity_status, \
          metric_date, metric_hour, updated_at \
-         FROM dashboard_metrics ORDER BY metric_hour DESC LIMIT 1"
-    ).fetch_optional(&pool.pool).await
+         FROM dashboard_metrics WHERE 1=1"
+    );
+    scope.apply_builder(&mut b, "dashboard_metrics.warehouse_id", None);
+    b.push(" ORDER BY metric_hour DESC LIMIT 1");
+    let row = b.build().fetch_optional(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
 
     match row {
@@ -401,17 +437,20 @@ pub async fn abc_analysis(
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
     let mode = q.mode.as_deref().unwrap_or("single");
-    let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
 
     if mode == "multi" {
-        let rows = sqlx::query(
+        let mut b = sqlx::QueryBuilder::new(
             "SELECT m.id, m.name, m.sku, m.quantity, m.min_stock, \
              COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo, \
              COALESCE((SELECT MAX(created_at) FROM transactions WHERE material_id=m.id),'') as last_transaction, \
              COALESCE((SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as pick_frequency, \
              COALESCE((SELECT COUNT(DISTINCT DATE(created_at)) FROM transactions WHERE type='out' AND material_id=m.id),0) as lead_time_days \
-             FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
-        ).bind(wh_filter).fetch_all(&pool.pool).await
+             FROM materials m WHERE m.is_active=true"
+        );
+        scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+        b.push(" ORDER BY m.name");
+        let rows = b.build().fetch_all(&pool.pool).await
          .map_err(|e| crate::server::server_error(e))?;
 
         let weights = sqlx::query("SELECT key, value FROM abc_weights")
@@ -466,12 +505,15 @@ pub async fn abc_analysis(
         }
         Ok(Json(json!({"class_a": class_a, "class_b": class_b, "class_c": class_c, "mode": "multi", "weights": {"value_w": (w_value * 1000.0).round() / 1000.0, "frequency_w": (w_freq * 1000.0).round() / 1000.0, "criticality_w": (w_crit * 1000.0).round() / 1000.0}})))
     } else {
-        let rows = sqlx::query(
+        let mut b = sqlx::QueryBuilder::new(
             "SELECT m.id, m.name, m.sku, m.quantity, \
              COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '365 days'),0) as consumption_12mo, \
              COALESCE((SELECT MAX(created_at) FROM transactions WHERE material_id=m.id),'') as last_transaction \
-             FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY consumption_12mo DESC"
-        ).bind(wh_filter).fetch_all(&pool.pool).await
+             FROM materials m WHERE m.is_active=true"
+        );
+        scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+        b.push(" ORDER BY consumption_12mo DESC");
+        let rows = b.build().fetch_all(&pool.pool).await
          .map_err(|e| crate::server::server_error(e))?;
         let total: f64 = rows.iter().map(|r| r.get::<f64,_>("consumption_12mo")).sum();
         let mut cumulative = 0.0;
@@ -502,29 +544,44 @@ pub async fn mom_kpis(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
     let now = chrono::Local::now().naive_local();
     let cur_month_start = now.format("%Y-%m-01 00:00:00").to_string();
     let prev_month_start = (now - chrono::Duration::days(now.day() as i64)).format("%Y-%m-01 00:00:00").to_string();
 
-    let cur_materials: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
-    let cur_value: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity*price),0) FROM materials WHERE is_active=true")
-        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
-    let cur_low_stock: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE quantity<=min_stock AND min_stock>0 AND is_active=true")
-        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
-    let cur_transactions: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed')")
-        .fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
-    let cur_tx_month: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at>=$1")
-        .bind(&cur_month_start).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*)::float FROM materials WHERE is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let cur_materials: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COALESCE(SUM(quantity*price),0) FROM materials WHERE is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let cur_value: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*)::float FROM materials WHERE quantity<=min_stock AND min_stock>0 AND is_active=true");
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let cur_low_stock: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed')");
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    let cur_transactions: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at>=$1");
+    b.push_bind(&cur_month_start);
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    let cur_tx_month: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
 
-    let prev_materials: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE is_active=true AND created_at<$1")
-        .bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(cur_materials);
-    let prev_value: f64 = sqlx::query_scalar("SELECT COALESCE(SUM(quantity*price),0) FROM materials WHERE is_active=true AND created_at<$1")
-        .bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let prev_low_stock: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM materials WHERE quantity<=min_stock AND min_stock>0 AND is_active=true AND created_at<$1")
-        .bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(0.0);
-    let prev_transactions: f64 = sqlx::query_scalar("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at>=$1 AND created_at<$2")
-        .bind(&prev_month_start).bind(&cur_month_start).fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*)::float FROM materials WHERE is_active=true AND created_at<$1");
+    b.push_bind(&cur_month_start);
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let prev_materials: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(cur_materials);
+    let mut b = sqlx::QueryBuilder::new("SELECT COALESCE(SUM(quantity*price),0) FROM materials WHERE is_active=true AND created_at<$1");
+    b.push_bind(&cur_month_start);
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let prev_value: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*)::float FROM materials WHERE quantity<=min_stock AND min_stock>0 AND is_active=true AND created_at<$1");
+    b.push_bind(&cur_month_start);
+    scope.apply_builder(&mut b, "materials.warehouse_id", None);
+    let prev_low_stock: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
+    let mut b = sqlx::QueryBuilder::new("SELECT COUNT(*)::float FROM transactions WHERE status NOT IN ('voided','reversed') AND created_at>=$1 AND created_at<$2");
+    b.push_bind(&prev_month_start); b.push_bind(&cur_month_start);
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    let prev_transactions: f64 = b.build_query_scalar().fetch_one(&pool.pool).await.unwrap_or(0.0);
 
     let pct = |cur: f64, prev: f64| -> f64 { if prev == 0.0 { 0.0 } else { ((cur - prev) / prev * 100.0 * 100.0).round() / 100.0 } };
 
@@ -545,12 +602,16 @@ pub async fn aging_report(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT CASE WHEN days >= 90 THEN '90+' WHEN days >= 60 THEN '60-90' WHEN days >= 30 THEN '30-60' ELSE '0-30' END as bucket, \
          COUNT(*) as cnt, COALESCE(SUM(quantity * price),0) as val FROM (SELECT m.id, m.quantity, m.price, \
          COALESCE((SELECT EXTRACT(DAY FROM NOW() - MAX(created_at::timestamp)) FROM transactions WHERE material_id=m.id),999) as days \
-         FROM materials m WHERE m.is_active=true) sub GROUP BY bucket ORDER BY bucket"
-    ).fetch_all(&pool.pool).await
+         FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", None);
+    b.push(") sub GROUP BY bucket ORDER BY bucket");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"bucket": row.get::<String,_>("bucket"), "count": row.get::<i64,_>("cnt"), "total_value": row.get::<f64,_>("val")})
@@ -567,12 +628,17 @@ pub async fn stock_movement(
     }
     let start = q.get("periodStart").and_then(|v| v.as_str()).unwrap_or("");
     let end = q.get("periodEnd").and_then(|v| v.as_str()).unwrap_or("");
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT m.name, COALESCE((SELECT SUM(quantity) FROM transactions WHERE material_id=m.id AND created_at < $1 AND type='in'),0) as opening, \
          COALESCE((SELECT SUM(quantity) FROM transactions WHERE material_id=m.id AND created_at >= $1 AND created_at < $2 AND type='in'),0) as qty_in, \
          COALESCE((SELECT SUM(quantity) FROM transactions WHERE material_id=m.id AND created_at >= $1 AND created_at < $2 AND type='out'),0) as qty_out \
-         FROM materials m WHERE m.is_active=true ORDER BY m.name"
-    ).bind(start).bind(end).fetch_all(&pool.pool).await
+         FROM materials m WHERE m.is_active=true"
+    );
+    b.push_bind(&start); b.push_bind(&end);
+    scope.apply_builder(&mut b, "m.warehouse_id", None);
+    b.push(" ORDER BY m.name");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let o: f64 = row.get("opening"); let i: f64 = row.get("qty_in"); let oo: f64 = row.get("qty_out");
@@ -587,8 +653,11 @@ pub async fn tx_type_summary(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let rows = sqlx::query("SELECT type, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val FROM transactions WHERE status NOT IN ('voided','reversed') GROUP BY type ORDER BY type")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT type, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val FROM transactions WHERE status NOT IN ('voided','reversed')");
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    b.push(" GROUP BY type ORDER BY type");
+    let rows = b.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"name": row.get::<String,_>("type"), "count": row.get::<i64,_>("cnt"), "value": row.get::<f64,_>("val")})
@@ -605,8 +674,12 @@ pub async fn tx_by_user(
     }
     let ds = q.get("dateStart").and_then(|v| v.as_str()).unwrap_or("");
     let de = q.get("dateEnd").and_then(|v| v.as_str()).unwrap_or("");
-    let rows = sqlx::query("SELECT t.user_id, u.full_name, COUNT(*) as cnt, COALESCE(SUM(t.quantity),0) as val FROM transactions t JOIN users u ON t.user_id=u.id WHERE ($1='' OR t.created_at>=$1) AND ($2='' OR t.created_at<$2) AND t.status NOT IN ('voided','reversed') GROUP BY t.user_id, u.full_name ORDER BY cnt DESC")
-        .bind(ds).bind(de).fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT t.user_id, u.full_name, COUNT(*) as cnt, COALESCE(SUM(t.quantity),0) as val FROM transactions t JOIN users u ON t.user_id=u.id WHERE ($1='' OR t.created_at>=$1) AND ($2='' OR t.created_at<$2) AND t.status NOT IN ('voided','reversed')");
+    b.push_bind(&ds); b.push_bind(&de);
+    scope.apply_builder(&mut b, "t.warehouse_id", None);
+    b.push(" GROUP BY t.user_id, u.full_name ORDER BY cnt DESC");
+    let rows = b.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"user_id": row.get::<String,_>("user_id"), "user_name": row.get::<String,_>("full_name"),
@@ -624,8 +697,12 @@ pub async fn daily_trend(
     }
     let ds = q.get("dateStart").and_then(|v| v.as_str()).unwrap_or("");
     let de = q.get("dateEnd").and_then(|v| v.as_str()).map(|s| if s.is_empty() { String::new() } else { format!("{} 23:59:59", s) }).unwrap_or_default();
-    let rows = sqlx::query("SELECT DATE(created_at)::text as date, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val FROM transactions WHERE ($1='' OR created_at>=$1) AND ($2='' OR created_at<=$2) AND status NOT IN ('voided','reversed') GROUP BY DATE(created_at) ORDER BY date")
-        .bind(ds).bind(de).fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT DATE(created_at)::text as date, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val FROM transactions WHERE ($1='' OR created_at>=$1) AND ($2='' OR created_at<=$2) AND status NOT IN ('voided','reversed')");
+    b.push_bind(&ds); b.push_bind(&de);
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    b.push(" GROUP BY DATE(created_at) ORDER BY date");
+    let rows = b.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"date": row.get::<String,_>("date"), "count": row.get::<i64,_>("cnt"), "value": row.get::<f64,_>("val")})
@@ -644,12 +721,16 @@ pub async fn tx_date_comparison(
     let a_e = q.get("aEnd").and_then(|v| v.as_str()).unwrap_or("");
     let b_s = q.get("bStart").and_then(|v| v.as_str()).unwrap_or("");
     let b_e = q.get("bEnd").and_then(|v| v.as_str()).unwrap_or("");
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT DATE(created_at)::text as date, COUNT(*) as cnt, COALESCE(SUM(quantity),0) as val, \
          CASE WHEN created_at >= $1 AND created_at < $2 THEN 'A' WHEN created_at >= $3 AND created_at < $4 THEN 'B' END as series \
-         FROM transactions WHERE ((created_at >= $1 AND created_at < $2) OR (created_at >= $3 AND created_at < $4)) AND status NOT IN ('voided','reversed') \
-         GROUP BY DATE(created_at), series ORDER BY date"
-    ).bind(a_s).bind(a_e).bind(b_s).bind(b_e).fetch_all(&pool.pool).await
+         FROM transactions WHERE ((created_at >= $1 AND created_at < $2) OR (created_at >= $3 AND created_at < $4)) AND status NOT IN ('voided','reversed')"
+    );
+    b.push_bind(&a_s); b.push_bind(&a_e); b.push_bind(&b_s); b.push_bind(&b_e);
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    b.push(" GROUP BY DATE(created_at), series ORDER BY date");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let series: Option<String> = row.get("series");
@@ -665,8 +746,11 @@ pub async fn category_value_summary(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let rows = sqlx::query("SELECT COALESCE(c.name,'Uncategorized') as name, COUNT(m.id) as cnt, COALESCE(SUM(m.quantity*m.price),0) as val FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true GROUP BY c.name ORDER BY val DESC")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COALESCE(c.name,'Uncategorized') as name, COUNT(m.id) as cnt, COALESCE(SUM(m.quantity*m.price),0) as val FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true");
+    scope.apply_builder(&mut b, "m.warehouse_id", None);
+    b.push(" GROUP BY c.name ORDER BY val DESC");
+    let rows = b.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"name": row.get::<String,_>("name"), "count": row.get::<i64,_>("cnt"), "value": row.get::<f64,_>("val")})
@@ -680,8 +764,11 @@ pub async fn stock_valuation(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let rows = sqlx::query("SELECT COALESCE(c.name,'Uncategorized') as category, SUM(m.quantity*m.price) as value, COUNT(m.id) as count FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true GROUP BY c.name ORDER BY value DESC")
-        .fetch_all(&pool.pool).await
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new("SELECT COALESCE(c.name,'Uncategorized') as category, SUM(m.quantity*m.price) as value, COUNT(m.id) as count FROM materials m LEFT JOIN categories c ON m.category_id=c.id WHERE m.is_active=true");
+    scope.apply_builder(&mut b, "m.warehouse_id", None);
+    b.push(" GROUP BY c.name ORDER BY value DESC");
+    let rows = b.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         json!({"category": row.get::<String,_>("category"), "value": row.get::<f64,_>("value"), "count": row.get::<i64,_>("count")})
@@ -699,12 +786,16 @@ pub async fn demand_forecast(
     let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
     let period = chrono::Local::now().format("%Y-%m-%d").to_string();
     let now_str = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT m.id, m.name, m.sku, m.quantity, m.min_stock, m.max_stock,
             COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '90 days'),0) as consumption_3mo,
             COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as consumption_1mo
-         FROM materials m WHERE m.is_active=true AND ($1 = '' OR m.warehouse_id = $1) ORDER BY m.name"
-    ).bind(wh_filter).fetch_all(&pool.pool).await
+         FROM materials m WHERE m.is_active=true"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(" ORDER BY m.name");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
     let mut items: Vec<serde_json::Value> = Vec::new();
     for row in &rows {
@@ -748,14 +839,17 @@ pub async fn reorder_suggestions(
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
     }
-    let wh_filter = q.warehouse_id.as_deref().unwrap_or("");
-    let rows = sqlx::query(
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
         "SELECT m.id, m.name, m.sku, m.quantity, m.min_stock, m.max_stock, m.price,
             COALESCE(s.name,'') as supplier,
             COALESCE((SELECT SUM(quantity) FROM transactions WHERE type='out' AND material_id=m.id AND created_at::timestamp >= NOW() - INTERVAL '30 days'),0) as monthly_usage
          FROM materials m LEFT JOIN suppliers s ON m.supplier_id=s.id
-         WHERE m.is_active=true AND m.quantity <= m.max_stock AND ($1 = '' OR m.warehouse_id = $1) ORDER BY (m.quantity - m.min_stock) ASC"
-    ).bind(wh_filter).fetch_all(&pool.pool).await
+         WHERE m.is_active=true AND m.quantity <= m.max_stock"
+    );
+    scope.apply_builder(&mut b, "m.warehouse_id", q.warehouse_id.as_deref());
+    b.push(" ORDER BY (m.quantity - m.min_stock) ASC");
+    let rows = b.build().fetch_all(&pool.pool).await
      .map_err(|e| crate::server::server_error(e))?;
     Ok(Json(json!(rows.iter().map(|row| {
         let qty: f64 = row.get("quantity");
@@ -781,6 +875,15 @@ pub async fn opname_variance(
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
         return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    if !scope.is_all() {
+        let wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
+            .bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
+        match wh {
+            Some(w) if scope.is_allowed(&w) => {}
+            _ => return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))),
+        }
     }
     let rows = sqlx::query("SELECT COALESCE(c.name,'Uncategorized') as category, COALESCE(SUM(soi.difference),0) as total_diff FROM stock_opname_items soi LEFT JOIN materials m ON soi.material_id=m.id LEFT JOIN categories c ON m.category_id=c.id WHERE soi.opname_id=$1 GROUP BY c.name ORDER BY total_diff DESC")
         .bind(&id).fetch_all(&pool.pool).await

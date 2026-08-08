@@ -13,10 +13,14 @@ pub struct ListParams { pub warehouse_id: Option<String>, pub search: Option<Str
 
 pub async fn list(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Query(params): Query<ListParams>,
 ) -> Result<Json<Vec<Rack>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
     let mut builder = sqlx::QueryBuilder::new("SELECT id, warehouse_id, area, rack_name, bin_location, max_capacity, location_id, created_at FROM racks WHERE 1=1");
-    if let Some(ref w) = params.warehouse_id { if !w.is_empty() { builder.push(" AND warehouse_id = ").push_bind(w); } }
+    scope.apply_builder(&mut builder, "warehouse_id", params.warehouse_id.as_deref());
     if let Some(ref s) = params.search { if !s.is_empty() { builder.push(" AND (rack_name LIKE ").push_bind(format!("%{}%", s)).push(" OR area LIKE ").push_bind(format!("%{}%", s)).push(" OR bin_location LIKE ").push_bind(format!("%{}%", s)).push(")"); } }
     builder.push(" ORDER BY rack_name");
     let rows = builder.build().fetch_all(&pool.pool).await
@@ -31,6 +35,7 @@ pub async fn create(
     Json(rack): Json<Rack>,
 ) -> Result<Json<Rack>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::is_allowed_warehouse(&pool.pool, &user_id, &rack.warehouse_id).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     validate::validate_string(&rack.rack_name, "Rack name", 100).map_err(|e| (axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": e.to_string()}))))?;
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -49,6 +54,7 @@ pub async fn update(
     Json(rack): Json<Rack>,
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    if !validate::is_allowed_warehouse(&pool.pool, &user_id, &rack.warehouse_id).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
     sqlx::query("UPDATE racks SET warehouse_id=$1, area=$2, rack_name=$3, bin_location=$4, max_capacity=$5, location_id=$6 WHERE id=$7")
         .bind(&rack.warehouse_id).bind(&rack.area).bind(&rack.rack_name).bind(&rack.bin_location).bind(rack.max_capacity).bind(&rack.location_id).bind(&rack.id)
         .execute(&pool.pool).await
@@ -64,6 +70,12 @@ pub async fn delete(
 ) -> Result<Json<()>, (axum::http::StatusCode, Json<serde_json::Value>)> {
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     if !validate::check_user_permission(&pool.pool, &user_id, "delete_any").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM racks WHERE id=$1")
+        .bind(&id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?
+        .flatten();
+    if let Some(w) = wh {
+        if !validate::is_allowed_warehouse(&pool.pool, &user_id, &w).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
+    }
     let used: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM materials WHERE rack_id=$1")
         .bind(&id).fetch_one(&pool.pool).await.map_err(|e| crate::server::server_error(e))?;
     if used > 0 { return Err((axum::http::StatusCode::BAD_REQUEST, Json(json!({"error": format!("Cannot delete rack: still contains {} material(s)", used)})))); }
@@ -76,9 +88,15 @@ pub async fn delete(
 // --- Rack Occupancy ---
 pub async fn occupancy(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
 ) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query("SELECT r.id, r.max_capacity, COUNT(m.id) as material_count, COALESCE(SUM(m.quantity), 0) as total_qty FROM racks r LEFT JOIN materials m ON m.rack_id = r.id AND m.is_active = true GROUP BY r.id")
-        .fetch_all(&pool.pool).await
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let mut builder = sqlx::QueryBuilder::new("SELECT r.id, r.max_capacity, COUNT(m.id) as material_count, COALESCE(SUM(m.quantity), 0) as total_qty FROM racks r LEFT JOIN materials m ON m.rack_id = r.id AND m.is_active = true WHERE 1=1");
+    scope.apply_builder(&mut builder, "r.warehouse_id", None);
+    builder.push(" GROUP BY r.id");
+    let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| { json!({"rack_id": row.get::<String,_>(0), "max_capacity": row.get::<f64,_>(1), "material_count": row.get::<i64,_>(2), "total_quantity": row.get::<f64,_>(3)}) }).collect();
     Ok(Json(list))
@@ -86,15 +104,21 @@ pub async fn occupancy(
 
 pub async fn occupancy_details(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
 ) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let rows = sqlx::query(
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let mut builder = sqlx::QueryBuilder::new(
         "SELECT r.id, r.warehouse_id, r.rack_name, r.area, r.max_capacity, \
          COUNT(m.id) as material_count, COALESCE(SUM(m.quantity), 0) as total_qty, \
          COALESCE((SELECT MAX(t.created_at::timestamp)::text FROM transactions t WHERE t.material_id IN (SELECT id FROM materials WHERE rack_id=r.id) AND t.created_at::timestamp > NOW() - INTERVAL '30 days'), '') as recent \
-         FROM racks r LEFT JOIN materials m ON m.rack_id = r.id AND m.is_active = true GROUP BY r.id ORDER BY r.warehouse_id, r.rack_name"
-    )
-    .fetch_all(&pool.pool).await
-    .map_err(|e| crate::server::server_error(e))?;
+         FROM racks r LEFT JOIN materials m ON m.rack_id = r.id AND m.is_active = true WHERE 1=1"
+    );
+    scope.apply_builder(&mut builder, "r.warehouse_id", None);
+    builder.push(" GROUP BY r.id ORDER BY r.warehouse_id, r.rack_name");
+    let rows = builder.build().fetch_all(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
     let list = rows.iter().map(|row| { json!({"rack_id": row.get::<String,_>(0), "warehouse_id": row.get::<String,_>(1), "rack_name": row.get::<String,_>(2), "area": row.get::<String,_>(3), "max_capacity": row.get::<f64,_>(4), "material_count": row.get::<i64,_>(5), "total_quantity": row.get::<f64,_>(6), "recent_activity": row.get::<String,_>(7)}) }).collect();
     Ok(Json(list))
 }
@@ -102,8 +126,15 @@ pub async fn occupancy_details(
 // --- Utilization History ---
 pub async fn utilization_history(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Path(rack_id): Path<String>,
 ) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    let wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM racks WHERE id=$1")
+        .bind(&rack_id).fetch_optional(&pool.pool).await.map_err(|e| crate::server::server_error(e))?
+        .flatten();
+    if let Some(w) = wh {
+        if !validate::is_allowed_warehouse(&pool.pool, &user_id, &w).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
+    }
     let rows = sqlx::query(
         "SELECT id, rack_id, used_capacity, recorded_at FROM rack_utilization_log WHERE rack_id=$1 ORDER BY recorded_at DESC LIMIT 100"
     )
@@ -123,14 +154,18 @@ pub struct PutawayParams { pub warehouse_id: Option<String>, pub material_id: Op
 
 pub async fn putaway_suggestion(
     State(pool): State<Arc<DbPool>>,
+    Extension(user_id): Extension<String>,
     Query(params): Query<PutawayParams>,
 ) -> Result<Json<Vec<serde_json::Value>>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await
+        .map_err(|e| crate::server::server_error(e))?;
     let mut builder = sqlx::QueryBuilder::new(
         "SELECT r.id, r.rack_name, r.area, r.max_capacity, \
          COALESCE(SUM(m.quantity), 0) as used_qty, r.max_capacity - COALESCE(SUM(m.quantity), 0) as free_space \
          FROM racks r LEFT JOIN materials m ON m.rack_id = r.id AND m.is_active = true WHERE 1=1"
     );
-    if let Some(ref w) = params.warehouse_id { if !w.is_empty() { builder.push(" AND r.warehouse_id = ").push_bind(w); } }
+    scope.apply_builder(&mut builder, "r.warehouse_id", params.warehouse_id.as_deref());
     builder.push(" GROUP BY r.id ORDER BY free_space DESC LIMIT 20");
     let rows = builder.build().fetch_all(&pool.pool).await
         .map_err(|e| crate::server::server_error(e))?;
