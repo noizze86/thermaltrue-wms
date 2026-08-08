@@ -93,6 +93,7 @@ impl DbPool {
             sqlx::query("INSERT INTO users (id, username, password_hash, full_name, role) VALUES ($1, $2, $3, $4, 'admin')")
                 .bind(&id).bind("admin").bind(&hash).bind("Administrator")
                 .execute(pool).await?;
+            log::info!("Seeded admin user 'admin' (set DEFAULT_ADMIN_PASSWORD for a fixed password; current: {})", default_pass);
             let wh1 = uuid::Uuid::new_v4().to_string();
             sqlx::query("INSERT INTO warehouses (id, name, code, location) VALUES ($1, 'Main Warehouse', 'WH-001', 'Jakarta')")
                 .bind(&wh1).execute(pool).await?;

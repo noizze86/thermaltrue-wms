@@ -92,7 +92,7 @@ pub async fn set_user_warehouses(
         inserted += 1;
     }
     tx.commit().await.map_err(|e| crate::server::server_error(e))?;
-    crate::server::handlers::audit(&pool.pool, &user_id, "update", "user", &id, &format!("Warehouse access set (role {}, {} warehouses)", role, inserted)).await;
+    crate::server::handlers::audit(&pool.pool, &user_id, "update", "user", &id, &format!("Warehouse access set (role {}, {} warehouses)", role.as_deref().unwrap_or("unknown"), inserted)).await;
     Ok(Json(()))
 }
 

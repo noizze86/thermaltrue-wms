@@ -88,12 +88,15 @@ async fn cmd_run() {
 // ── Auto-backup scheduler ───────────────────────────────────────────────
 
 fn spawn_backup_scheduler() {
-    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| "backups".into());
+    let backup_dir = std::env::var("BACKUP_DIR").unwrap_or_else(|_| {
+        env_dir().join("backups").to_string_lossy().into_owned()
+    });
     let backup_interval_secs: u64 = std::env::var("BACKUP_INTERVAL_HOURS").ok()
         .and_then(|h| h.parse::<u64>().ok())
         .unwrap_or(24)
         * 3600;
     std::fs::create_dir_all(&backup_dir).ok();
+    log::info!("Backup scheduler: dir={} interval={}h", backup_dir, backup_interval_secs / 3600);
     tokio::spawn(async move {
         loop {
             tokio::time::sleep(std::time::Duration::from_secs(backup_interval_secs)).await;

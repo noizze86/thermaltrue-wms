@@ -115,7 +115,7 @@ pub async fn update_status(
         .bind(&id).fetch_one(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?;
     if !task_exists { return Err((axum::http::StatusCode::NOT_FOUND, Json(json!({"error":"Stock opname task not found"})))); }
     let op_wh: Option<String> = sqlx::query_scalar("SELECT warehouse_id FROM stock_opname WHERE id=$1")
-        .bind(&id).fetch_one(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?
+        .bind(&id).fetch_optional(&mut *db_tx).await.map_err(|e| crate::server::server_error(e))?
         .flatten();
     let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
     if !(scope.is_all() || op_wh.as_deref().map(|w| scope.is_allowed(w)).unwrap_or(false)) { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); }
@@ -411,7 +411,6 @@ pub async fn create_cycle_schedule(
     State(pool): State<Arc<DbPool>>,
     Json(body): Json<CreateCycleBody>,
 ) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
-    let user_id = Extension(_user_id).0;
     let user_id = Extension(_user_id).0;
     if !validate::check_user_permission(&pool.pool, &user_id, "manage_warehouse").await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Permission denied"})))); }
     if let Some(w) = &body.warehouse_id { if !validate::is_allowed_warehouse(&pool.pool, &user_id, w).await.map_err(|e| (axum::http::StatusCode::FORBIDDEN, Json(json!({"error": e.to_string()}))))? { return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error":"Warehouse access denied"})))); } }
