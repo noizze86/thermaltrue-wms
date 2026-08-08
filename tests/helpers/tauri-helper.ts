@@ -296,6 +296,15 @@ export class TauriMcpClient {
     return new Promise(r => setTimeout(r, ms));
   }
 
+  async resetAuth(): Promise<void> {
+    const script = `(() => { localStorage.removeItem('wms_user'); localStorage.removeItem('wms_token'); location.hash = '#/'; location.reload(); return 'ok'; })()`;
+    try {
+      await this.callTool("webview_execute_js", { script });
+    } catch {
+      // app may reload before reply — ignore
+    }
+  }
+
   async disconnect(): Promise<void> {
     await this.endSession();
     if (this.process) {
@@ -322,6 +331,7 @@ export async function setupTest(): Promise<TauriMcpClient> {
   const client = getClient();
   await client.connect();
   await client.startSession("127.0.0.1", parseInt(process.env.MCP_BRIDGE_PORT || "9223", 10));
+  await client.resetAuth();
   await client.sleep(1000);
   return client;
 }
