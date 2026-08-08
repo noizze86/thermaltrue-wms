@@ -48,3 +48,8 @@ tmp_login.json
 tmp_tx.json
 reset_admin_password.txt
 set_admin_pass.sql
+# Installer build artifacts (large payloads)
+installer/payload/*.exe
+installer/payload/*.msi
+dist-installer/
+installer/payload/pg-download.log
