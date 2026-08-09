@@ -15,7 +15,6 @@ env:
   TAURI_KEY_PASSWORD: ${{ secrets.TAURI_KEY_PASSWORD }}
   DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/thermaltrue?sslmode=disable
   DEFAULT_ADMIN_PASSWORD: admin123
-  TAURI_APP_PATH: ${{ github.workspace }}\target\debug\app.exe
 
 jobs:
   test-e2e:
@@ -154,11 +153,11 @@ jobs:
           PORT: "3000"
           DATABASE_URL: ${{ env.DATABASE_URL }}
           DEFAULT_ADMIN_PASSWORD: admin123
-          TAURI_APP_PATH: ${{ env.TAURI_APP_PATH }}
           MCP_BRIDGE_PORT: "9223"
         timeout-minutes: 30
         run: |
           $ErrorActionPreference = "Stop"
+          $env:TAURI_APP_PATH = Join-Path $env:GITHUB_WORKSPACE "target\debug\app.exe"
           $logDir = Join-Path $env:GITHUB_WORKSPACE "tests\results"
           New-Item -ItemType Directory -Path $logDir -Force | Out-Null
 
