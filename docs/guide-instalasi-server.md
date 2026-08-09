@@ -1,387 +1,301 @@
-# Panduan Instalasi Server Thermaltrue WMS
+# Panduan Instalasi Server Thermaltrue WMS v1.0.4
 
-Panduan ini untuk deployment **Opsi B (Browser-based)** — pengguna mengakses aplikasi via web browser, tanpa perlu install MSI.
+Panduan ini menjelaskan **instalasi server** menggunakan installer satu-file **`Thermaltrue-Setup-1.0.4.exe`**. Installer ini otomatis memasang:
+
+- **PostgreSQL 18** (database dibundel — tidak perlu install manual)
+- **API server** (`server.exe`) + web UI (`dist/`)
+- **Windows Service** `ThermaltrueServer` (auto-start saat boot)
+- **Aturan Firewall** untuk port API
+- **Selftest otomatis** pasca-instalasi (laporan `readiness-report.json`)
+
+> Instalasi aplikasi Desktop (MSI/NSIS) ada di dokumen terpisah: `docs/guide-instalasi-desktop.md`.
 
 ---
 
-## 1. Persiapan
-
-### 1.1 Spesifikasi Minimal Server
+## 1. Persyaratan Sistem (Server)
 
 | Komponen | Minimal | Rekomendasi |
 |----------|---------|-------------|
-| OS | Windows 10/11 / Windows Server 2019+ | Windows Server 2022 |
+| OS | Windows 10 64-bit (build 19044+/20H2+) atau Windows Server 2016+ | Windows 11 / Server 2022 |
+| Arsitektur | x64 | x64 |
 | CPU | 2 core | 4 core |
 | RAM | 4 GB | 8 GB |
 | Storage | 10 GB free | 50 GB SSD |
-| Database | PostgreSQL 14+ | PostgreSQL 16 |
+| Hak akses | **Administrator** (wajib — untuk install service + firewall) | — |
+| Database | Tidak perlu — PostgreSQL 18 terpasang otomatis | — |
 
-### 1.2 Install PostgreSQL
+> [!NOTE]
+> Installer membutuhkan hak **Administrator**. Klik kanan setup → **Run as administrator**.
 
-1. Download installer dari https://www.postgresql.org/download/windows/
-2. Jalankan installer, catat **port** (default `5432`) dan **password user `postgres`**
-3. Pastikan service PostgreSQL berjalan:
-   ```powershell
-   Get-Service postgresql*
-   ```
+---
 
-### 1.3 Buat Database
+## 2. Unduh Installer
 
-Buka **SQL Shell (psql)** atau gunakan pgAdmin, lalu jalankan:
+1. Buka halaman rilis: **https://github.com/noizze86/thermaltrue-wms/releases**
+2. Cari rilis **v1.0.4**
+3. Download **`Thermaltrue-Setup-1.0.4.exe`** (± 386 MB)
 
-```sql
-CREATE DATABASE thermaltrue;
-```
-
-Atau via command line:
+Verifikasi ukuran file (sekali waktu):
 
 ```powershell
-psql -U postgres -c "CREATE DATABASE thermaltrue;"
+(Get-Item "C:\temp\Thermaltrue-Setup-1.0.4.exe").Length
+# Harus: 386046262
 ```
 
 ---
 
-## 2. Instalasi Server
+## 3. Instalasi Server
 
-### 2.1 File yang Dibutuhkan
+### 3.1. Jalankan Installer
 
-Salin folder berikut ke server:
+Klik kanan `Thermaltrue-Setup-1.0.4.exe` → **Run as administrator** → wizard Inno Setup muncul.
 
-```
-server/
-├── server.exe          # Aplikasi server (~20 MB)
-└── dist/               # Frontend (hasilkan dari npm run build)
-    ├── index.html
-    ├── favicon.svg
-    ├── manifest.json
-    ├── icons.svg
-    └── assets/
-        ├── index-*.js
-        ├── vendor-*.js
-        ├── index-*.css
-        └── ...
-```
+### 3.2. Pilih Komponen
 
-Bisa diletakkan di mana saja, misal `C:\thermaltrue\`.
+| Jenis | Isi | Kapan digunakan |
+|-------|-----|-----------------|
+| **Full** | Server + database + Desktop client | Satu PC sebagai server sekaligus client |
+| **Server** | Server + database (tanpa client) | PC server murni; client akses browser/desktop |
+| **Client** | Hanya aplikasi Desktop (tanpa server/db) | PC kerja yang memakai server lain |
 
-### 2.2 Cara Mendapatkan File
+> Untuk server produksi biasa: pilih **Server** (atau **Full** bila PC itu juga dipakai kerja).
 
-#### Opsi A — Build sendiri (dari source code)
+### 3.3. Port
 
-```powershell
-# 1. Build frontend
-cd C:\thermaltrue\project
-npm run build
+Wizard menampilkan halaman **Server ports**:
 
-# 2. Build server
-cargo build --release -p server
+| Kolom | Default | Keterangan |
+|-------|---------|------------|
+| API server port | `3000` | Web UI + REST API |
+| PostgreSQL port | `5432` | Database PostgreSQL 18 |
 
-# 3. Salin ke folder deploy
-mkdir C:\thermaltrue\server
-copy target\release\server.exe C:\thermaltrue\server\
-copy -Recurse dist C:\thermaltrue\server\dist\
-```
+Jika port sudah dipakai program lain, ganti sekarang (lihat §8.2).
 
-#### Opsi B — Download rilis (jika sudah ada rilis)
+### 3.4. Proses Install (otomatis)
 
-Ambil file `server.exe` dan `dist.zip` dari halaman Releases repository.
+1. **PostgreSQL 18** diinstall silent — superuser `postgres` dibuat dengan **password acak** (disimpan ke `installer-notes.txt`)
+2. **server.exe** + **dist/** disalin ke `C:\Program Files\Thermaltrue\`
+3. **Windows Service** `ThermaltrueServer` dibuat (auto-start) + aturan firewall untuk port API
+4. **`.env`** dibuat otomatis (DATABASE_URL mengarah ke PG yang baru, PORT, JWT_SECRET auto-generate)
+5. **Selftest** dijalankan: cek `/api/health/db` → hasil `readiness-report.json`
 
-### 2.3 Struktur Folder Final
+Tunggu proses selesai (± 3–7 menit tergantung PC; pertama kali install PG).
 
-```
-C:\thermaltrue\server\
-├── server.exe
-├── dist\
-│   ├── index.html
-│   └── assets\...
-├── .env                 # (dibuat otomatis atau manual)
-└── logs\                # (opsional, untuk log file)
-```
+### 3.5. Setelah Selesai
 
-### 2.4 Konfigurasi Environment
-
-Buat file `.env` di folder yang sama dengan `server.exe`:
-
-```ini
-# Wajib
-DATABASE_URL=postgresql://postgres:password@localhost:5432/thermaltrue?sslmode=disable
-
-# Opsional (dibuat otomatis jika tidak diisi)
-JWT_SECRET=your-random-secret-key-min-32-characters
-
-# Opsional
-PORT=3000
-FRONTEND_DIST=C:\thermaltrue\server\dist
-```
-
-**Penjelasan:**
-
-| Variabel | Wajib | Default | Keterangan |
-|----------|-------|---------|------------|
-| `DATABASE_URL` | ✅ | — | Koneksi ke PostgreSQL (`user:password@host:port/db`) |
-| `JWT_SECRET` | ❌ | Auto-generated | Kunci untuk token login (min 32 karakter) |
-| `PORT` | ❌ | `3000` | Port HTTP server |
-| `FRONTEND_DIST` | ❌ | Deteksi otomatis | Path folder `dist/` (jika tidak di folder yang sama) |
-
-> **Catatan:** Jika `JWT_SECRET` tidak diisi, server akan membuatnya otomatis dan menyimpannya ke file `.env` saat pertama kali jalan.
-
----
-
-## 3. Menjalankan Server
-
-### 3.1 Mode Foreground (testing)
-
-```powershell
-cd C:\thermaltrue\server
-.\server.exe run
-```
-
-Output yang diharapkan:
-
-```
-[INFO  server] Connecting to database...
-[INFO  sqlx::postgres::notice] relation "_sqlx_migrations" already exists, skipping
-[INFO  server] Server listening on http://0.0.0.0:3000
-```
-
-Server jalan di foreground. Tekan `Ctrl+C` untuk menghentikan.
-
-### 3.2 Mode Windows Service (produksi)
-
-Jalankan PowerShell sebagai **Administrator**:
-
-```powershell
-# 1. Install service (cukup sekali)
-cd C:\thermaltrue\server
-.\server.exe install
-
-# Output:
-# [OK] Service 'ThermaltrueServer' installed.
-# [OK] Firewall rule added for port 3000
-
-# 2. Start service
-.\server.exe start
-
-# Output:
-# [OK] Service 'ThermaltrueServer' started.
-```
-
-Service akan otomatis menyala setiap kali Windows boot.
-
-**Perintah lain:**
-
-```powershell
-.\server.exe status    # Cek status service
-.\server.exe stop      # Stop service
-.\server.exe uninstall # Hapus service
-```
-
-### 3.3 Firewall
-
-Port `3000` harus dibuka di Firewall Windows agar client bisa mengakses.
-
-Jika menjalankan `server.exe install`, firewall rule otomatis ditambahkan.
-
-Jika ingin manual:
-
-```powershell
-netsh advfirewall firewall add rule name="Thermaltrue WMS" dir=in action=allow protocol=TCP localport=3000
-```
-
-### 3.4 Verifikasi Server Berjalan
-
-Buka browser di server, akses:
+Server **langsung berjalan** sebagai service. Selesai wizard → buka browser:
 
 ```
 http://localhost:3000
 ```
 
-Jika halaman login Thermaltrue muncul, server berjalan dengan benar.
+---
 
-Cek API health:
+## 4. Verifikasi Instalasi
+
+### 4.1. Status Service
+
+```powershell
+# PowerShell sebagai Administrator
+Get-Service ThermaltrueServer
+
+# atau
+& "C:\Program Files\Thermaltrue\server.exe" status
+```
+
+### 4.2. Health Check
 
 ```powershell
 curl.exe http://localhost:3000/api/health
-# Output: {"status":"ok"}
+# {"status":"ok"}
+
+curl.exe http://localhost:3000/api/health/db
+# {"status":"ok"}
 ```
+
+### 4.3. Laporan Selftest
+
+```
+C:\Program Files\Thermaltrue\readiness-report.json
+```
+
+Isi:
+
+```json
+{
+  "apiPort": 3000,
+  "service": "ThermaltrueServer",
+  "serverReachable": true,
+  "health": { "status": "ok" }
+}
+```
+
+### 4.4. File Penting hasil Instalasi
+
+| File | Lokasi | Isi |
+|------|--------|-----|
+| `server.exe` + `dist/` | `C:\Program Files\Thermaltrue\` | API server + web UI |
+| `.env` | `C:\Program Files\Thermaltrue\` | DATABASE_URL, PORT, JWT_SECRET, dll |
+| `installer-notes.txt` | `C:\Program Files\Thermaltrue\` | **Kredensial PostgreSQL** — simpan aman |
+| `readiness-report.json` | `C:\Program Files\Thermaltrue\` | Laporan selftest |
 
 ---
 
-## 4. Akses dari Client
+## 5. Login Pertama
 
-### 4.1 LAN (Local Network)
+Kredensial default user admin:
 
-Cari IP address server:
+| Field | Nilai |
+|-------|-------|
+| Username | `admin` |
+| Password | **Tergantung konfigurasi** (lihat di bawah) |
+
+Server otomatis membuat user **`admin`** saat pertama kali database kosong (seed di `db_pool.rs`):
+
+1. Jika `.env` memuat `DEFAULT_ADMIN_PASSWORD=xxx` → password-nya `xxx`
+2. Jika tidak di set → password **acak** `AdminXXXXXXXX` (contoh: `Adminkd3f8j2a`) & ditulis ke **log server** saat pertama start
+
+Karena service berjalan tersembunyi, log tidak selalu mudah dibuka. Untuk kontrol penuh, **set password admin sendiri sebelum pertama kali start**:
+
+Edit (atau buat) `C:\Program Files\Thermaltrue\.env` **sebelum server pertama kali start**:
+
+```ini
+DEFAULT_ADMIN_PASSWORD=adminkuat123
+```
+
+Server membaca `.env` di folder yang sama dengan `server.exe`.
+
+> [!IMPORTANT]
+> Jika sudah login pernah dilakukan, ubah password lewat aplikasi: **Settings → My Profile → Change Password**. Lihat §11.5 bila lupa password admin.
+
+### Login & Akses
+
+1. Buka `http://localhost:3000` di server (atau `http://IP_SERVER:3000` dari PC lain)
+2. Masukkan admin + password
+3. **Wajib diganti setelah login pertama** — Settings → My Profile → Change Password
+
+---
+
+## 6. Akses dari Client
+
+### 6.1. Browser (Web)
+
+Tanpa install apapun: buka `http://IP_SERVER:3000` dari browser mana pun di jaringan yang sama.
+
+Cari IP server:
 
 ```powershell
 ipconfig
-# Contoh: IPv4 Address. . . . . . : 192.168.1.100
+# IPv4 Address. . . . . : 192.168.1.100   <-- pakai ini
 ```
 
-Client di jaringan yang sama buka browser:
+### 6.2. Aplikasi Desktop (Windows)
 
-```
-http://192.168.1.100:3000
-```
+Install via **Full installer** (opsi Client) atau **MSI/NSIS** terpisah — lihat `docs/guide-instalasi-desktop.md`.
 
-### 4.2 VPN / Remote
+Aplikasi Desktop otomatis melakukan **LAN-first detection** (mencari server di jaringan). Jika server ditentukan IP manual: **Settings → API Settings → Server URL**: `http://IP_SERVER:3000`.
 
-Jika client di luar kantor, gunakan VPN (WireGuard/OpenVPN) agar terhubung ke jaringan server. Setelah VPN aktif, akses via IP lokal server.
+### 6.3. VPN / Remote / Internet (Advanced)
 
-### 4.3 Internet / Publik (Advanced)
-
-> ⚠️ Sangat tidak disarankan mengekspos server langsung ke internet tanpa reverse proxy dan HTTPS.
-
-Setup yang direkomendasikan:
-
-1. Gunakan Nginx sebagai reverse proxy
-2. Pasang SSL certificate (Let's Encrypt)
-3. Forward domain ke server internal
-
-### 4.4 Login Pertama
-
-Buka halaman login, gunakan kredensial default:
-
-| Field | Value |
-|-------|-------|
-| Username | `admin` |
-| Password | `admin123` |
-
-> **Penting:** Segera ganti password setelah login pertama.
+- **LAN/VPN**: client bergabung di jaringan yang sama (WireGuard/OpenVPN) → akses IP lokal
+- **Publik**: ⚠️ JANGAN ekspos port 3000 langsung ke internet; gunakan reverse proxy + HTTPS (§9)
 
 ---
 
-## 5. Update Server
+## 7. Update & Rollback
 
-### 5.1 Persiapan File Baru
+### 7.1. Update via Installer
 
-1. Build frontend terbaru: `npm run build` → folder `dist/`
-2. Build server terbaru: `cargo build --release -p server` → `target/release/server.exe`
+1. Unduh setup versi baru (mis. `Thermaltrue-Setup-x.y.z.exe`)
+2. Jalankan → installer mendeteksi instalasi lama & **upgrade**
+3. Database tetap; `.env` lama tetap dipakai
 
-### 5.2 Ganti File
+### 7.2. Update Manual (ganti file)
 
 ```powershell
-# Stop service (Admin)
-.\server.exe stop
+# PowerShell sebagai Administrator
+$installDir = "C:\Program Files\Thermaltrue"
 
-# Backup folder lama
-rename C:\thermaltrue\server C:\thermaltrue\server_backup
+# 1) Backup .env
+Copy-Item "$installDir\.env" "$installDir\.env.bak"
 
-# Copy folder baru
-mkdir C:\thermaltrue\server
-copy target\release\server.exe C:\thermaltrue\server\
-copy -Recurse dist C:\thermaltrue\server\dist\
+# 2) Stop service
+& "$installDir\server.exe" stop
 
-# Copy .env dari backup
-copy C:\thermaltrue\server_backup\.env C:\thermaltrue\server\.env
+# 3) Ganti file (bugfix manual dari repo — build sendiri)
+Copy-Item "path\to\server.exe" "$installDir\server.exe" -Force
+Copy-Item "path\to\dist" "$installDir\dist\" -Recurse -Force
 
-# Start service
-.\server.exe start
+# 4) Start kembali
+& "$installDir\server.exe" start
 
-# Verifikasi
+# 5) Verifikasi
 curl.exe http://localhost:3000/api/health
 ```
 
-### 5.3 Rollback Jika Gagal
+### 7.3. Rollback
 
 ```powershell
-.\server.exe stop
-Remove-Item -Recurse C:\thermaltrue\server
-rename C:\thermaltrue\server_backup C:\thermaltrue\server
-.\server.exe start
+& "$installDir\server.exe" stop
+# restore server.exe / dist lama dari backup
+& "$installDir\server.exe" start
 ```
 
 ---
 
-## 6. Troubleshooting
+## 8. Backups
 
-### 6.1 "Connection refused" saat akses dari browser
+### 8.1. Auto-Backup (bawaan server)
 
-```powershell
-# 1. Cek apakah server berjalan
-Get-Process -Name server
+Server menjalankan **scheduled backup** tiap **24 jam** (default):
 
-# 2. Cek port
-netstat -ano | findstr ":3000"
+- Folder tujuan: `C:\Program Files\Thermaltrue\backups\`
+- File: `backup-<timestamp>.sql` (format SQL dump, `pg_dump --clean --if-exists`)
+- Penyimpanan: **30 backup terakhir** dipertahankan
 
-# 3. Cek firewall
-netsh advfirewall firewall show rule name="Thermaltrue WMS"
+Ubah `BACKUP_DIR` / `BACKUP_INTERVAL_HOURS` di `.env` jika perlu.
 
-# 4. Cek dari localhost dulu
-curl.exe http://localhost:3000
-```
-
-### 6.2 "Cannot bind to 0.0.0.0:3000"
-
-Port 3000 sudah dipakai program lain.
+### 8.2. Backup Manual
 
 ```powershell
-# Cek proses yang memakai port 3000
-netstat -ano | findstr ":3000"
-
-# Ganti port server dengan env PORT=3001
-# atau matikan program lain
+pg_dump -U postgres -d thermaltrue -F c -f "C:\backups\thermal_$(Get-Date -Format yyyyMMdd_HHmm).dump"
 ```
 
-### 6.3 "Cannot connect to database"
+> Password postgres ada di `installer-notes.txt`.
+
+### 8.3. Restore
 
 ```powershell
-# 1. Cek PostgreSQL berjalan
-Get-Service postgresql*
-
-# 2. Test koneksi manual
-psql -U postgres -h localhost -d thermaltrue -c "SELECT 1"
-
-# 3. Periksa DATABASE_URL di file .env
-type C:\thermaltrue\server\.env
+pg_restore -U postgres -d thermaltrue --clean "C:\backups\thermal_2026...dump"
+# atau SQL: psql -U postgres -d thermaltrue -f backup.sql
 ```
 
-### 6.4 "Frontend dist not found"
-
-Folder `dist/` tidak ditemukan di samping `server.exe`.
-
-Solusi:
-- Pastikan folder `dist/` ada di direktori yang sama dengan `server.exe`
-- Atau set environment variable: `FRONTEND_DIST=C:\path\ke\dist`
-
-### 6.5 Halaman Login Muncul Tapi Gagal Login
-
-```powershell
-# Reset password admin via database
-psql -U postgres -d thermaltrue -c "UPDATE users SET password_hash='$2b$12$LJ3m4ys3Lk0TSwHnbfOMiOXPm1Qlq5GzGmZm7sZwmL6mQq7b5x1(y' WHERE username='admin';"
-```
-> **Catatan:** Hash di atas adalah `admin123` dengan bcrypt. Jika gagal, buat ulang via aplikasi.
+Detail lengkap: `docs/backup-restore.md`.
 
 ---
 
-## 7. Keamanan
+## 9. Keamanan (Wajib untuk Produksi)
 
-### 7.1 Password Policy
+### 9.1. HTTPS / TLS
 
-- **Minimum**: 8 karakter
-- **Mengandung**: huruf besar, huruf kecil, dan angka
-- **Maksimum**: 128 karakter
-- Ganti password default segera setelah instalasi
+Secara default server berjalan **HTTP**. Untuk produksi:
 
-### 7.2 TLS/HTTPS (Wajib untuk Produksi)
+1. Siapkan sertifikat (Let's Encrypt `certbot` / enterprise CA)
+2. Tambah di `.env`:
+   ```
+   TLS_CERT_PATH=C:\cert\fullchain.pem
+   TLS_KEY_PATH=C:\cert\privkey.pem
+   ```
+3. Restart service → HTTPS otomatis aktif
 
-Jangan ekspos server langsung ke internet tanpa reverse proxy:
+Alternatif umum: reverse proxy (Nginx/IIS) + TLS di depan port 3000:
 
 ```nginx
-# Contoh konfigurasi Nginx + Let's Encrypt
 server {
     listen 443 ssl;
     server_name wms.domain.com;
-
-    ssl_certificate /etc/letsencrypt/live/wms.domain.com/fullchain.pem;
+    ssl_certificate     /etc/letsencrypt/live/wms.domain.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/wms.domain.com/privkey.pem;
-
-    # Security headers
-    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
-    add_header X-Frame-Options "SAMEORIGIN" always;
-    add_header X-Content-Type-Options "nosniff" always;
-    add_header Content-Security-Policy "default-src 'self'; connect-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self';" always;
-
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_set_header Host $host;
@@ -392,58 +306,123 @@ server {
 }
 ```
 
-Untuk sertifikat gratis: `certbot --nginx -d wms.domain.com`
+### 9.2. CORS
 
-### 7.3 Database SSL
+| Value | Akibat |
+|-------|--------|
+| (kosong) | Izinkan semua origin (default; aman untuk LAN) |
+| `https://wms.domain.com` | Batasi hanya origin itu (mengaktifkan proteksi CSRF) |
 
-Default koneksi menggunakan `sslmode=disable`. Untuk produksi, aktifkan SSL:
+### 9.3. Rate Limiter
 
-```
-DATABASE_URL=postgresql://user:pass@host:5432/thermaltrue?sslmode=require
-```
+- General API: **600 request/menit per IP** (anti-DoS)
+- Login: **5 percobaan / 15 menit per user** (429 Too Many Requests setelah melampaui)
 
-### 7.4 CORS Configuration
+### 9.4. JWT Secret
 
-Set environment variable untuk membatasi origin yang diizinkan:
+- Auto-generate saat start pertama kali, disimpan ke `.env` (`JWT_SECRET`)
+- Jika diubah → semua session invalid
 
-```powershell
-# Hanya izinkan domain tertentu
-$env:CORS_ORIGIN="https://wms.domain.com"
+### 9.5. File `.env`
 
-# Biarkan kosong untuk mengizinkan semua origin (development/default)
-$env:CORS_ORIGIN=""
-```
-
-### 7.5 File .env
-
-- File `.env` berisi secrets (JWT_SECRET, DATABASE_URL)
-- **Jangan commit** `.env` ke version control (sudah di `.gitignore`)
-- Batasi akses file: `chmod 600 .env` (Linux)
-- Gunakan `.env.example` sebagai template — isi ulang secrets untuk tiap environment
-
-### 7.6 JWT Secret
-
-- Auto-generated saat pertama kali server dijalankan
-- Disimpan ke `.env` sebagai `JWT_SECRET`
-- Jika secret diganti, semua session user akan invalid
-- Gunakan secret yang berbeda untuk tiap environment (dev/staging/production)
-
-### 7.7 Rate Limiting
-
-Login endpoint dibatasi 5 percobaan per 15 menit per user (dan 50 global).
-Setelah melebihi batas, akan menerima response `429 Too Many Requests`.
+- File sensitif (password DB, secret JWT) — **jangan dibagikan / commit** (sudah ada di `.gitignore`)
+- Batasi akses: hak Administrator saja
 
 ---
 
-## 8. Referensi
+## 10. Uninstal Server
+
+1. **Windows Settings → Apps → Installed apps** → cari **Thermaltrue WMS** → **Uninstall**
+   (atau jalankan `unins000.exe` di `C:\Program Files\Thermaltrue\`)
+2. **Uninstall PostgreSQL 18** (Apps → PostgreSQL 18) — **lakukan backup dulu!** (semua database terhapus)
+
+Jika mau tetap PostgreSQL: cukup uninstall "Thermaltrue WMS" saja, service `ThermaltrueServer` akan dihapus juga.
+
+---
+
+## 11. Troubleshooting Umum
+
+### 11.1. "Connection refused" dari Localhost
+
+```powershell
+Get-Service ThermaltrueServer          # Running?
+& "$env:ProgramFiles\Thermaltrue\server.exe" status
+netstat -ano | findstr ":3000"
+curl.exe http://localhost:3000/api/health/db
+```
+
+### 11.2. Port 3000 / 5432 sudah dipakai
+
+- Ganti di wizard saat install (halaman Port) → API `3001`, PG `5433`
+- atau temukan proses pemakai: `netstat -ano | findstr ":3000"` → `Stop-Process -Id <PID>` (atau sesuaikan port di `.env` + restart manual) — jika `server.exe` sudah install, edit `.env` di `C:\Program Files\Thermaltrue\.env` → `PORT=3001` (misal) → restart
+
+### 11.3. Login gagal berulang ("Invalid username")
+
+1. Kredensial salah / rate-limit login sementara (tunggu 10–15 menit) — lihat §5
+2. Reset password admin (kondisi masih bisa akses DB)
+
+### 11.4. Lupa password admin (sudah pernah login)
+
+Reset dengan cara berikut:
+
+```powershell
+# 1. Stop server
+& "$env:ProgramFiles\Thermaltrue\server.exe" stop
+
+# 2. Set password admin baru langsung di database PostgreSQL
+$env:PGPASSWORD = "<password-postgres-dari-installer-notes>"
+& "$env:ProgramFiles\PostgreSQL\18\bin\psql.exe" -U postgres -d thermaltrue -c "UPDATE users SET password_hash='\$2b\$12\$...' WHERE username='admin';"
+```
+
+> 💡 Hash bcrypt harus dibuat di luar aplikasi (misal: generator online / `htpasswd -bnBC 12 "" <password>`). Setelah UPDATE selesai, start ulang service & login dengan password baru. Cara alternatif: set `DEFAULT_ADMIN_PASSWORD` di `.env`, hapus user `admin` dari tabel `users`, lalu restart server (user di-seed ulang).
+
+### 11.5. Selftest gagal / "serverReachable": false
+
+1. Service running? (`Get-Service ThermaltrueServer`)
+2. PG berjalan? (`Get-Service postgresql*`)
+3. Lihat `readiness-report.json` & log service (Event Viewer → Windows Logs → Application → Thermal)
+
+### 11.6. "Cannot bind to 0.0.0.0:3000"
+
+1. Port dipakai proses lain → ubah PORT di `.env` (lihat §11.2)
+2. Restart service
+
+### 11.7. Dialog "PostgreSQL did not start" saat install
+
+- Pastikan port 5432 bebas (tidak dipakai PG lain) saat wizard → gunakan port lain
+- Data PG lama tidak tersentuh — instalasi baru tidak menyentuh data lama
+
+---
+
+## 12. Ringkasan Perintah
 
 | Perintah | Fungsi |
 |----------|--------|
-| `server.exe run` | Jalankan server di foreground |
-| `server.exe install` | Install sebagai Windows Service |
+| `server.exe install` | Install service (otomatis saat wizard) |
+| `server.exe uninstall` | Hapus service |
 | `server.exe start` | Start service |
 | `server.exe stop` | Stop service |
-| `server.exe status` | Cek status service |
-| `server.exe uninstall` | Hapus service |
-| `http://localhost:3000` | Akses aplikasi via browser |
-| `http://localhost:3000/api/health` | Cek status API |
+| `server.exe status` | Tampilkan status |
+| `server.exe run` | Jalankan foreground (untuk debug/log) |
+
+Service juga bisa dikelola: `services.msc` → `ThermaltrueServer`.
+
+---
+
+## 13. Referensi
+
+| Item | Nilai |
+|------|-------|
+| Download | GitHub Releases: `Thermaltrue-Setup-1.0.4.exe` |
+| Web UI | `http://IP_SERVER:3000` |
+| Health | `/api/health` , `/api/health/db` |
+| Service | `ThermaltrueServer` (Windows) |
+| Folder install | `C:\Program Files\Thermaltrue\` |
+| Environment | `.env` di folder install |
+| Kredensi DB | `installer-notes.txt` |
+| Dokter client | `docs/guide-instalasi-desktop.md` |
+| Backup | `docs/backup-restore.md` |
+
+---
+
+_© 2026 Thermaltrue — update terakhir: v1.0.4._
