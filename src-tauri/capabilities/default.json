@@ -1,16 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Production capability - localhost + LAN IP",
+  "description": "Client capability - remote server",
   "windows": ["main"],
-  "remote": {
-    "urls": [
-      "http://127.0.0.1:3000/*",
-      "http://localhost:3000/*",
-      "http://127.0.0.1:5174/*",
-      "http://localhost:5174/*"
-    ]
-  },
   "permissions": [
     "core:default",
     "dialog:default",
@@ -27,14 +19,8 @@
     {
       "identifier": "http:default",
       "allow": [
-        { "url": "http://localhost:3000" },
-        { "url": "http://localhost:3001" },
-        { "url": "http://localhost:3002" },
-        { "url": "http://*:8000/**" },
-        { "url": "https://localhost:3443" },
-        { "url": "https://*:443/**" },
-        { "url": "https://*:8443/**" },
-        { "url": "https://*:**" }
+        { "url": "http://*:*" },
+        { "url": "https://*:*" }
       ]
     }
   ]

@@ -2,7 +2,7 @@ import { isTauriInvokeAvailable, tauriInvoke } from "../lib/tauri";
 
 const CACHE_KEY = "wms_api_url_cache";
 const MAX_ENTRIES = 5;
-const TTL_MS = 10 * 60 * 1000;
+const TTL_MS = 24 * 60 * 60 * 1000;
 
 interface ApiUrlEntry {
   id: string;

@@ -86,6 +86,7 @@ pub fn create_router(pool: DbPool) -> Router {
         .route("/api/dashboard/capacity-pressure", get(handlers::dashboard::capacity_pressure))
         .route("/api/dashboard/compute-all", get(handlers::dashboard::compute_all))
         .route("/api/dashboard/metrics-latest", get(handlers::dashboard::metrics_latest))
+        .route("/api/dashboard/monthly-transactions", get(handlers::dashboard::monthly_transactions))
         .route("/api/reports/mom-kpis", get(handlers::dashboard::mom_kpis))
         .route("/api/reports/aging", get(handlers::dashboard::aging_report))
         .route("/api/reports/stock-movement", get(handlers::dashboard::stock_movement))

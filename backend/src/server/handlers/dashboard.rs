@@ -595,6 +595,37 @@ pub async fn mom_kpis(
     Ok(Json(result))
 }
 
+pub async fn monthly_transactions(
+    Extension(user_id): Extension<String>,
+    State(pool): State<Arc<DbPool>>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, Json<serde_json::Value>)> {
+    if !validate::check_user_permission(&pool.pool, &user_id, "view_dashboard").await.map_err(|e| crate::server::server_error(e))? {
+        return Err((axum::http::StatusCode::FORBIDDEN, Json(json!({"error": "Permission denied"}))));
+    }
+    let scope = validate::warehouse_scope(&pool.pool, &user_id).await.map_err(|e| crate::server::server_error(e))?;
+    let mut b = sqlx::QueryBuilder::new(
+        "SELECT to_char(created_at, 'YYYY-MM') AS month, type, COUNT(*)::float AS cnt \
+         FROM transactions WHERE status NOT IN ('voided','reversed') \
+         AND created_at::timestamp >= NOW() - INTERVAL '6 months'"
+    );
+    scope.apply_builder(&mut b, "transactions.warehouse_id", None);
+    b.push(" GROUP BY month, type ORDER BY month ASC");
+    let rows = b.build().fetch_all(&pool.pool).await
+        .map_err(|e| crate::server::server_error(e))?;
+    let mut map: std::collections::BTreeMap<String, [f64; 2]> = std::collections::BTreeMap::new();
+    for row in &rows {
+        let month: String = row.get("month");
+        let tx_type: String = row.get("type");
+        let cnt: f64 = row.get("cnt");
+        let idx = if tx_type == "in" { 0 } else if tx_type == "out" { 1 } else { continue };
+        map.entry(month).or_insert([0.0, 0.0])[idx] += cnt;
+    }
+    let result: Vec<serde_json::Value> = map.into_iter()
+        .map(|(month, c)| json!({"month": month, "in_count": c[0], "out_count": c[1]}))
+        .collect();
+    Ok(Json(json!(result)))
+}
+
 pub async fn aging_report(
     Extension(user_id): Extension<String>,
     State(pool): State<Arc<DbPool>>,

@@ -63,30 +63,36 @@ Kedua installer memakai **update checker otomatis** (lihat §6).
 
 ## 4. Menjalankan & Menghubungkan ke Server
 
-### 4.1. Jalankan Pertama
+### 4.1. Bagaimana Client Menemukan Server
 
-1. Buka aplikasi **Thermaltrue WMS** dari Start Menu
-2. Secara default, jendela membuka `http://127.0.0.1:3000` — cocok bila server ada di PC yang sama
-3. Jika server di PC lain, lihat §4.2
+Client **tidak** melakukan pencarian aktif di seluruh jaringan — URL server **dipatri (baked-in) saat build MSI client**:
 
-### 4.2. Menemukan Server di Jaringan (LAN)
+- Client di-build lewat `scripts\build-client.ps1 -ServerUrl http://IP_SERVER:3000` (lihat §8.5)
+- Jendela WebView2 membuka URL itu. IP server harus **statis** agar client tetap valid (ganti jaringan hotspot/IP → client perlu di-build ulang atau pakai deteksi di bawah)
 
-Aplikasi melakukan **deteksi otomatis**:
+Lapisan cadangan (otomatis, urut):
 
-- Mencari server yang tersedia di jaringan (cache `wms_api_url_cache`, maks. 5 alamat, TTL 10 menit)
-- Menyimpan alamat yang sering dipakai sebagai **preferred**
-- Beralih otomatis bila server utama tidak merespons
+| # | Mekanisme | Keterangan |
+|---|-----------|------------|
+| 1 | **Startup Rust** (`ensure_server_running`): baked URL → `localhost:3000` → `127.0.0.1:3000` → **LAN subnet scan `/24`** | Jika semua gagal, Rust men-scan subnet & langsung navigasi ke server yang ditemukan — client **sembuh sendiri** walau URL patrian basi (IP server berubah) |
+| 2 | **LAN subnet scan lanjutan** (`src-tauri`): scan `/24` tiap interface nyata, batched, time-out pendek | Menemukan server di subnet yang sama walau URL patrian salah/berubah (DHCP/hotspot) |
+| 3 | **Cache alamat sukses** (`wms_api_url_cache`, TTL 24 jam, maks. 5) | Client yang pernah connect tersambung cepat saat restart tanpa scan |
+| 4 | **Set manual** di UI: **Settings → API Settings → Server URL** | Untuk server di subnet berbeda/VPN |
+
+> `127.0.0.1` di komputer client **dijamin refused** (client tidak membawa server lokal) — bukan tanda aplikasi rusak.
+
+### 4.2. Alur Koneksi (ringkas)
+
+1. Installer memasang MSI client (`Thermaltrue_1.0.1_x64_en-US.msi`) — tanpa `server.exe`.
+2. App start → check URL patrian (`/api/health`, ≤8 detik) → fallback `localhost`/`127.0.0.1` → subnet scan → navigasi ke URL sehat.
+3. Jika semua gagal: halaman error frontend dengan tombol **Coba Lagi / Ubah URL**.
 
 ### 4.3. Set Manual Alamat Server
 
-Jika deteksi tidak menemukan (misal server di VPN/alamat statis):
-
-1. Login dulu lewat browser ke `http://IP_SERVER:3000` (web UI)
+1. Cek alamat server: browser ke `http://IP_SERVER:3000` (web UI) dari PC lain
 2. Di aplikasi: **Settings → API Settings → Server URL**
 3. Isi `http://IP_SERVER:3000` (contoh: `http://192.168.1.100:3000`)
 4. Simpan → aplikasi mengarah ke server itu
-
-> `http://127.0.0.1:3000` adalah default; jika server remote WAJIB set manual (jangan pakai localhost).
 
 ---
 
@@ -131,9 +137,29 @@ Uninstall aplikasi Desktop **tidak** menyentuh server/database.
 
 ### 8.1. Jendela kosong / "Connection refused"
 
-- Server berjalan? Cek dari browser: `http://127.0.0.1:3000` (PC server itu sendiri)
-- Jika server di PC lain: set alamat di Settings → API Settings (jangan `localhost`)
-- Firewall server harus mengizinkan port API (dibuat otomatis saat instal server)
+**Runbook diagnostik (jalankan di SERVER):**
+
+```powershell
+sc query ThermaltrueServer          # STATE: 4 RUNNING?
+netstat -ano | findstr :3000        # harus ada 0.0.0.0:3000 LISTENING
+ipconfig                            # catat IPv4 LAN server (mis. 192.168.43.247)
+netsh advfirewall firewall show rule name=all | findstr /i "3000 Thermaltrue"
+```
+
+**Di CLIENT:**
+
+```powershell
+Test-NetConnection <IP_SERVER> -Port 3000   # TcpTestSucceeded: True?
+Test-NetConnection 127.0.0.1 -Port 3000     # False = normal di client
+```
+
+**Log:** `%TEMP%\thermaltrue.log` + `startup.log` di samping `app.exe` — cari `FOUND at http://...` (subnet scan) / `target URL =`.
+
+**Perbaikan cepat:**
+- Server tidak di PC yang sama → set alamat di Settings → API Settings (jangan pakai `localhost`)
+- IP server berubah (hotspot/DHCP) → client **di-build ulang** dengan URL baru (§8.5) atau set manual
+- Firewall server harus mengizinkan port API (rule `Thermaltrue WMS (port 3000)` dibuat otomatis saat install server — verifikasi `netsh show rule` di atas)
+- Subnet scan hanya menjangkau subnet yang sama; server di subnet/VPN → **set manual**, bukan ganti URL patrian
 
 ### 8.2. "WebView2 not found"
 
@@ -149,6 +175,21 @@ Windows 10: install Evergreen Runtime WebView2 (lihat §1.1).
 
 - File `update.json` baca dari GitHub — butuh akses internet ke `github.com`
 - Enterprise yang blokir GitHub: unduh installer terbaru secara manual
+
+### 8.5. Rebuild Client MSI (IP server berubah / build pertama)
+
+```powershell
+.\scripts\build-client.ps1 -ServerUrl http://192.168.10.151:3000
+```
+
+Menghasilkan `target\release\bundle\msi\Thermaltrue_1.0.1_x64_en-US.msi`. Setelah itu rebuild installer gabungan & deploy:
+
+```powershell
+.\installer\build-installer.ps1   # bundel MSI client + server.exe + dist
+.\deploy.ps1                      # admin; deploy server + dist, UAC muncul
+```
+
+> Selaras: `installer\thermaltrue-server.iss` dan `installer\build-installer.ps1` mereferensikan MSI client **versi 1.0.1** — jangan dinaikkan tanpa mengubah keduanya.
 
 ---
 
@@ -167,7 +208,9 @@ Windows 10: install Evergreen Runtime WebView2 (lihat §1.1).
 |------|-------|
 | Download | GitHub Releases v1.0.4 (`.exe` / `.msi`) |
 | Server | docs `guide-instalasi-server.md` |
-| Default URL | `http://127.0.0.1:3000` |
+| Client MSI terkini | `Thermaltrue_1.0.1_x64_en-US.msi` (URL patrian `192.168.10.151:3000`) — di-bundel ke installer gabungan |
+| Default URL | URL patrian saat build client (bukan 127.0.0.1) + fallback localhost/subnet scan |
+| Cache alamat | `wms_api_url_cache` (TTL 24 jam, maks. 5 alamat) |
 | Update | auto-check `update.json` (GitHub) |
 | Data lokal | `%APPDATA%\com.thermaltrue.wms` |
 | Browser alternatif | `http://IP_SERVER:3000` |

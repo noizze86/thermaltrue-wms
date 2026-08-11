@@ -250,9 +250,9 @@ export default function DashboardPage() {
               <CardTitle className="text-sm flex items-center gap-2"><Clock className="h-4 w-4 text-indigo-500" />Recent Transactions</CardTitle>
               <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => navigate("/transactions/history")}>View All</Button>
             </CardHeader>
-            <CardContent className="p-0">
+            <CardContent className="p-0 max-h-64 overflow-y-auto">
               <Table>
-                <TableHeader>
+                <TableHeader className="sticky top-0 z-10 bg-card">
                   <TableRow className="border-b">
                     <TableHead className="text-xs h-8 px-3">Num</TableHead>
                     <TableHead className="text-xs h-8 px-3">Type</TableHead>

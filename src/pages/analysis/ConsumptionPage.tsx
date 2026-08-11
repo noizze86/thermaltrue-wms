@@ -7,7 +7,7 @@ import { Button } from "../../components/ui/button"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "../../components/ui/table"
 import { Select } from "../../components/ui/select"
 import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
+  ComposedChart, Area, ReferenceLine, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
 } from "recharts"
 import { Badge } from "../../components/ui/badge"
 import { Search, TrendingUp, TrendingDown, BarChart3, Calculator, FileDown } from "lucide-react"
@@ -177,14 +177,20 @@ export default function ConsumptionPage() {
           ) : (
             <>
               <ResponsiveContainer width="100%" height={300}>
-                <BarChart data={consSeasonal || seasonalData}>
+                <ComposedChart data={consSeasonal || seasonalData}>
                   <CartesianGrid strokeDasharray="3 3" />
                   <XAxis dataKey="name" fontSize={10} />
                   <YAxis />
                   <Tooltip />
                   <Legend />
-                  <Bar dataKey="index" fill="#3b82f6" name="Seasonal Index" />
-                </BarChart>
+                  <ReferenceLine
+                    y={1}
+                    stroke="#f59e0b"
+                    strokeDasharray="4 4"
+                    label={{ value: "Average", fontSize: 10, fill: "#f59e0b", position: "insideTopRight" }}
+                  />
+                  <Area type="monotone" dataKey="index" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.15} name="Seasonal Index" />
+                </ComposedChart>
               </ResponsiveContainer>
               <div className="mt-2 text-sm text-muted-foreground">
                 {(consSeasonal || seasonalData).filter((d) => d.season === "High").length > 0 && (

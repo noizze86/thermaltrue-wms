@@ -228,8 +228,49 @@ async fn get_detected_api_url(ports: Option<Vec<u16>>) -> Result<Option<String>,
         }
     }
 
+    // 3. Lan subnet scan — find the server even if the baked URL/config is stale
+    //    (DHCP changes, hotspot IP rotation). Scan the /24 of each real interface
+    //    (loopback/172.16-31 excluded above), own IP and gateway first, batched.
+    let mut seen_subnets: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let scan_port = ports.first().copied().unwrap_or(3000);
+    for iface in &interfaces {
+        let std::net::IpAddr::V4(v4) = iface.ip() else { continue };
+        let oct = v4.octets();
+        let subnet = format!("{}.{}.{}", oct[0], oct[1], oct[2]);
+        if !seen_subnets.insert(subnet.clone()) { continue; }
+        let own_ip = iface.ip().to_string();
+        let mut candidates: Vec<String> = (1..=254).map(|i| format!("{}.{}", subnet, i)).collect();
+        candidates.sort_by_key(|ip| {
+            if *ip == own_ip { 0 } else if ip.ends_with(".255") { 3 } else if ip.ends_with(".1") { 2 } else { 1 }
+        });
+        for chunk in candidates.chunks(32) {
+            let urls: Vec<String> = chunk.iter().map(|ip| format!("http://{}:{}", ip, scan_port)).collect();
+            startup_log(&format!("get_detected_api_url: subnet scan {} ({} ip, port {})", subnet, urls.len(), scan_port));
+            if let Some(found) = probe_batch(urls).await {
+                startup_log(&format!("get_detected_api_url: FOUND at {}", &found));
+                return Ok(Some(found));
+            }
+        }
+    }
+
     startup_log("get_detected_api_url: no server found on any interface");
     Ok(None)
+}
+
+async fn probe_batch(urls: Vec<String>) -> Option<String> {
+    let mut handles = Vec::new();
+    for u in urls {
+        handles.push(tauri::async_runtime::spawn(async move {
+            (u.clone(), probe_url(&u).await)
+        }));
+    }
+    let mut found = None;
+    for h in handles {
+        if let Ok((u, ok)) = h.await {
+            if ok { found = Some(u); }
+        }
+    }
+    found
 }
 
 async fn probe_url(url: &str) -> bool {
@@ -402,6 +443,22 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
                 if tauri::async_runtime::block_on(check_health_at("http://127.0.0.1:3000", 2)) {
                     nav_url = "http://127.0.0.1:3000".into();
                     healthy = true;
+                }
+            }
+            if !healthy {
+                startup_log("ensure_server_running: mencoba LAN subnet scan...");
+                match tauri::async_runtime::block_on(get_detected_api_url(Some(vec![3000, 3001, 3002]))) {
+                    Ok(Some(url)) => {
+                        nav_url = url.clone();
+                        healthy = true;
+                        startup_log(&format!("ensure_server_running: FOUND via subnet scan -> {}", url));
+                    }
+                    Ok(None) => {
+                        startup_log("ensure_server_running: subnet scan tidak menemukan server");
+                    }
+                    Err(e) => {
+                        startup_log(&format!("ensure_server_running: subnet scan error: {}", e));
+                    }
                 }
             }
             let e2e_mode = std::env::var("MCP_E2E").is_ok();

@@ -201,6 +201,7 @@ mark_all_notifications_read: { method: "POST", path: "/api/notifications/read-al
   get_forecast_summary:    { method: "GET", path: "/api/forecast-analysis/summary" },
   get_forecast_details:    { method: "GET", path: "/api/forecast-analysis/details" },
   get_mom_kpis:            { method: "GET", path: "/api/reports/mom-kpis" },
+  get_monthly_transactions: { method: "GET", path: "/api/dashboard/monthly-transactions" },
   get_aging_report:        { method: "GET", path: "/api/reports/aging" },
   get_stock_movement:      { method: "GET", path: "/api/reports/stock-movement" },
   get_tx_type_summary:     { method: "GET", path: "/api/reports/tx-type-summary" },

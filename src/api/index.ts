@@ -790,6 +790,8 @@ export interface CategoryValue { name: string; count: number; value: number }
 export interface ReportSchedule { id: string; report_type: string; email_to: string; frequency: string; day_of_week: number; hour: number; is_active: boolean; created_at: string }
 
 export const getMomKpis = () => invokeAuth<MomKpi[]>("get_mom_kpis");
+export interface MonthlyTrend { month: string; in_count: number; out_count: number }
+export const getMonthlyTransactions = () => invokeAuth<MonthlyTrend[]>("get_monthly_transactions");
 export const getAgingReport = () => invokeAuth<AgingItem[]>("get_aging_report");
 export const getStockMovement = (period_start: string, period_end: string) => invokeAuth<StockMovement[]>("get_stock_movement", { periodStart: period_start, periodEnd: period_end });
 export const getTxTypeSummary = () => invokeAuth<CategoryValue[]>("get_tx_type_summary");

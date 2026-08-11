@@ -7,6 +7,9 @@ if (-not $admin) {
     exit 0
 }
 
+# UAC elevation resets the working directory to system32 — always run from the repo root
+Set-Location -LiteralPath $PSScriptRoot
+
 Write-Host "[1/4] Building release binary..." -ForegroundColor Yellow
 $result = & cargo build --release -p server 2>&1
 $exitCode = $LASTEXITCODE

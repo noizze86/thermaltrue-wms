@@ -1,12 +1,12 @@
 import { useState, useRef, useMemo } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useNavigate } from "react-router-dom"
-import { getDashboardKpi, getAnalysisAll, getMaterials, getCategories, getMomKpis, getTransactions } from "../../api"
+import { getDashboardKpi, getAnalysisAll, getMaterials, getCategories, getMomKpis, getTransactions, getMonthlyTransactions } from "../../api"
 import { Card, CardContent, CardHeader, CardTitle } from "../../components/ui/card"
 import { Button } from "../../components/ui/button"
 import { Badge } from "../../components/ui/badge"
 import { formatCurrency } from "../../lib/utils"
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts"
+import { BarChart, Bar, LineChart, Line, Treemap, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts"
 import html2canvas from "html2canvas"
 import { Download, TrendingUp } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
@@ -29,6 +29,7 @@ export default function AnalysisDashboardPage() {
   const { data: materials } = useQuery({ queryKey: ["materials"], queryFn: () => getMaterials() })
   const { data: categories } = useQuery({ queryKey: ["categories"], queryFn: () => getCategories() })
   const { data: momKpis } = useQuery({ queryKey: ["momKpis"], queryFn: getMomKpis })
+  const { data: monthlyTx } = useQuery({ queryKey: ["monthlyTx"], queryFn: getMonthlyTransactions })
   const { data: filteredTxs } = useQuery({
     queryKey: ["txDateRange", dateRange.start, dateRange.end],
     queryFn: () => getTransactions(undefined, undefined, undefined, undefined, dateRange.start || undefined, dateRange.end || undefined, undefined, "active"),
@@ -69,6 +70,16 @@ export default function AnalysisDashboardPage() {
     { name: "Low Stock", value: kpi?.low_stock_items || 0 },
     { name: "Normal", value: (kpi?.total_materials || 0) - (kpi?.low_stock_items || 0) },
   ]
+
+  const monthlyTrend = useMemo(() => {
+    if (!monthlyTx || monthlyTx.length === 0) return []
+    const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    return monthlyTx.map((r) => ({
+      monthLabel: `${MONTHS[Number(r.month.slice(5, 7)) - 1]} '${r.month.slice(2, 4)}`,
+      in: r.in_count,
+      out: r.out_count,
+    }))
+  }, [monthlyTx])
 
   // Date-filtered transaction summary
   const txSummary = useMemo(() => {
@@ -215,6 +226,27 @@ export default function AnalysisDashboardPage() {
         </Card>
       </div>
 
+      <Card>
+        <CardHeader><CardTitle>Transaction Trend (6 Months)</CardTitle></CardHeader>
+        <CardContent>
+          {monthlyTrend.length === 0 ? (
+            <p className="text-center text-muted-foreground py-8">No transaction data available</p>
+          ) : (
+            <ResponsiveContainer width="100%" height={300}>
+              <LineChart data={monthlyTrend}>
+                <CartesianGrid strokeDasharray="3 3" />
+                <XAxis dataKey="monthLabel" fontSize={10} />
+                <YAxis allowDecimals={false} />
+                <Tooltip />
+                <Legend />
+                <Line type="monotone" dataKey="in" stroke="#22c55e" name="IN" dot={false} />
+                <Line type="monotone" dataKey="out" stroke="#ef4444" name="OUT" dot={false} />
+              </LineChart>
+            </ResponsiveContainer>
+          )}
+        </CardContent>
+      </Card>
+
       <div className="grid gap-6 md:grid-cols-2">
         <Card>
           <CardHeader><CardTitle>Top 10 by Turnover Rate</CardTitle></CardHeader>
@@ -241,13 +273,9 @@ export default function AnalysisDashboardPage() {
               <p className="text-center text-muted-foreground py-8">No data available</p>
             ) : (
               <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie data={catValue} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
-                    {catValue.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie>
+                <Treemap data={catValue} dataKey="value" nameKey="name" aspectRatio={4 / 3} stroke="#fff" fill="#8884d8">
                   <Tooltip formatter={(value: unknown) => formatCurrency(Number(value))} />
-                  <Legend />
-                </PieChart>
+                </Treemap>
               </ResponsiveContainer>
             )}
           </CardContent>

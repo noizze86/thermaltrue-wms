@@ -23,7 +23,7 @@ Pop-Location
 $needs = @(
     "server.exe",
     "postgresql-18.4-1-windows-x64.exe",
-    "Thermaltrue_1.0.4_x64_en-US.msi",
+    "Thermaltrue_1.0.1_x64_en-US.msi",
     "icon.ico"
 )
 foreach ($n in $needs) {
@@ -33,7 +33,7 @@ foreach ($n in $needs) {
 
 # 4) Stage latest build outputs into payload
 Copy-Item (Join-Path $root "target\release\server.exe") (Join-Path $payload "server.exe") -Force
-Copy-Item (Join-Path $root "target\release\bundle\msi\Thermaltrue_1.0.4_x64_en-US.msi") (Join-Path $payload "Thermaltrue_1.0.4_x64_en-US.msi") -Force
+Copy-Item (Join-Path $root "target\release\bundle\msi\Thermaltrue_1.0.1_x64_en-US.msi") (Join-Path $payload "Thermaltrue_1.0.1_x64_en-US.msi") -Force
 if (Test-Path (Join-Path $payload "dist")) { Remove-Item (Join-Path $payload "dist") -Recurse -Force }
 Copy-Item (Join-Path $root "dist") (Join-Path $payload "dist") -Recurse -Force
 

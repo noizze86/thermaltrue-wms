@@ -6,7 +6,7 @@
 #define MyAppName "Thermaltrue WMS"
 #define ServerExe "server.exe"
 #define PgInstaller "postgresql-18.4-1-windows-x64.exe"
-#define ClientMsi "Thermaltrue_1.0.4_x64_en-US"
+#define ClientMsi "Thermaltrue_1.0.1_x64_en-US"
 
 [Setup]
 AppId={{31B2E4D9-9C7E-4A53-B8E6-7F0A2D2C9E11}

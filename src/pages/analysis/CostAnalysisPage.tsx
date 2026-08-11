@@ -9,7 +9,7 @@ import { Button } from "../../components/ui/button"
 import { Badge } from "../../components/ui/badge"
 import { formatCurrency } from "../../lib/utils"
 import { toast } from "../../hooks/use-toast"
-import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, Legend } from "recharts"
+import { LineChart, Line, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Treemap } from "recharts"
 import { Search, FileDown, DollarSign, TrendingUp, Package, Percent, Save, Trash2, BarChart3, Activity, Minus } from "lucide-react"
 import { LoadingState, ErrorState } from "../../components/ui/data-state"
 import { downloadXlsx } from "../../lib/export-xlsx"
@@ -22,6 +22,7 @@ export default function CostAnalysisPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("")
   const [selectedMaterialId, setSelectedMaterialId] = useState<string>("")
   const [budget, setBudget] = useState({ id: "", categoryId: "", period: "", amount: 0 })
+  const [supplierChartMode, setSupplierChartMode] = useState<"bar" | "line">("bar")
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(search), 300)
@@ -103,6 +104,21 @@ export default function CostAnalysisPage() {
     }
     return Object.values(grouped).sort((a, b) => b.price - a.price)
   }, [supplierPrices])
+
+  const supplierTrendData = useMemo(() => {
+    if (!supplierPrices) return []
+    const dates = Array.from(new Set(supplierPrices.map((p) => p.date))).sort()
+    return dates.map((d) => {
+      const row: Record<string, number | string> = { date: d }
+      for (const p of supplierPrices) if (p.date === d) row[p.supplier_name] = p.price
+      return row
+    })
+  }, [supplierPrices])
+
+  const supplierNames = useMemo(
+    () => Array.from(new Set((supplierPrices || []).map((p) => p.supplier_name))),
+    [supplierPrices]
+  )
 
   // Budget persistence
   const saveBudgetMut = useMutation({
@@ -319,19 +335,52 @@ export default function CostAnalysisPage() {
       {selectedMaterialId && (
         <div className="grid gap-6 md:grid-cols-2">
           <Card>
-            <CardHeader><CardTitle>Supplier Price Comparison</CardTitle></CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between">
+              <CardTitle>Supplier Price Comparison</CardTitle>
+              <div className="flex border rounded-md overflow-hidden">
+                <button
+                  className={`px-3 py-1 text-xs font-medium ${supplierChartMode === "bar" ? "bg-primary text-primary-foreground" : "bg-background"}`}
+                  onClick={() => setSupplierChartMode("bar")}
+                >
+                  Bar
+                </button>
+                <button
+                  className={`px-3 py-1 text-xs font-medium ${supplierChartMode === "line" ? "bg-primary text-primary-foreground" : "bg-background"}`}
+                  onClick={() => setSupplierChartMode("line")}
+                >
+                  Trend
+                </button>
+              </div>
+            </CardHeader>
             <CardContent>
-              {supplierChartData.length === 0 ? (
-                <p className="text-center text-muted-foreground py-8">No supplier prices available</p>
+              {supplierChartMode === "bar" ? (
+                supplierChartData.length === 0 ? (
+                  <p className="text-center text-muted-foreground py-8">No supplier prices available</p>
+                ) : (
+                  <ResponsiveContainer width="100%" height={300}>
+                    <BarChart data={supplierChartData}>
+                      <CartesianGrid strokeDasharray="3 3" />
+                      <XAxis dataKey="supplier_name" fontSize={10} />
+                      <YAxis />
+                      <Tooltip formatter={(value: unknown) => formatCurrency(Number(value))} />
+                      <Bar dataKey="price" fill="#6366f1" name="Price" />
+                    </BarChart>
+                  </ResponsiveContainer>
+                )
+              ) : supplierTrendData.length === 0 ? (
+                <p className="text-center text-muted-foreground py-8">No supplier price history available</p>
               ) : (
                 <ResponsiveContainer width="100%" height={300}>
-                  <BarChart data={supplierChartData}>
+                  <LineChart data={supplierTrendData}>
                     <CartesianGrid strokeDasharray="3 3" />
-                    <XAxis dataKey="supplier_name" fontSize={10} />
+                    <XAxis dataKey="date" fontSize={10} />
                     <YAxis />
                     <Tooltip formatter={(value: unknown) => formatCurrency(Number(value))} />
-                    <Bar dataKey="price" fill="#6366f1" name="Price" />
-                  </BarChart>
+                    <Legend />
+                    {supplierNames.map((name, i) => (
+                      <Line key={name} type="monotone" dataKey={name} stroke={COLORS[i % COLORS.length]} dot={false} name={name} />
+                    ))}
+                  </LineChart>
                 </ResponsiveContainer>
               )}
             </CardContent>
@@ -578,13 +627,9 @@ export default function CostAnalysisPage() {
               <p className="text-center text-muted-foreground py-8">No category data available</p>
             ) : (
               <ResponsiveContainer width="100%" height={300}>
-                <PieChart>
-                  <Pie data={catPieData} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={100} label>
-                    {catPieData.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
-                  </Pie>
+                <Treemap data={catPieData} dataKey="value" nameKey="name" aspectRatio={4 / 3} stroke="#fff" fill="#8884d8">
                   <Tooltip formatter={(value: unknown) => formatCurrency(Number(value))} />
-                  <Legend />
-                </PieChart>
+                </Treemap>
               </ResponsiveContainer>
             )}
           </CardContent>
