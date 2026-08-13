@@ -65,27 +65,23 @@ Kedua installer memakai **update checker otomatis** (lihat §6).
 
 ### 4.1. Bagaimana Client Menemukan Server
 
-Client **tidak** melakukan pencarian aktif di seluruh jaringan — URL server **dipatri (baked-in) saat build MSI client**:
-
-- Client di-build lewat `scripts\build-client.ps1 -ServerUrl http://IP_SERVER:3000` (lihat §8.5)
-- Jendela WebView2 membuka URL itu. IP server harus **statis** agar client tetap valid (ganti jaringan hotspot/IP → client perlu di-build ulang atau pakai deteksi di bawah)
-
-Lapisan cadangan (otomatis, urut):
+Client bersifat **universal** — MSI client **tidak perlu di-build ulang untuk tiap jaringan/perusahaan**. Jendela app membuka **Connect Page bawaan** (`tauri://localhost`, dari `dist-client-stub`), lalu otomatis menemukan server:
 
 | # | Mekanisme | Keterangan |
 |---|-----------|------------|
-| 1 | **Startup Rust** (`ensure_server_running`): baked URL → `localhost:3000` → `127.0.0.1:3000` → **LAN subnet scan `/24`** | Jika semua gagal, Rust men-scan subnet & langsung navigasi ke server yang ditemukan — client **sembuh sendiri** walau URL patrian basi (IP server berubah) |
-| 2 | **LAN subnet scan lanjutan** (`src-tauri`): scan `/24` tiap interface nyata, batched, time-out pendek | Menemukan server di subnet yang sama walau URL patrian salah/berubah (DHCP/hotspot) |
+| 1 | **Startup Rust** (`ensure_server_running`): `localhost:3000` → `127.0.0.1:3000` → **LAN subnet scan `/24`** (batch 32, prioritas IP sendiri/gateway) | Men-navigasi window ke server yang ditemukan di subnet manapun — client **sembuh sendiri** walau IP server/IP client berubah (DHCP/hotspot) |
+| 2 | **Connect Page** (stub `dist-client-stub`): auto-scan `get_detected_api_url` + form **Test & Connect** (`check_server_url`) + tombol **Scan Otomatis** | Muncul hanya bila scan tidak menemukan server (mis. subnet berbeda/VLAN); URL sukses disimpan ke `wms_api_url` (localStorage) untuk koneksi cepat berikutnya |
 | 3 | **Cache alamat sukses** (`wms_api_url_cache`, TTL 24 jam, maks. 5) | Client yang pernah connect tersambung cepat saat restart tanpa scan |
-| 4 | **Set manual** di UI: **Settings → API Settings → Server URL** | Untuk server di subnet berbeda/VPN |
+| 4 | **Set manual** di UI: **Settings → API Settings → Server URL** | Alternatif untuk server di subnet berbeda/VPN |
 
-> `127.0.0.1` di komputer client **dijamin refused** (client tidak membawa server lokal) — bukan tanda aplikasi rusak.
+> Karena client universal, **IP server boleh berubah kapan pun** (ganti komputer, pindah subnet, DHCP) — client hanya butuh satu syarat: **sekali akses ke subnet yang sama** (otomatis via scan) atau sekali isi URL di Connect Page. Tidak ada lagi rebuild MSI per jaringan.
 
 ### 4.2. Alur Koneksi (ringkas)
 
 1. Installer memasang MSI client (`Thermaltrue_1.0.1_x64_en-US.msi`) — tanpa `server.exe`.
-2. App start → check URL patrian (`/api/health`, ≤8 detik) → fallback `localhost`/`127.0.0.1` → subnet scan → navigasi ke URL sehat.
-3. Jika semua gagal: halaman error frontend dengan tombol **Coba Lagi / Ubah URL**.
+2. App start → Rust cek `localhost`/`127.0.0.1` → **subnet scan `/24`** → navigasi ke server yang ditemukan.
+3. Bila tidak ditemukan → **Connect Page** tampil (auto-scan ulang + form URL manual).
+4. Optional: bake URL patrian ketika IP server **diketahui & statis** → `build-client.ps1 -ServerUrl http://IP_SERVER:3000` (lihat §8.5) — mempercepat koneksi awal, tetap tidak mengunci bila IP berubah.
 
 ### 4.3. Set Manual Alamat Server
 
@@ -156,10 +152,10 @@ Test-NetConnection 127.0.0.1 -Port 3000     # False = normal di client
 **Log:** `%TEMP%\thermaltrue.log` + `startup.log` di samping `app.exe` — cari `FOUND at http://...` (subnet scan) / `target URL =`.
 
 **Perbaikan cepat:**
-- Server tidak di PC yang sama → set alamat di Settings → API Settings (jangan pakai `localhost`)
-- IP server berubah (hotspot/DHCP) → client **di-build ulang** dengan URL baru (§8.5) atau set manual
+- Server tidak di PC yang sama → restart app (auto-scan subnet) atau set alamat di Connect Page / Settings → API Settings (jangan pakai `localhost`)
+- IP server berubah/hotspot/DHCP → **tidak perlu build ulang** — subnet scan + Connect Page menyesuaikan otomatis
 - Firewall server harus mengizinkan port API (rule `Thermaltrue WMS (port 3000)` dibuat otomatis saat install server — verifikasi `netsh show rule` di atas)
-- Subnet scan hanya menjangkau subnet yang sama; server di subnet/VPN → **set manual**, bukan ganti URL patrian
+- Subnet scan hanya menjangkau subnet yang sama; server di subnet/VPN → **Connect Page** (isi URL sekali) atau set manual
 
 ### 8.2. "WebView2 not found"
 
@@ -176,13 +172,17 @@ Windows 10: install Evergreen Runtime WebView2 (lihat §1.1).
 - File `update.json` baca dari GitHub — butuh akses internet ke `github.com`
 - Enterprise yang blokir GitHub: unduh installer terbaru secara manual
 
-### 8.5. Rebuild Client MSI (IP server berubah / build pertama)
+### 8.5. Rebuild Client MSI (opsional — hanya untuk IP statis)
+
+MSI default bersifat **universal** (auto-discover), jadi rebuild hanya dilakukan bila IP server **diketahui & statis** dan ingin koneksi awal lebih cepat:
 
 ```powershell
-.\scripts\build-client.ps1 -ServerUrl http://192.168.10.151:3000
+.\scripts\build-client.ps1 -ServerUrl http://192.168.1.100:3000
+# tanpa argumen        -> universal: Connect Page "tauri://localhost" (default)
+# dengan -ServerUrl    -> baked URL server (pintasan cepat; scan tetap jadi fallback)
 ```
 
-Menghasilkan `target\release\bundle\msi\Thermaltrue_1.0.1_x64_en-US.msi`. Setelah itu rebuild installer gabungan & deploy:
+Menghasilkan `target\release\bundle\msi\Thermaltrue_1.0.1_x64_en-US.msi`. Setelah itu rebuild installer gabungan:
 
 ```powershell
 .\installer\build-installer.ps1   # bundel MSI client + server.exe + dist
@@ -208,8 +208,8 @@ Menghasilkan `target\release\bundle\msi\Thermaltrue_1.0.1_x64_en-US.msi`. Setela
 |------|-------|
 | Download | GitHub Releases v1.0.4 (`.exe` / `.msi`) |
 | Server | docs `guide-instalasi-server.md` |
-| Client MSI terkini | `Thermaltrue_1.0.1_x64_en-US.msi` (URL patrian `192.168.10.151:3000`) — di-bundel ke installer gabungan |
-| Default URL | URL patrian saat build client (bukan 127.0.0.1) + fallback localhost/subnet scan |
+| Client MSI terkini | `Thermaltrue_1.0.1_x64_en-US.msi` — **universal** (Connect Page `tauri://localhost` + auto-discover scan) — di-bundel ke installer gabungan |
+| Default URL | Connect Page universal (`tauri://localhost`) + auto-discover (localhost → scan /24) |
 | Cache alamat | `wms_api_url_cache` (TTL 24 jam, maks. 5 alamat) |
 | Update | auto-check `update.json` (GitHub) |
 | Data lokal | `%APPDATA%\com.thermaltrue.wms` |

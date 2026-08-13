@@ -3,14 +3,21 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Thermaltrue WMS — Loading</title>
-  <style>
-    body { margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; background: #f3f4f6; color: #6b7280; font-family: system-ui, sans-serif; }
-    .loader { width: 36px; height: 36px; border: 4px solid #e5e7eb; border-top-color: #2563eb; border-radius: 50%; animation: spin .8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
+  <title>Thermaltrue WMS — Connect</title>
+  <link rel="stylesheet" href="connect.css" />
 </head>
 <body>
-  <div style="text-align:center"><div class="loader"></div><p style="margin-top:16px">Connecting to server…</p></div>
+  <div class="card">
+    <h1>Hubungkan ke Server</h1>
+    <p class="hint">Masukkan alamat server Thermaltrue WMS di jaringan Anda, atau pindai otomatis.</p>
+    <input id="url" type="text" placeholder="IP_SERVER:3000 (contoh: 192.168.1.100:3000)" autocomplete="off" spellcheck="false" />
+    <p id="status" class="status"></p>
+    <div class="actions">
+      <button id="connect" class="primary">Test &amp; Connect</button>
+      <button id="scan" class="secondary">Scan Otomatis</button>
+    </div>
+    <p class="foot">Alamat yang berhasil tersimpan otomatis untuk koneksi berikutnya.</p>
+  </div>
+  <script src="connect.js"></script>
 </body>
 </html>

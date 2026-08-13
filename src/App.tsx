@@ -7,7 +7,7 @@ import { Toaster } from "./components/Toaster"
 import { toast } from "./hooks/use-toast"
 import { AppError } from "./api"
 import { ensureServer, setDetectedBaseUrl, type ServerStatus } from "./api/invoke-adapter"
-import { getDetectedUrl, getDetectedUrlDisplay } from "./api/lan-detector"
+import { getDetectedUrl, getDetectedUrlDisplay, addEntry, detectApiUrl } from "./api/lan-detector"
 import { isTauri } from "./lib/tauri"
 import { useUpdateLogger } from "./hooks/useUpdateLogger"
 import DashboardLayout from "./layouts/DashboardLayout"
@@ -78,6 +78,10 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 
 function ServerCheck({ children }: { children: React.ReactNode }) {
   const [check, setCheck] = useState<ServerStatus | null>(null)
+  const [urlInput, setUrlInput] = useState(() => getDetectedUrl() || localStorage.getItem("wms_api_url") || "http://192.168.1.100:3000")
+  const [testing, setTesting] = useState(false)
+  const [connectOk, setConnectOk] = useState(false)
+  const [connectState, setConnectState] = useState<string | null>(null)
 
   useEffect(() => {
     let cancelled = false
@@ -87,6 +91,57 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
     })()
     return () => { cancelled = true }
   }, [])
+
+  const normalizeUrl = (raw: string) => {
+    let u = raw.trim().replace(/\/+$/, "")
+    if (!/^https?:\/\//i.test(u)) u = `http://${u}`
+    return u
+  }
+
+  const connectTo = async (url: string) => {
+    setConnectOk(false)
+    setTesting(true)
+    setConnectState(`Menghubungkan ke ${url} ...`)
+    try {
+      const res = await fetch(`${url}/api/health`, { signal: AbortSignal.timeout(5000) })
+      if (res.ok) {
+        addEntry(url)
+        setDetectedBaseUrl(url)
+        setConnectOk(true)
+        setConnectState(`Terhubung ke ${url} — memuat aplikasi...`)
+        setTimeout(() => window.location.reload(), 500)
+        return
+      }
+      setConnectState(`Server di ${url} merespons tetapi health check gagal (status ${res.status}).`)
+    } catch {
+      setConnectState(`Tidak dapat menjangkau ${url}. Periksa IP/port server dan firewall.`)
+    } finally {
+      if (!connectOk) setTesting(false)
+    }
+  }
+
+  const handleConnect = () => {
+    const url = normalizeUrl(urlInput)
+    if (url) void connectTo(url)
+  }
+
+  const handleScan = async () => {
+    setTesting(true)
+    setConnectOk(false)
+    setConnectState("Memindai jaringan (subnet /24)...")
+    try {
+      const found = await detectApiUrl()
+      if (found) {
+        void connectTo(found)
+        return
+      }
+      setConnectState("Tidak menemukan server di jaringan ini. Coba isi alamat server secara manual.")
+    } catch {
+      setConnectState("Pemindaian gagal. Coba isi alamat server secara manual.")
+    } finally {
+      if (!connectOk) setTesting(false)
+    }
+  }
 
   if (!check) {
     return (
@@ -103,12 +158,25 @@ function ServerCheck({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", height: "100vh", gap: 12, padding: 24, textAlign: "center" }}>
-      <h2 style={{ fontSize: 20, fontWeight: 600, color: "#dc2626" }}>Server Tidak Dijangkau</h2>
-      <p style={{ color: "#6b7280", maxWidth: 400 }}>{check.message}</p>
-      <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
-        <button onClick={() => { setCheck(null); ensureServer().then(r => setCheck(r)) }} style={{ padding: "8px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Coba Lagi</button>
-        <button onClick={() => { const u = prompt("Masukkan URL server:", getDetectedUrl() || "http://127.0.0.1:3000"); if (u) { setDetectedBaseUrl(u); window.location.reload() } }} style={{ padding: "8px 16px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 6, cursor: "pointer" }}>Ubah URL</button>
+    <div style={{ display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", minHeight: "100vh", gap: 12, padding: 24, textAlign: "center" }}>
+      <h2 style={{ fontSize: 20, fontWeight: 600 }}>Hubungkan ke Server</h2>
+      <p style={{ color: "#6b7280", maxWidth: 460 }}>{check.message}<br />Masukkan alamat server (contoh: <code>192.168.1.100:3000</code>) atau pindai jaringan otomatis.</p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 8, width: "100%", maxWidth: 440 }}>
+        <input
+          value={urlInput}
+          onChange={(e) => setUrlInput(e.target.value)}
+          placeholder="IP_SERVER:3000"
+          style={{ padding: "10px 12px", borderRadius: 6, border: "1px solid #d1d5db", fontSize: 14, width: "100%", boxSizing: "border-box" }}
+          onKeyDown={(e) => { if (e.key === "Enter") handleConnect() }}
+        />
+        {connectState && (
+          <p style={{ fontSize: 13, color: connectOk ? "#16a34a" : "#dc2626" }}>{connectState}</p>
+        )}
+        <div style={{ display: "flex", gap: 8 }}>
+          <button onClick={handleConnect} disabled={testing} style={{ flex: 1, padding: "10px 16px", background: "#2563eb", color: "#fff", border: "none", borderRadius: 6, cursor: testing ? "default" : "pointer", opacity: testing ? 0.6 : 1 }}>Test & Connect</button>
+          <button onClick={handleScan} disabled={testing} style={{ flex: 1, padding: "10px 16px", background: "#6b7280", color: "#fff", border: "none", borderRadius: 6, cursor: testing ? "default" : "pointer", opacity: testing ? 0.6 : 1 }}>Scan Otomatis</button>
+        </div>
+        <button onClick={() => { setCheck(null); ensureServer().then(r => setCheck(r)) }} style={{ padding: "8px 12px", background: "transparent", color: "#2563eb", border: "1px solid #2563eb", borderRadius: 6, cursor: "pointer" }}>Coba Lagi</button>
       </div>
     </div>
   )

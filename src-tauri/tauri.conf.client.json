@@ -20,7 +20,7 @@
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "url": "http://{{SERVER_IP}}:3000",
+        "url": "tauri://localhost",
         "devtools": false
       }
     ],

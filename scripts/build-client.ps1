@@ -1,5 +1,5 @@
 param(
-    [string]$ServerUrl = "http://192.168.1.100:3000",
+    [string]$ServerUrl = "",
     [string]$ConfigFile = "$PSScriptRoot\..\src-tauri\tauri.conf.json",
     [string]$ClientConfigFile = "$PSScriptRoot\..\src-tauri\tauri.conf.client.json"
 )
@@ -9,7 +9,11 @@ $rootDir = Resolve-Path "$PSScriptRoot\.."
 $configBak = "$ConfigFile.bak"
 
 Write-Host "--- Build Tauri Desktop Client ---"
-Write-Host "Server URL: $ServerUrl"
+if ($ServerUrl) {
+    Write-Host "Server URL: $ServerUrl"
+} else {
+    Write-Host "Server URL: UNIVERSAL (auto-discover via subnet scan + connect page)"
+}
 Write-Host ""
 
 # 1. Backup original config
@@ -24,14 +28,26 @@ if (Test-Path $ConfigFile) {
 # 2. Prepare client config
 try {
     $clientConfig = Get-Content $ClientConfigFile -Raw
-    if ($ServerUrl -match "^https?://") {
-        $finalUrl = $ServerUrl
-    } else {
-        $finalUrl = "http://${ServerUrl}:3000"
+    if ($ServerUrl) {
+        if ($ServerUrl -match "^https?://") {
+            $finalUrl = $ServerUrl
+        } else {
+            $finalUrl = "http://${ServerUrl}:3000"
+        }
+        if ($clientConfig -match '\{\{SERVER_IP\}\}') {
+            # Template lama berbasis placeholder IP
+            $clientConfig = $clientConfig.Replace('http://{{SERVER_IP}}:3000', $finalUrl)
+        } else {
+            # Template universal berbasis shell (tauri://localhost) -> bake URL server
+            $clientConfig = $clientConfig.Replace('"url": "tauri://localhost"', '"url": "' + $finalUrl + '"')
+        }
     }
-    $clientConfig = $clientConfig.Replace('http://{{SERVER_IP}}:3000', $finalUrl)
     Set-Content -Path $ConfigFile -Value $clientConfig -NoNewline
-    Write-Host "[2/4] Client config applied with server: $finalUrl"
+    if ($ServerUrl) {
+        Write-Host "[2/4] Client config applied with server: $finalUrl"
+    } else {
+        Write-Host "[2/4] Client config universal ('tauri://localhost') - auto-discover server"
+    }
 } catch {
     Write-Error "Failed to prepare client config: $_"
     if (Test-Path $configBak) { Copy-Item $configBak $ConfigFile -Force }

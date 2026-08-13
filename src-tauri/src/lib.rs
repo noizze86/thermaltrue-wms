@@ -257,6 +257,11 @@ async fn get_detected_api_url(ports: Option<Vec<u16>>) -> Result<Option<String>,
     Ok(None)
 }
 
+#[tauri::command]
+async fn check_server_url(url: String) -> bool {
+    probe_url(&url).await
+}
+
 async fn probe_batch(urls: Vec<String>) -> Option<String> {
     let mut handles = Vec::new();
     for u in urls {
@@ -423,13 +428,16 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             let mut nav_url = target_url.clone();
             let mut healthy = tauri::async_runtime::block_on(check_health_at(&nav_url, 1));
             startup_log(&format!("ensure_server_running: initial health check done (healthy={})", healthy));
-            for i in 1..=8 {
-                if healthy {
-                    break;
+            let target_is_http = target_url.starts_with("http");
+            if target_is_http {
+                for i in 1..=8 {
+                    if healthy {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_secs(1));
+                    healthy = tauri::async_runtime::block_on(check_health_at(&nav_url, 1));
+                    startup_log(&format!("ensure_server_running: menunggu server sehat... attempt {}/8", i));
                 }
-                std::thread::sleep(std::time::Duration::from_secs(1));
-                healthy = tauri::async_runtime::block_on(check_health_at(&nav_url, 1));
-                startup_log(&format!("ensure_server_running: menunggu server sehat... attempt {}/8", i));
             }
             if !healthy && nav_url != "http://localhost:3000" {
                 startup_log("ensure_server_running: mencoba fallback localhost:3000...");
@@ -486,11 +494,17 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
                         startup_log("ensure_server_running: window sudah di URL server");
                     }
                 } else {
-                    // Last resort: tetap arahkan ke URL config supaya halaman error frontend
-                    // (dengan tombol Coba Lagi/Ubah URL) muncul, bukan error page WebView2
-                    if current.is_empty() || current == "about:blank" || !current.starts_with(&target_url) {
-                        startup_log(&format!("ensure_server_running: navigasi last-resort ke {}", target_url));
-                        if let Ok(u) = tauri::Url::parse(&target_url) {
+                    // Last resort: buka shell aplikasi bawaan (tauri://localhost/index.html)
+                    // agar Connect Wizard (input URL server) bisa muncul — bukan error page
+                    // WebView2 dari URL mati.
+                    let shell = "tauri://localhost/index.html";
+                    let already_shell = current.starts_with("tauri://localhost");
+                    if current.is_empty() || current == "about:blank" || (!already_shell && !current.starts_with(&target_url)) {
+                        startup_log(&format!("ensure_server_running: navigasi last-resort ke {} (shell aplikasi)", shell));
+                        if let Ok(u) = tauri::Url::parse(shell) {
+                            let _ = window.navigate(u);
+                        } else if let Ok(u) = tauri::Url::parse(&target_url) {
+                            startup_log(&format!("ensure_server_running: fallback navigasi ke {}", target_url));
                             let _ = window.navigate(u);
                         }
                     }
@@ -750,6 +764,7 @@ fn run_tauri_app() -> Result<(), Box<dyn std::error::Error>> {
             commands::save_label_template,
             commands::delete_label_template,
             get_detected_api_url,
+            check_server_url,
             open_in_browser,
             network_test::get_local_ip,
             network_test::get_listener_status,
