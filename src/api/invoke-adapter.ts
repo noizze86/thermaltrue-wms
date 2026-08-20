@@ -334,7 +334,7 @@ async function httpCall<T>(cmd: string, args: Record<string, unknown>): Promise<
     const isTimeout = e?.name === "AbortError" || e?.message?.includes?.("aborted");
     throw { type: "Network", message: `Failed to connect to ${url}. ${isTimeout ? 'Request timed out.' : 'Check that the server is running.'}` };
   }
-  if (res.status === 401) {
+  if (res.status === 401 && !path.endsWith("/login")) {
     localStorage.removeItem("wms_token");
     localStorage.removeItem("wms_user");
     window.location.hash = "#/login";

@@ -40,6 +40,7 @@ cargo build -p server --release
 | `server.exe start` | Start the service |
 | `server.exe stop` | Stop the service |
 | `server.exe status` | Check service status (running/stopped/not installed) |
+| `server.exe set-admin-password <password>` | Reset the `admin` user password (no psql needed) |
 
 ## Environment Variables
 
@@ -49,7 +50,7 @@ Key variables:
 - `DATABASE_URL` — PostgreSQL connection string
 - `JWT_SECRET` — Secret key for JWT tokens (change for production!)
 - `PORT` — Server listen port (default: 3000)
-- `DEFAULT_ADMIN_PASSWORD` — Default password for admin user (first run only)
+- `DEFAULT_ADMIN_PASSWORD` — Default password for admin user (first run only; if unset, a random password is generated and written to `admin-credentials.txt` next to the exe)
 - `SESSION_TTL_HOURS` — Session expiry in hours (default: 24)
 
 ## Client Configuration

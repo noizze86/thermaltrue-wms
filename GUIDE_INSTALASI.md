@@ -231,15 +231,16 @@ Contoh: `http://192.168.1.100:3000`
 ### Login Default
 
 - **Username:** `admin`
-- **Password:** Lihat log server saat pertama kali jalan:
+- **Password:**
+  1. Jika `.env` server memuat `DEFAULT_ADMIN_PASSWORD` → gunakan password tersebut
+  2. Jika tidak → password acak `AdminXXXXXXXX` ditulis ke file **`admin-credentials.txt`** di folder `server.exe` (misal `C:\Program Files\Thermaltrue\admin-credentials.txt`)
 
-  ```powershell
-  Get-Content "$env:ProgramData\Thermaltrue\logs\server.log" | Select-String "password"
-  ```
+Lupa password? Reset langsung tanpa psql:
 
-  Akan muncul: `DEFAULT ADMIN PASSWORD: xxxxxxxx`
-
-- Atau jika sudah diset via `.env` dengan `DEFAULT_ADMIN_PASSWORD`, gunakan password tersebut.
+```powershell
+cd C:\Program Files\Thermaltrue
+server.exe set-admin-password PasswordBaru123
+```
 
 ### Konfigurasi Multi-Client
 

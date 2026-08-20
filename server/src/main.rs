@@ -41,7 +41,8 @@ async fn main() {
                 .expect("Failed to start service dispatcher");
         }
         "run"       => cmd_run().await,
-        _           => println!("Usage: server.exe [install|uninstall|start|stop|status|run]"),
+        "set-admin-password" => cmd_set_admin_password(args.get(2).map(|s| s.as_str()).unwrap_or("")).await,
+        _           => println!("Usage: server.exe [install|uninstall|start|stop|status|run|set-admin-password <password>]"),
     }
 }
 
@@ -83,6 +84,32 @@ async fn cmd_run() {
     log_panics::init();
     let pool = init_db().await;
     serve(pool).await;
+}
+
+async fn cmd_set_admin_password(new_pw: &str) {
+    ensure_env();
+    if new_pw.is_empty() {
+        eprintln!("[FAIL] Usage: server.exe set-admin-password <password>");
+        std::process::exit(1);
+    }
+    if let Err(e) = backend::validate::validate_password(new_pw) {
+        eprintln!("[FAIL] {}", e);
+        eprintln!("       Rule: min 8 chars, max 128, at least one uppercase, one lowercase, one digit.");
+        std::process::exit(1);
+    }
+    let url = get_database_url();
+    let pool = DbPool::new(&url).await.unwrap_or_else(|e| {
+        eprintln!("[FAIL] Cannot connect to database: {}", e);
+        std::process::exit(1);
+    });
+    match backend::db_pool::DbPool::reset_admin_password(&pool.pool, new_pw).await {
+        Ok(true) => println!("[OK] Password for user 'admin' updated."),
+        Ok(false) => println!("[OK] Admin user 'admin' created with the new password."),
+        Err(e) => {
+            eprintln!("[FAIL] Could not set admin password: {}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 // ── Auto-backup scheduler ───────────────────────────────────────────────

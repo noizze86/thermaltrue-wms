@@ -6,6 +6,13 @@ use std::time::Instant;
 use crate::error::AppError;
 use crate::jwt;
 
+fn env_dir() -> std::path::PathBuf {
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+        .unwrap_or_else(|| std::path::PathBuf::from("."))
+}
+
 pub struct DbPool {
     pub pool: PgPool,
     pub login_attempts: Mutex<HashMap<String, (u32, Instant)>>,
@@ -94,6 +101,7 @@ impl DbPool {
                 .bind(&id).bind("admin").bind(&hash).bind("Administrator")
                 .execute(pool).await?;
             log::info!("Seeded admin user 'admin' (set DEFAULT_ADMIN_PASSWORD for a fixed password; current: {})", default_pass);
+            Self::write_admin_credentials("admin", &default_pass);
             let wh1 = uuid::Uuid::new_v4().to_string();
             sqlx::query("INSERT INTO warehouses (id, name, code, location) VALUES ($1, 'Main Warehouse', 'WH-001', 'Jakarta')")
                 .bind(&wh1).execute(pool).await?;
@@ -102,6 +110,39 @@ impl DbPool {
                 .bind(&wh2).execute(pool).await?;
         }
         Ok(())
+    }
+
+    fn write_admin_credentials(username: &str, password: &str) {
+        let now = chrono::Local::now().format("%Y-%m-%d %H:%M:%S");
+        let path = env_dir().join("admin-credentials.txt");
+        let content = format!(
+            "Thermaltrue WMS - Admin credentials (first-run seed)\n\
+             Created: {}\n\
+             Username: {}\n\
+             Password: {}\n\n\
+             IMPORTANT:\n\
+             - Generated because DEFAULT_ADMIN_PASSWORD was not set in .env.\n\
+             - Delete this file after first login.\n\
+             - Reset anytime with: server.exe set-admin-password <new-password> (min 8 chars, one uppercase, one lowercase, one digit)\n",
+            now, username, password
+        );
+        match std::fs::write(&path, content) {
+            Ok(_) => log::info!("Admin credentials written to {:?}", path),
+            Err(e) => log::warn!("Could not write admin-credentials.txt: {}", e),
+        }
+    }
+
+    pub async fn reset_admin_password(pool: &PgPool, new_password: &str) -> Result<bool, Box<dyn std::error::Error>> {
+        let hash = bcrypt::hash(new_password, 12)?;
+        let result = sqlx::query("UPDATE users SET password_hash=$1, password_changed_at=NOW() WHERE username='admin' AND is_active=true")
+            .bind(&hash).execute(pool).await?;
+        if result.rows_affected() > 0 {
+            return Ok(true);
+        }
+        let id = uuid::Uuid::new_v4().to_string();
+        sqlx::query("INSERT INTO users (id, username, password_hash, full_name, role) VALUES ($1, 'admin', $2, 'Administrator', 'admin')")
+            .bind(&id).bind(&hash).execute(pool).await?;
+        Ok(false)
     }
 
     pub fn verify_token(&self, token: &str) -> Result<String, AppError> {

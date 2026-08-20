@@ -153,9 +153,9 @@ Kredensial default user admin:
 Server otomatis membuat user **`admin`** saat pertama kali database kosong (seed di `db_pool.rs`):
 
 1. Jika `.env` memuat `DEFAULT_ADMIN_PASSWORD=xxx` → password-nya `xxx`
-2. Jika tidak di set → password **acak** `AdminXXXXXXXX` (contoh: `Adminkd3f8j2a`) & ditulis ke **log server** saat pertama start
+2. Jika tidak di set → password **acak** `AdminXXXXXXXX` (contoh: `Adminkd3f8j2a`) & ditulis ke file **`admin-credentials.txt`** di folder yang sama dengan `server.exe` (bukan hanya log tersembunyi service)
 
-Karena service berjalan tersembunyi, log tidak selalu mudah dibuka. Untuk kontrol penuh, **set password admin sendiri sebelum pertama kali start**:
+Karena service berjalan tersembunyi, cara paling aman adalah **set password admin sendiri**:
 
 Edit (atau buat) `C:\Program Files\Thermaltrue\.env` **sebelum server pertama kali start**:
 
@@ -166,7 +166,19 @@ DEFAULT_ADMIN_PASSWORD=adminkuat123
 Server membaca `.env` di folder yang sama dengan `server.exe`.
 
 > [!IMPORTANT]
-> Jika sudah login pernah dilakukan, ubah password lewat aplikasi: **Settings → My Profile → Change Password**. Lihat §11.5 bila lupa password admin.
+> Jika sudah login pernah dilakukan, ubah password lewat aplikasi: **Settings → My Profile → Change Password**. Lihat §11.5 bila lupa password admin (cara termudah: CLI `set-admin-password` di bawah).
+
+### Reset Password Admin via CLI (tanpa psql)
+
+`server.exe` punya perintah bawaan untuk mereset password user `admin` — bisa dijalankan kapan saja, bahkan saat service berjalan:
+
+```powershell
+cd C:\Program Files\Thermaltrue
+server.exe set-admin-password PasswordBaru123
+# [OK] Password for user 'admin' updated.
+```
+
+Syarat password: min 8 karakter, maks 128, wajib ada huruf besar, huruf kecil, dan angka.
 
 ### Login & Akses
 
@@ -363,7 +375,18 @@ curl.exe http://localhost:3000/api/health/db
 
 ### 11.4. Lupa password admin (sudah pernah login)
 
-Reset dengan cara berikut:
+Cara termudah — reset via CLI bawaan (tidak perlu psql, bisa sambil service berjalan):
+
+```powershell
+cd C:\Program Files\Thermaltrue
+server.exe set-admin-password PasswordBaru123
+# [OK] Password for user 'admin' updated.
+```
+
+> [!NOTE]
+> Setelah reset, jika masih ditolak login: tunggu 15 menit (rate limit 5 percobaan gagal) atau restart service (`server.exe restart` setara `sc stop` + `sc start`).
+
+Cara alternatif (langsung ke database PostgreSQL):
 
 ```powershell
 # 1. Stop server
@@ -374,7 +397,7 @@ $env:PGPASSWORD = "<password-postgres-dari-installer-notes>"
 & "$env:ProgramFiles\PostgreSQL\18\bin\psql.exe" -U postgres -d thermaltrue -c "UPDATE users SET password_hash='\$2b\$12\$...' WHERE username='admin';"
 ```
 
-> 💡 Hash bcrypt harus dibuat di luar aplikasi (misal: generator online / `htpasswd -bnBC 12 "" <password>`). Setelah UPDATE selesai, start ulang service & login dengan password baru. Cara alternatif: set `DEFAULT_ADMIN_PASSWORD` di `.env`, hapus user `admin` dari tabel `users`, lalu restart server (user di-seed ulang).
+> 💡 Hash bcrypt harus dibuat di luar aplikasi (misal: generator online / `htpasswd -bnBC 12 "" <password>`). Setelah UPDATE selesai, start ulang service & login dengan password baru. Cara alternatif lain: set `DEFAULT_ADMIN_PASSWORD` di `.env`, hapus user `admin` dari tabel `users`, lalu restart server (user di-seed ulang).
 
 ### 11.5. Selftest gagal / "serverReachable": false
 
@@ -404,6 +427,7 @@ $env:PGPASSWORD = "<password-postgres-dari-installer-notes>"
 | `server.exe stop` | Stop service |
 | `server.exe status` | Tampilkan status |
 | `server.exe run` | Jalankan foreground (untuk debug/log) |
+| `server.exe set-admin-password <pw>` | Reset password user `admin` (tanpa psql) |
 
 Service juga bisa dikelola: `services.msc` → `ThermaltrueServer`.
 
